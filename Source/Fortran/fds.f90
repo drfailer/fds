@@ -1,7 +1,7 @@
 !> \brief Fire Dynamics Simulator (FDS) is a computational fluid dynamics (CFD) code designed to model
 !> fire and other thermal phenomena.
 
-PROGRAM FDS
+MODULE FDS
 
 USE PRECISION_PARAMETERS
 USE MESH_VARIABLES
@@ -44,6 +44,7 @@ USE GLOBMAT_SOLVER, ONLY : GLMAT_SOLVER_SETUP, GLMAT_SOLVER, COPY_H_OMESH_TO_MES
                            FINISH_GLMAT_SOLVER,PRESSURE_SOLVER_CHECK_RESIDUALS_U
 USE LOCMAT_SOLVER, ONLY : ULMAT_SOLVER,ULMAT_SOLVER_SETUP,FINISH_ULMAT_SOLVER
 
+USE ISO_C_BINDING
 IMPLICIT NONE (TYPE,EXTERNAL)
 
 ! Miscellaneous declarations
@@ -74,6 +75,10 @@ CHARACTER(MPI_MAX_PROCESSOR_NAME) :: PNAME
 LOGICAL, ALLOCATABLE, DIMENSION(:)        :: LOGICAL_BUFFER_EXTERNAL
 REAL(EB), ALLOCATABLE, DIMENSION(:)       :: REAL_BUFFER_DUCT,REAL_BUFFER_EXTERNAL
 REAL(EB), ALLOCATABLE, DIMENSION(:,:)     :: REAL_BUFFER_10,REAL_BUFFER_MASS,REAL_BUFFER_HVAC,REAL_BUFFER_QM,REAL_BUFFER_20
+
+CONTAINS
+
+SUBROUTINE START() BIND(C, NAME = "start")
 
 ! Initialize OpenMP
 
@@ -556,6 +561,10 @@ INITIALIZATION_PHASE = .FALSE.
 
 IF (MY_RANK==0 .AND. VERBOSE) CALL VERBOSE_PRINTOUT('Starting the time-stepping')
 
+END SUBROUTINE START
+
+SUBROUTINE RUN() BIND(C, NAME = "run")
+
 !***********************************************************************************************************************************
 !                                                   MAIN TIMESTEPPING LOOP
 !***********************************************************************************************************************************
@@ -1006,6 +1015,10 @@ MAIN_LOOP: DO
 
 ENDDO MAIN_LOOP
 
+END SUBROUTINE RUN
+
+SUBROUTINE FINISH() BIND(C, NAME = "finish")
+
 !***********************************************************************************************************************************
 !                                                     END OF TIME STEPPING LOOP
 !***********************************************************************************************************************************
@@ -1030,8 +1043,7 @@ CALL END_FDS
 
 ! This is the end of program. Supporting routines are listed below.
 
-CONTAINS
-
+END SUBROUTINE FINISH
 
 !> \brief Check the MPI threading support level
 
@@ -4420,4 +4432,4 @@ WRITE(COMPILE_DATE,'(A)')  GCOMPILE_DATE(INDEX(GCOMPILE_DATE,':')+2:LEN_TRIM(GCO
 
 END SUBROUTINE GET_INFO
 
-END PROGRAM FDS
+END MODULE FDS

@@ -1,6 +1,8 @@
-#include <iostream>
+#include "../Fortran/include/fds.h"
 
 int main(int argc, char**argv) {
-  std::cout << "Hello, World!\n" << std::endl;
+  start();
+  run();
+  finish();
   return 0;
 }
