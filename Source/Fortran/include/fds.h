@@ -3,7 +3,7 @@
 
 extern "C" {
 
-void start();
+void start(const char *);
 void run();
 void finish();
 
