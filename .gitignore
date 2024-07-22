@@ -99,3 +99,11 @@ Validation/*/FDS_Output_Files/*.csv
 
 # Verification script generated fds files
 Verification/Timing_Benchmarks/t*.fds
+
+# cmake build directories
+build/
+cmake-build-debug/
+
+# editors configs
+.idea/
+.cache/
