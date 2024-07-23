@@ -1,13 +1,12 @@
 #ifndef FINISH_TASK_H
 #define FINISH_TASK_H
 #include "../../../Fortran/include/fds.h"
-#include "../../data/parameters.h"
 #include "hedgehog/src/api/task/abstract_task.h"
 #include <hedgehog/hedgehog.h>
 
 #define FinishTaskInNb 1
-#define FinishTaskIn Parameters
-#define FinishTaskOut Parameters
+#define FinishTaskIn bool
+#define FinishTaskOut bool
 
 class FinishTask
     : public hh::AbstractTask<FinishTaskInNb, FinishTaskIn, FinishTaskOut> {
@@ -16,9 +15,9 @@ public:
       : hh::AbstractTask<FinishTaskInNb, FinishTaskIn, FinishTaskOut>(
             "Finish Task", nbThreads) {}
 
-  void execute(std::shared_ptr<Parameters> fileName) override {
+  void execute(std::shared_ptr<bool> result) override {
     finish();
-    this->addResult(fileName);
+    this->addResult(result);
   }
 
   std::shared_ptr<hh::AbstractTask<FinishTaskInNb, FinishTaskIn, FinishTaskOut>>

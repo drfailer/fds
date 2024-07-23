@@ -7,7 +7,7 @@
 
 #define FDSGraphInNb 1
 #define FDSGraphIn Parameters
-#define FDSGraphOut Parameters
+#define FDSGraphOut bool
 
 class FDSGraph : public hh::Graph<FDSGraphInNb, FDSGraphIn, FDSGraphOut> {
 public:

@@ -78,6 +78,10 @@ REAL(EB), ALLOCATABLE, DIMENSION(:,:)     :: REAL_BUFFER_10,REAL_BUFFER_MASS,REA
 
 CONTAINS
 
+!================================================================================================================================
+!                                                             Start
+!================================================================================================================================
+
 SUBROUTINE START(INPUT_FILE_NAME) BIND(C, NAME = "start")
 
 CHARACTER, INTENT(IN) :: INPUT_FILE_NAME(*)
@@ -570,465 +574,485 @@ IF (MY_RANK==0 .AND. VERBOSE) CALL VERBOSE_PRINTOUT('Starting the time-stepping'
 
 END SUBROUTINE START
 
-SUBROUTINE RUN() BIND(C, NAME = "run")
-
 !***********************************************************************************************************************************
 !                                                   MAIN TIMESTEPPING LOOP
 !***********************************************************************************************************************************
 
-MAIN_LOOP: DO
+SUBROUTINE MAIN_LOOP_BEGIN() BIND(C, NAME = "mainLoopBegin")
 
-   ICYC  = ICYC + 1   ! Time step iterations
+ICYC  = ICYC + 1   ! Time step iterations
 
-   ! Do not print out general diagnostics into .out file every time step
+! Do not print out general diagnostics into .out file every time step
 
-   DIAGNOSTICS = .FALSE.
+DIAGNOSTICS = .FALSE.
 
-   ! Check for program stops
+! Check for program stops
 
-   IF(MY_RANK==0) INQUIRE(FILE=FN_STOP,EXIST=EX)
-   IF(N_MPI_PROCESSES>1) CALL MPI_BCAST(EX,1,MPI_LOGICAL,0,MPI_COMM_WORLD,IERR)
-   IF (EX .AND. ICYC>=STOP_AT_ITER) THEN
-      IF (VERBOSE .AND. STOP_STATUS/=USER_STOP) WRITE(LU_ERR,'(A,I5)') ' STOP file detected, MPI Process =',MY_RANK
-      STOP_STATUS = USER_STOP
-      DIAGNOSTICS = .TRUE.
+IF(MY_RANK==0) INQUIRE(FILE=FN_STOP,EXIST=EX)
+IF(N_MPI_PROCESSES>1) CALL MPI_BCAST(EX,1,MPI_LOGICAL,0,MPI_COMM_WORLD,IERR)
+IF (EX .AND. ICYC>=STOP_AT_ITER) THEN
+   IF (VERBOSE .AND. STOP_STATUS/=USER_STOP) WRITE(LU_ERR,'(A,I5)') ' STOP file detected, MPI Process =',MY_RANK
+   STOP_STATUS = USER_STOP
+   DIAGNOSTICS = .TRUE.
+ENDIF
+
+! Check to see if the time step can be increased
+
+IF (ALL(CHANGE_TIME_STEP_INDEX==1)) DT = MINVAL(DT_NEW)
+
+! Clip final time step
+
+IF ((T+DT+DT_END_FILL)>T_END) DT = MAX(T_END-T+TWO_EPSILON_EB,DT_END_MINIMUM)
+
+! Determine when to dump out diagnostics to the .out file
+
+LO10 = INT(LOG10(REAL(MAX(1,ABS(ICYC)),EB)))
+IF (MOD(ICYC,10**LO10)==0 .OR. MOD(ICYC,DIAGNOSTICS_INTERVAL)==0 .OR. (T+DT)>=T_END) DIAGNOSTICS = .TRUE.
+
+END SUBROUTINE MAIN_LOOP_BEGIN
+
+!================================================================================================================================
+!                                           Start of Predictor part of time step
+!================================================================================================================================
+
+SUBROUTINE RUN_PREDICTOR() BIND(C, NAME = "runPredictor")
+
+PREDICTOR = .TRUE.
+CORRECTOR = .FALSE.
+
+! Process externally controlled variables
+IF (READ_EXTERNAL) THEN
+   IF (MY_RANK==0 .AND. T > T_EXTERNAL) THEN
+      CALL READ_EXTERNAL_FILE(EXTERNAL_FAIL)
+      IF (.NOT. EXTERNAL_FAIL) T_EXTERNAL = T + DT_EXTERNAL
    ENDIF
+   IF (HEARTBEAT_FAIL) CALL STOP_CHECK(1)
+   CALL EXCHANGE_EXTERNAL
+ENDIF
+! Begin the finite differencing of the PREDICTOR step
 
-   ! Check to see if the time step can be increased
+COMPUTE_FINITE_DIFFERENCES_1: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL INSERT_ALL_PARTICLES(T,NM)
+   IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) CALL COMPUTE_VISCOSITY(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
+   CALL MASS_FINITE_DIFFERENCES(NM)
+ENDDO COMPUTE_FINITE_DIFFERENCES_1
 
-   IF (ALL(CHANGE_TIME_STEP_INDEX==1)) DT = MINVAL(DT_NEW)
+! Estimate quantities at next time step, and decrease/increase time step if necessary based on CFL condition
 
-   ! Clip final time step
+FIRST_PASS = .TRUE.
 
-   IF ((T+DT+DT_END_FILL)>T_END) DT = MAX(T_END-T+TWO_EPSILON_EB,DT_END_MINIMUM)
+CHANGE_TIME_STEP_LOOP: DO
 
-   ! Determine when to dump out diagnostics to the .out file
+   ! Predict species mass fractions at the next time step.
 
-   LO10 = INT(LOG10(REAL(MAX(1,ABS(ICYC)),EB)))
-   IF (MOD(ICYC,10**LO10)==0 .OR. MOD(ICYC,DIAGNOSTICS_INTERVAL)==0 .OR. (T+DT)>=T_END) DIAGNOSTICS = .TRUE.
-
-   !================================================================================================================================
-   !                                           Start of Predictor part of time step
-   !================================================================================================================================
-
-   PREDICTOR = .TRUE.
-   CORRECTOR = .FALSE.
-
-   ! Process externally controlled variables
-   IF (READ_EXTERNAL) THEN
-      IF (MY_RANK==0 .AND. T > T_EXTERNAL) THEN
-         CALL READ_EXTERNAL_FILE(EXTERNAL_FAIL)
-         IF (.NOT. EXTERNAL_FAIL) T_EXTERNAL = T + DT_EXTERNAL
-      ENDIF
-      IF (HEARTBEAT_FAIL) CALL STOP_CHECK(1)
-      CALL EXCHANGE_EXTERNAL
-   ENDIF
-   ! Begin the finite differencing of the PREDICTOR step
-
-   COMPUTE_FINITE_DIFFERENCES_1: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL INSERT_ALL_PARTICLES(T,NM)
-      IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) CALL COMPUTE_VISCOSITY(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
-      CALL MASS_FINITE_DIFFERENCES(NM)
-   ENDDO COMPUTE_FINITE_DIFFERENCES_1
-
-   ! Estimate quantities at next time step, and decrease/increase time step if necessary based on CFL condition
-
-   FIRST_PASS = .TRUE.
-
-   CHANGE_TIME_STEP_LOOP: DO
-
-      ! Predict species mass fractions at the next time step.
-
-      COMPUTE_DENSITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         IF(CC_IBM .AND. .NOT.FIRST_PASS) CALL CC_RESTORE_UVW_UNLINKED(NM,ASSIGN_UNLINKED_VEL=.TRUE.)
-         CALL DENSITY(T,DT,NM)
-         IF (LEVEL_SET_MODE>0) CALL LEVEL_SET_FIRESPREAD(T,DT,NM)
-      ENDDO COMPUTE_DENSITY_LOOP
-
-      IF (LEVEL_SET_MODE==2 .AND. CHECK_FREEZE_VELOCITY) CALL CHECK_FREEZE_VELOCITY_STATUS
-
-      IF (CC_IBM) CALL CC_DENSITY(T,DT)
-
-      ! Exchange species mass fractions at interpolated boundaries.
-
-      IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(1)
-
-      ! Exchange level set values, if necessary
-
-      IF (LEVEL_SET_MODE>0) CALL MESH_EXCHANGE(14)
-
-      ! Exchange newly inserted particles, if necessary
-
-      IF (FIRST_PASS .AND. MPI_PARTICLE_EXCHANGE) THEN
-         CALL MPI_ALLREDUCE(MPI_IN_PLACE,EXCHANGE_INSERTED_PARTICLES,INTEGER_ONE,MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,IERR)
-         IF (EXCHANGE_INSERTED_PARTICLES) THEN
-            CALL MESH_EXCHANGE(7)
-            CALL POST_RECEIVES(11)
-            CALL MESH_EXCHANGE(11)
-            EXCHANGE_INSERTED_PARTICLES = .FALSE.
-         ENDIF
-      ENDIF
-
-      ! Calculate convective and diffusive terms of the velocity equation.
-
-      COMPUTE_DIVERGENCE_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) THEN
-            MESHES(NM)%BAROCLINIC_TERMS_ATTACHED = .FALSE.
-            CALL VISCOSITY_BC(NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
-            IF (.NOT.CYLINDRICAL) CALL VELOCITY_FLUX(T,DT,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
-            IF (     CYLINDRICAL) CALL VELOCITY_FLUX_CYLINDRICAL(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
-         ENDIF
-         IF (FIRST_PASS .AND. HVAC_SOLVE) CALL HVAC_BC_IN(NM)
-      ENDDO COMPUTE_DIVERGENCE_LOOP
-
-      ! HVAC solver
-
-      IF (HVAC_SOLVE) THEN
-         IF (FIRST_PASS .AND. N_MPI_PROCESSES>1) CALL EXCHANGE_HVAC_BC
-         IF (MY_RANK==0) CALL HVAC_CALC(T,DT,FIRST_PASS)
-         IF (N_MPI_PROCESSES>1) CALL EXCHANGE_HVAC_SOLUTION
-      ENDIF
-
-      ! Boundary conditions for temperature, species, and density. Start divergence calculation.
-
-      COMPUTE_WALL_BC_LOOP_A: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL WALL_BC(T,DT,NM)
-         IF (PARTICLE_DRAG) CALL PARTICLE_MOMENTUM_TRANSFER(DT,NM)
-         CALL DIVERGENCE_PART_1(T,DT,NM)
-      ENDDO COMPUTE_WALL_BC_LOOP_A
-
-      ! If there are pressure ZONEs, exchange integrated quantities mesh to mesh for use in the divergence calculation
-
-      IF (N_ZONE>0) CALL EXCHANGE_DIVERGENCE_INFO
-
-      ! Update global pressure matrices after zone connections
-
-      IF ((ICYC==1 .OR. ICYC_RESTART==1) .AND. FIRST_PASS) CALL GLOBAL_MATRIX_REASSIGN
-
-      ! Finish the divergence calculation
-
-      FINISH_DIVERGENCE_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL DIVERGENCE_PART_2(DT,NM)
-      ENDDO FINISH_DIVERGENCE_LOOP
-
-      ! Solve for the pressure at the current time step
-
-      IF (LEVEL_SET_MODE/=1) CALL PRESSURE_ITERATION_SCHEME
-
-      ! Predict the velocity components at the next time step
-
-      CHANGE_TIME_STEP_INDEX = 0
-      DT_NEW = DT
-
-      PREDICT_VELOCITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL VELOCITY_PREDICTOR(T+DT,DT,DT_NEW,NM)
-      ENDDO PREDICT_VELOCITY_LOOP
-
-      ! Check if there is a numerical instability after updating the velocity field. If there is, exit this loop, finish the time
-      ! step, and stop the code.
-
-      CALL STOP_CHECK(0)
-
-      IF (STOP_STATUS==INSTABILITY_STOP) THEN
-         DIAGNOSTICS = .TRUE.
-         SUPPRESS_DIAGNOSTICS = .FALSE.
-         EXIT CHANGE_TIME_STEP_LOOP
-      ENDIF
-
-      ! Exchange CHANGE_TIME_STEP_INDEX to determine if the time step needs to be decreased (-1) or increased (1). If any mesh
-      ! needs to decrease, or all need to increase, exchange the array of new time step values, DT_NEW.
-
-      IF (N_MPI_PROCESSES>1) THEN
-         TNOW = CURRENT_TIME()
-         CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,CHANGE_TIME_STEP_INDEX(1:NMESHES),&
-                             COUNTS,DISPLS,MPI_INTEGER,MPI_COMM_WORLD,IERR)
-         IF (ANY(CHANGE_TIME_STEP_INDEX==-1) .OR. ALL(CHANGE_TIME_STEP_INDEX==1)) &
-            CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,DT_NEW(1:NMESHES),&
-                                COUNTS,DISPLS,MPI_DOUBLE_PRECISION,MPI_COMM_WORLD,IERR)
-         T_USED(11) = T_USED(11) + CURRENT_TIME() - TNOW
-      ENDIF
-
-      IF (ANY(CHANGE_TIME_STEP_INDEX==-1)) THEN  ! If the time step was reduced, CYCLE CHANGE_TIME_STEP_LOOP
-         DT = MINVAL(DT_NEW)
-         FIRST_PASS = .FALSE.
-      ELSE  ! exit the loop and if the time step is to be increased, this will occur at the next time step.
-         EXIT CHANGE_TIME_STEP_LOOP
-      ENDIF
-
-   ENDDO CHANGE_TIME_STEP_LOOP
-
-   ! If detailed CFL info needed
-
-   IF (CFL_FILE) CALL WRITE_CFL_FILE
-
-   ! Compute linked velocity arrays. Flux average final velocity to cutfaces.
-
-   IF (CC_IBM) CALL CC_END_STEP(T,DT,DIAGNOSTICS)
-
-   ! Exchange velocity and pressures at interpolated boundaries
-
-   IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(3)
-
-   ! Force normal components of velocity to match at interpolated boundaries
-
-   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL MATCH_VELOCITY(NM)
-   ENDDO
-
-   ! Apply tangential velocity boundary conditions
-
-   VELOCITY_BC_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      IF (SYNTHETIC_EDDY_METHOD) CALL SYNTHETIC_TURBULENCE(DT,T,NM)
-      CALL VELOCITY_BC(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
-   ENDDO VELOCITY_BC_LOOP
-
-   !================================================================================================================================
-   !                                           Start of Corrector part of time step
-   !================================================================================================================================
-
-   CORRECTOR = .TRUE.
-   PREDICTOR = .FALSE.
-
-   ! Advance the time to start the CORRECTOR step
-
-   T = T + DT
-
-   ! Zero out energy and mass balance arrays
-
-   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      Q_DOT(:,NM) = 0._EB
-      M_DOT(:,NM) = 0._EB
-   ENDDO
-
-   ! Check for creation or removal of obsructions
-
-   CALL CREATE_OR_REMOVE_OBSTRUCTIONS
-
-   ! Finite differences for mass and momentum equations for the second half of the time step
-
-   COMPUTE_FINITE_DIFFERENCES_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) CALL COMPUTE_VISCOSITY(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
-      CALL MASS_FINITE_DIFFERENCES(NM)
+   COMPUTE_DENSITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      IF(CC_IBM .AND. .NOT.FIRST_PASS) CALL CC_RESTORE_UVW_UNLINKED(NM,ASSIGN_UNLINKED_VEL=.TRUE.)
       CALL DENSITY(T,DT,NM)
       IF (LEVEL_SET_MODE>0) CALL LEVEL_SET_FIRESPREAD(T,DT,NM)
-   ENDDO COMPUTE_FINITE_DIFFERENCES_2
+   ENDDO COMPUTE_DENSITY_LOOP
 
    IF (LEVEL_SET_MODE==2 .AND. CHECK_FREEZE_VELOCITY) CALL CHECK_FREEZE_VELOCITY_STATUS
 
    IF (CC_IBM) CALL CC_DENSITY(T,DT)
 
-   ! Exchange species mass fractions.
+   ! Exchange species mass fractions at interpolated boundaries.
 
-   IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(4)
+   IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(1)
+
+   ! Exchange level set values, if necessary
+
    IF (LEVEL_SET_MODE>0) CALL MESH_EXCHANGE(14)
 
-   ! Apply mass and species boundary conditions, update radiation, particles, and re-compute divergence
+   ! Exchange newly inserted particles, if necessary
 
-   COMPUTE_DIVERGENCE_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   IF (FIRST_PASS .AND. MPI_PARTICLE_EXCHANGE) THEN
+      CALL MPI_ALLREDUCE(MPI_IN_PLACE,EXCHANGE_INSERTED_PARTICLES,INTEGER_ONE,MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,IERR)
+      IF (EXCHANGE_INSERTED_PARTICLES) THEN
+         CALL MESH_EXCHANGE(7)
+         CALL POST_RECEIVES(11)
+         CALL MESH_EXCHANGE(11)
+         EXCHANGE_INSERTED_PARTICLES = .FALSE.
+      ENDIF
+   ENDIF
+
+   ! Calculate convective and diffusive terms of the velocity equation.
+
+   COMPUTE_DIVERGENCE_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) THEN
          MESHES(NM)%BAROCLINIC_TERMS_ATTACHED = .FALSE.
-         CALL VISCOSITY_BC(NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
-         IF (.NOT.CYLINDRICAL) CALL VELOCITY_FLUX(T,DT,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
-         IF (     CYLINDRICAL) CALL VELOCITY_FLUX_CYLINDRICAL(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+         CALL VISCOSITY_BC(NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
+         IF (.NOT.CYLINDRICAL) CALL VELOCITY_FLUX(T,DT,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
+         IF (     CYLINDRICAL) CALL VELOCITY_FLUX_CYLINDRICAL(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
       ENDIF
-      IF (N_AGGLOMERATION_SPECIES > 0) CALL CALC_AGGLOMERATION(DT,NM)
-      IF (N_REACTIONS>0 .OR. INIT_HRRPUV) CALL COMBUSTION(T,DT,NM)
-      IF (ANY(SPECIES_MIXTURE%CONDENSATION_SMIX_INDEX>0)) CALL CONDENSATION_EVAPORATION(DT,NM)
-   ENDDO COMPUTE_DIVERGENCE_2
+      IF (FIRST_PASS .AND. HVAC_SOLVE) CALL HVAC_BC_IN(NM)
+   ENDDO COMPUTE_DIVERGENCE_LOOP
 
-   IF (HVAC_SOLVE) CALL HVAC_CALC(T,DT,.TRUE.)
+   ! HVAC solver
 
-   ! Move particles
-
-   COMPUTE_WALL_BC_2A: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL MOVE_PARTICLES(T,DT,NM)
-   ENDDO COMPUTE_WALL_BC_2A
-
-   ! Exchange the number of particles sent from mesh to mesh (7), and if non-zero, exchange particles (11)
-
-   IF (MPI_PARTICLE_EXCHANGE) THEN
-      CALL MESH_EXCHANGE(7)
-      CALL POST_RECEIVES(11)
-      CALL MESH_EXCHANGE(11)
+   IF (HVAC_SOLVE) THEN
+      IF (FIRST_PASS .AND. N_MPI_PROCESSES>1) CALL EXCHANGE_HVAC_BC
+      IF (MY_RANK==0) CALL HVAC_CALC(T,DT,FIRST_PASS)
+      IF (N_MPI_PROCESSES>1) CALL EXCHANGE_HVAC_SOLUTION
    ENDIF
 
-   ! Particle heat and mass transfer
+   ! Boundary conditions for temperature, species, and density. Start divergence calculation.
 
-   WALL_COUNTER = WALL_COUNTER + 1
-   COMPUTE_WALL_BC_2B: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL PARTICLE_MASS_ENERGY_TRANSFER(T,DT,NM)
+   COMPUTE_WALL_BC_LOOP_A: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       CALL WALL_BC(T,DT,NM)
       IF (PARTICLE_DRAG) CALL PARTICLE_MOMENTUM_TRANSFER(DT,NM)
-   ENDDO COMPUTE_WALL_BC_2B
-   IF (WALL_COUNTER==WALL_INCREMENT) WALL_COUNTER = 0
-
-   IF (SOLID_HEAT_TRANSFER_3D .AND. WALL_COUNTER==0) THEN
-      CALL MESH_EXCHANGE(6)
-      DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL HT3D_TEMPERATURE_EXCHANGE(NM)
-      ENDDO
-   ENDIF
-
-   ! Radiation
-
-   DO ITER=1,RADIATION_ITERATIONS
-      DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL COMPUTE_RADIATION(T,NM,ITER)
-         IF (CC_IBM) CALL CCCOMPUTE_RADIATION(T,NM,ITER)
-      ENDDO
-      IF (RADIATION .AND. EXCHANGE_RADIATION .AND. RADIATION_ITERATIONS>1) THEN
-         ! Only do an MPI exchange of radiation intensity if multiple iterations are requested.
-         DO ANG_INC_COUNTER=1,ANGLE_INCREMENT
-            CALL MESH_EXCHANGE(2)
-            IF (ICYC>1) EXIT
-         ENDDO
-      ENDIF
-   ENDDO
-
-   ! Start the computation of the divergence term.
-
-   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      IF (N_REACTIONS>0 .OR. INIT_HRRPUV) CALL COMBUSTION_BC(NM)
       CALL DIVERGENCE_PART_1(T,DT,NM)
-   ENDDO
+   ENDDO COMPUTE_WALL_BC_LOOP_A
 
-   ! In most LES fire cases, a correction to the source term in the radiative transport equation is needed.
-
-   IF (RTE_SOURCE_CORRECTION) CALL CALCULATE_RTE_SOURCE_CORRECTION_FACTOR
-
-   ! Exchange global pressure zone information
+   ! If there are pressure ZONEs, exchange integrated quantities mesh to mesh for use in the divergence calculation
 
    IF (N_ZONE>0) CALL EXCHANGE_DIVERGENCE_INFO
 
    ! Update global pressure matrices after zone connections
 
-   CALL GLOBAL_MATRIX_REASSIGN
+   IF ((ICYC==1 .OR. ICYC_RESTART==1) .AND. FIRST_PASS) CALL GLOBAL_MATRIX_REASSIGN
 
-   ! Exchange mass loss information for OBSTs abutting interpolated boundaries
+   ! Finish the divergence calculation
 
-   IF (EXCHANGE_OBST_MASS) THEN
-      CALL MESH_EXCHANGE(15)  ! Exchange number of OBSTs that have mass info to exchange across mesh boundaries
-      CALL POST_RECEIVES(16)
-      CALL MESH_EXCHANGE(16)  ! Satellite meshes send mass losses to meshes that actually contain the OBSTstruction
-      CALL MESH_EXCHANGE(17)  ! Mesh containing the OBSTruction packs up its new mass to be sent to satellite meshes
-      CALL POST_RECEIVES(18)
-      CALL MESH_EXCHANGE(18)  ! Satellite meshes receive the new mass of OBSTructions that live in neighboring mesh
-   ENDIF
-
-   ! Finish computing the divergence
-
-   FINISH_DIVERGENCE_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   FINISH_DIVERGENCE_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       CALL DIVERGENCE_PART_2(DT,NM)
-   ENDDO FINISH_DIVERGENCE_LOOP_2
+   ENDDO FINISH_DIVERGENCE_LOOP
 
-   ! Solve the pressure equation.
+   ! Solve for the pressure at the current time step
 
    IF (LEVEL_SET_MODE/=1) CALL PRESSURE_ITERATION_SCHEME
 
-   ! Update the  velocity.
+   ! Predict the velocity components at the next time step
 
-   CORRECT_VELOCITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL VELOCITY_CORRECTOR(T,DT,NM)
-      IF (DIAGNOSTICS .OR. STORE_CARTESIAN_DIVERGENCE) CALL CHECK_DIVERGENCE(NM)
-   ENDDO CORRECT_VELOCITY_LOOP
+   CHANGE_TIME_STEP_INDEX = 0
+   DT_NEW = DT
 
-   ! Compute linked velocity arrays. Flux average final velocity to cutfaces.
+   PREDICT_VELOCITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      CALL VELOCITY_PREDICTOR(T+DT,DT,DT_NEW,NM)
+   ENDDO PREDICT_VELOCITY_LOOP
 
-   IF (CC_IBM) CALL CC_END_STEP(T,DT,DIAGNOSTICS)
+   ! Check if there is a numerical instability after updating the velocity field. If there is, exit this loop, finish the time
+   ! step, and stop the code.
 
-   ! Exchange velocity, pressure, particles at interpolated boundaries
+   CALL STOP_CHECK(0)
 
-   IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(6)
+   IF (STOP_STATUS==INSTABILITY_STOP) THEN
+      DIAGNOSTICS = .TRUE.
+      SUPPRESS_DIAGNOSTICS = .FALSE.
+      EXIT CHANGE_TIME_STEP_LOOP
+   ENDIF
 
-   ! Exchange radiation intensity at interpolated boundaries if only one iteration of the solver is requested.
+   ! Exchange CHANGE_TIME_STEP_INDEX to determine if the time step needs to be decreased (-1) or increased (1). If any mesh
+   ! needs to decrease, or all need to increase, exchange the array of new time step values, DT_NEW.
 
-   IF (RADIATION .AND. EXCHANGE_RADIATION .AND. RADIATION_ITERATIONS==1) THEN
+   IF (N_MPI_PROCESSES>1) THEN
+      TNOW = CURRENT_TIME()
+      CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,CHANGE_TIME_STEP_INDEX(1:NMESHES),&
+                          COUNTS,DISPLS,MPI_INTEGER,MPI_COMM_WORLD,IERR)
+      IF (ANY(CHANGE_TIME_STEP_INDEX==-1) .OR. ALL(CHANGE_TIME_STEP_INDEX==1)) &
+         CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,DT_NEW(1:NMESHES),&
+                             COUNTS,DISPLS,MPI_DOUBLE_PRECISION,MPI_COMM_WORLD,IERR)
+      T_USED(11) = T_USED(11) + CURRENT_TIME() - TNOW
+   ENDIF
+
+   IF (ANY(CHANGE_TIME_STEP_INDEX==-1)) THEN  ! If the time step was reduced, CYCLE CHANGE_TIME_STEP_LOOP
+      DT = MINVAL(DT_NEW)
+      FIRST_PASS = .FALSE.
+   ELSE  ! exit the loop and if the time step is to be increased, this will occur at the next time step.
+      EXIT CHANGE_TIME_STEP_LOOP
+   ENDIF
+
+ENDDO CHANGE_TIME_STEP_LOOP
+
+! If detailed CFL info needed
+
+IF (CFL_FILE) CALL WRITE_CFL_FILE
+
+! Compute linked velocity arrays. Flux average final velocity to cutfaces.
+
+IF (CC_IBM) CALL CC_END_STEP(T,DT,DIAGNOSTICS)
+
+! Exchange velocity and pressures at interpolated boundaries
+
+IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(3)
+
+! Force normal components of velocity to match at interpolated boundaries
+
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL MATCH_VELOCITY(NM)
+ENDDO
+
+! Apply tangential velocity boundary conditions
+
+VELOCITY_BC_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   IF (SYNTHETIC_EDDY_METHOD) CALL SYNTHETIC_TURBULENCE(DT,T,NM)
+   CALL VELOCITY_BC(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+ENDDO VELOCITY_BC_LOOP
+
+END SUBROUTINE RUN_PREDICTOR
+
+!================================================================================================================================
+!                                           Start of Corrector part of time step
+!================================================================================================================================
+
+SUBROUTINE RUN_CORRECTOR() BIND(C, NAME = "runCorrector")
+
+CORRECTOR = .TRUE.
+PREDICTOR = .FALSE.
+
+! Advance the time to start the CORRECTOR step
+
+T = T + DT
+
+! Zero out energy and mass balance arrays
+
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   Q_DOT(:,NM) = 0._EB
+   M_DOT(:,NM) = 0._EB
+ENDDO
+
+! Check for creation or removal of obsructions
+
+CALL CREATE_OR_REMOVE_OBSTRUCTIONS
+
+! Finite differences for mass and momentum equations for the second half of the time step
+
+COMPUTE_FINITE_DIFFERENCES_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) CALL COMPUTE_VISCOSITY(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+   CALL MASS_FINITE_DIFFERENCES(NM)
+   CALL DENSITY(T,DT,NM)
+   IF (LEVEL_SET_MODE>0) CALL LEVEL_SET_FIRESPREAD(T,DT,NM)
+ENDDO COMPUTE_FINITE_DIFFERENCES_2
+
+IF (LEVEL_SET_MODE==2 .AND. CHECK_FREEZE_VELOCITY) CALL CHECK_FREEZE_VELOCITY_STATUS
+
+IF (CC_IBM) CALL CC_DENSITY(T,DT)
+
+! Exchange species mass fractions.
+
+IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(4)
+IF (LEVEL_SET_MODE>0) CALL MESH_EXCHANGE(14)
+
+! Apply mass and species boundary conditions, update radiation, particles, and re-compute divergence
+
+COMPUTE_DIVERGENCE_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   IF (.NOT.SOLID_PHASE_ONLY .AND. .NOT.FREEZE_VELOCITY) THEN
+      MESHES(NM)%BAROCLINIC_TERMS_ATTACHED = .FALSE.
+      CALL VISCOSITY_BC(NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+      IF (.NOT.CYLINDRICAL) CALL VELOCITY_FLUX(T,DT,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+      IF (     CYLINDRICAL) CALL VELOCITY_FLUX_CYLINDRICAL(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.TRUE.)
+   ENDIF
+   IF (N_AGGLOMERATION_SPECIES > 0) CALL CALC_AGGLOMERATION(DT,NM)
+   IF (N_REACTIONS>0 .OR. INIT_HRRPUV) CALL COMBUSTION(T,DT,NM)
+   IF (ANY(SPECIES_MIXTURE%CONDENSATION_SMIX_INDEX>0)) CALL CONDENSATION_EVAPORATION(DT,NM)
+ENDDO COMPUTE_DIVERGENCE_2
+
+IF (HVAC_SOLVE) CALL HVAC_CALC(T,DT,.TRUE.)
+
+! Move particles
+
+COMPUTE_WALL_BC_2A: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL MOVE_PARTICLES(T,DT,NM)
+ENDDO COMPUTE_WALL_BC_2A
+
+! Exchange the number of particles sent from mesh to mesh (7), and if non-zero, exchange particles (11)
+
+IF (MPI_PARTICLE_EXCHANGE) THEN
+   CALL MESH_EXCHANGE(7)
+   CALL POST_RECEIVES(11)
+   CALL MESH_EXCHANGE(11)
+ENDIF
+
+! Particle heat and mass transfer
+
+WALL_COUNTER = WALL_COUNTER + 1
+COMPUTE_WALL_BC_2B: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL PARTICLE_MASS_ENERGY_TRANSFER(T,DT,NM)
+   CALL WALL_BC(T,DT,NM)
+   IF (PARTICLE_DRAG) CALL PARTICLE_MOMENTUM_TRANSFER(DT,NM)
+ENDDO COMPUTE_WALL_BC_2B
+IF (WALL_COUNTER==WALL_INCREMENT) WALL_COUNTER = 0
+
+IF (SOLID_HEAT_TRANSFER_3D .AND. WALL_COUNTER==0) THEN
+   CALL MESH_EXCHANGE(6)
+   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      CALL HT3D_TEMPERATURE_EXCHANGE(NM)
+   ENDDO
+ENDIF
+
+! Radiation
+
+DO ITER=1,RADIATION_ITERATIONS
+   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      CALL COMPUTE_RADIATION(T,NM,ITER)
+      IF (CC_IBM) CALL CCCOMPUTE_RADIATION(T,NM,ITER)
+   ENDDO
+   IF (RADIATION .AND. EXCHANGE_RADIATION .AND. RADIATION_ITERATIONS>1) THEN
+      ! Only do an MPI exchange of radiation intensity if multiple iterations are requested.
       DO ANG_INC_COUNTER=1,ANGLE_INCREMENT
          CALL MESH_EXCHANGE(2)
          IF (ICYC>1) EXIT
       ENDDO
    ENDIF
+ENDDO
 
-   ! Force normal components of velocity to match at interpolated boundaries
+! Start the computation of the divergence term.
 
-   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL MATCH_VELOCITY(NM)
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   IF (N_REACTIONS>0 .OR. INIT_HRRPUV) CALL COMBUSTION_BC(NM)
+   CALL DIVERGENCE_PART_1(T,DT,NM)
+ENDDO
+
+! In most LES fire cases, a correction to the source term in the radiative transport equation is needed.
+
+IF (RTE_SOURCE_CORRECTION) CALL CALCULATE_RTE_SOURCE_CORRECTION_FACTOR
+
+! Exchange global pressure zone information
+
+IF (N_ZONE>0) CALL EXCHANGE_DIVERGENCE_INFO
+
+! Update global pressure matrices after zone connections
+
+CALL GLOBAL_MATRIX_REASSIGN
+
+! Exchange mass loss information for OBSTs abutting interpolated boundaries
+
+IF (EXCHANGE_OBST_MASS) THEN
+   CALL MESH_EXCHANGE(15)  ! Exchange number of OBSTs that have mass info to exchange across mesh boundaries
+   CALL POST_RECEIVES(16)
+   CALL MESH_EXCHANGE(16)  ! Satellite meshes send mass losses to meshes that actually contain the OBSTstruction
+   CALL MESH_EXCHANGE(17)  ! Mesh containing the OBSTruction packs up its new mass to be sent to satellite meshes
+   CALL POST_RECEIVES(18)
+   CALL MESH_EXCHANGE(18)  ! Satellite meshes receive the new mass of OBSTructions that live in neighboring mesh
+ENDIF
+
+! Finish computing the divergence
+
+FINISH_DIVERGENCE_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL DIVERGENCE_PART_2(DT,NM)
+ENDDO FINISH_DIVERGENCE_LOOP_2
+
+! Solve the pressure equation.
+
+IF (LEVEL_SET_MODE/=1) CALL PRESSURE_ITERATION_SCHEME
+
+! Update the  velocity.
+
+CORRECT_VELOCITY_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL VELOCITY_CORRECTOR(T,DT,NM)
+   IF (DIAGNOSTICS .OR. STORE_CARTESIAN_DIVERGENCE) CALL CHECK_DIVERGENCE(NM)
+ENDDO CORRECT_VELOCITY_LOOP
+
+! Compute linked velocity arrays. Flux average final velocity to cutfaces.
+
+IF (CC_IBM) CALL CC_END_STEP(T,DT,DIAGNOSTICS)
+
+! Exchange velocity, pressure, particles at interpolated boundaries
+
+IF (LEVEL_SET_MODE/=1) CALL MESH_EXCHANGE(6)
+
+! Exchange radiation intensity at interpolated boundaries if only one iteration of the solver is requested.
+
+IF (RADIATION .AND. EXCHANGE_RADIATION .AND. RADIATION_ITERATIONS==1) THEN
+   DO ANG_INC_COUNTER=1,ANGLE_INCREMENT
+      CALL MESH_EXCHANGE(2)
+      IF (ICYC>1) EXIT
    ENDDO
+ENDIF
 
-   ! Apply velocity boundary conditions, and update values of HRR, DEVC, etc.
+! Force normal components of velocity to match at interpolated boundaries
 
-   VELOCITY_BC_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL VELOCITY_BC(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
-      CALL UPDATE_GLOBAL_OUTPUTS(T,DT,NM)
-   ENDDO VELOCITY_BC_LOOP_2
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL MATCH_VELOCITY(NM)
+ENDDO
 
-   ! Share device, HRR, mass data among all processes
+! Apply velocity boundary conditions, and update values of HRR, DEVC, etc.
 
-   CALL EXCHANGE_GLOBAL_OUTPUTS
+VELOCITY_BC_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL VELOCITY_BC(T,NM,APPLY_TO_ESTIMATED_VARIABLES=.FALSE.)
+   CALL UPDATE_GLOBAL_OUTPUTS(T,DT,NM)
+ENDDO VELOCITY_BC_LOOP_2
 
-   ! Check for dumping end of timestep outputs
+! Share device, HRR, mass data among all processes
 
-   CALL UPDATE_CONTROLS(T,DT,CTRL_STOP_STATUS,.FALSE.)
-   IF (CTRL_STOP_STATUS) STOP_STATUS = CTRL_STOP
+CALL EXCHANGE_GLOBAL_OUTPUTS
 
-   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-      CALL DUMP_MESH_OUTPUTS(T,DT,NM)
-   ENDDO
+END SUBROUTINE RUN_CORRECTOR
 
-   ! Dump outputs such as HRR, DEVC, etc.
+!================================================================================================================================
+!                                                    Dump output files
+!================================================================================================================================
 
-   CALL DUMP_GLOBAL_OUTPUTS
+SUBROUTINE DUMP_OUTPUT_FILES() BIND(C, NAME = "dumpOutputFiles")
+! Check for dumping end of timestep outputs
 
-   ! Dump out diagnostics
+CALL UPDATE_CONTROLS(T,DT,CTRL_STOP_STATUS,.FALSE.)
+IF (CTRL_STOP_STATUS) STOP_STATUS = CTRL_STOP
 
-   CALL WRITE_STRINGS
-   IF (DIAGNOSTICS) THEN
-      IF (.NOT.SUPPRESS_DIAGNOSTICS .AND. N_MPI_PROCESSES>1) CALL EXCHANGE_DIAGNOSTICS
-      IF (MY_RANK==0) CALL WRITE_DIAGNOSTICS(T,DT)
-   ENDIF
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   CALL DUMP_MESH_OUTPUTS(T,DT,NM)
+ENDDO
 
-   ! Flush output file buffers
+! Dump outputs such as HRR, DEVC, etc.
 
-   IF (FLUSH_FILE_BUFFERS) THEN
-      IF (T>=FLSH_CLOCK(FLSH_COUNTER(1))) THEN
-         IF (MY_RANK==0) CALL FLUSH_GLOBAL_BUFFERS
-         DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-            CALL FLUSH_LOCAL_BUFFERS(NM)
-         ENDDO
-         FLSH_COUNTER(1) = FLSH_COUNTER(1) + 1
-      ENDIF
-   ENDIF
+CALL DUMP_GLOBAL_OUTPUTS
 
-   ! Dump a restart file if necessary
+! Dump out diagnostics
 
-   CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,RADIATION_COMPLETED(1:NMESHES),&
-                       COUNTS,DISPLS,MPI_LOGICAL,MPI_COMM_WORLD,IERR)
+CALL WRITE_STRINGS
+IF (DIAGNOSTICS) THEN
+   IF (.NOT.SUPPRESS_DIAGNOSTICS .AND. N_MPI_PROCESSES>1) CALL EXCHANGE_DIAGNOSTICS
+   IF (MY_RANK==0) CALL WRITE_DIAGNOSTICS(T,DT)
+ENDIF
 
-   IF ( (T>=RSRT_CLOCK(RSRT_COUNTER(1)) .OR. STOP_STATUS==USER_STOP) .AND.  &
-      (T>=T_END .OR. ALL(RADIATION_COMPLETED) .OR. STOP_STATUS==CTRL_STOP )) THEN
+! Flush output file buffers
+
+IF (FLUSH_FILE_BUFFERS) THEN
+   IF (T>=FLSH_CLOCK(FLSH_COUNTER(1))) THEN
+      IF (MY_RANK==0) CALL FLUSH_GLOBAL_BUFFERS
       DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
-         CALL DUMP_RESTART(T,DT,NM)
+         CALL FLUSH_LOCAL_BUFFERS(NM)
       ENDDO
-      RSRT_COUNTER(1) = RSRT_COUNTER(1) + 1
+      FLSH_COUNTER(1) = FLSH_COUNTER(1) + 1
    ENDIF
+ENDIF
 
-   ! Check for abnormal run stop
+! Dump a restart file if necessary
 
-   CALL STOP_CHECK(1)  ! The argument 1 means that FDS will end unless there is logic associated with the STOP_STATUS
+CALL MPI_ALLGATHERV(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,RADIATION_COMPLETED(1:NMESHES),&
+                    COUNTS,DISPLS,MPI_LOGICAL,MPI_COMM_WORLD,IERR)
 
-   ! Stop the run normally
+IF ( (T>=RSRT_CLOCK(RSRT_COUNTER(1)) .OR. STOP_STATUS==USER_STOP) .AND.  &
+   (T>=T_END .OR. ALL(RADIATION_COMPLETED) .OR. STOP_STATUS==CTRL_STOP )) THEN
+   DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      CALL DUMP_RESTART(T,DT,NM)
+   ENDDO
+   RSRT_COUNTER(1) = RSRT_COUNTER(1) + 1
+ENDIF
+END SUBROUTINE DUMP_OUTPUT_FILES
 
-   IF (T>=T_END .AND. ICYC>0) EXIT MAIN_LOOP
+!================================================================================================================================
+!                                                      Stop main loop
+!================================================================================================================================
 
-ENDDO MAIN_LOOP
+INTEGER FUNCTION STOP_MAIN_LOOP() BIND(C, NAME = "stopMainLoop") RESULT(RES)
 
-END SUBROUTINE RUN
+RES = 0
+
+! Check for abnormal run stop
+
+CALL STOP_CHECK(1)  ! The argument 1 means that FDS will end unless there is logic associated with the STOP_STATUS
+
+! Stop the run normally
+
+IF (T>=T_END .AND. ICYC>0) RES = 1
+
+END FUNCTION STOP_MAIN_LOOP
+
+!===================================================================================================================================
+!                                                     END OF TIME STEPPING LOOP
+!===================================================================================================================================
 
 SUBROUTINE FINISH() BIND(C, NAME = "finish")
-
-!***********************************************************************************************************************************
-!                                                     END OF TIME STEPPING LOOP
-!***********************************************************************************************************************************
 
 ! Deallocate GLMAT_SOLVER_H variables if needed:
 

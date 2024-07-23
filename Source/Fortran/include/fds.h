@@ -4,7 +4,11 @@
 extern "C" {
 
 void start(const char *);
-void run();
+void mainLoopBegin();
+void runPredictor();
+void runCorrector();
+void dumpOutputFiles();
+int stopMainLoop();
 void finish();
 
 }

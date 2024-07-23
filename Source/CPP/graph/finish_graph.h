@@ -4,8 +4,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define FinishGraphInNb 1
-#define FinishGraphIn Parameters
-#define FinishGraphOut Parameters
+#define FinishGraphIn bool
+#define FinishGraphOut bool
 
 class FinishGraph : public hh::Graph<FinishGraphInNb, FinishGraphIn, FinishGraphOut> {
 public:
