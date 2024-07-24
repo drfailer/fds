@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("start predictor");
+    INFO_GRP("start predictor", PREDICTOR_GRP);
     startPredictor();
     this->addResult(parameters);
   }

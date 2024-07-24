@@ -21,7 +21,7 @@ public:
   void execute(std::shared_ptr<Parameters<ParameterIds::InstabilityCheck>>
                    parameters) override {
     if (verifyInstability() == 1) {
-      INFO("instability error");
+      ERROR("instability error");
       this->addResult(std::make_shared<Parameters<ParameterIds::Finished>>(
           std::move(parameters)));
     } else {
@@ -33,11 +33,11 @@ public:
   void execute(std::shared_ptr<Parameters<ParameterIds::TimeStepReduced>>
                    parameters) override {
     if (timeStepReduced() == 0) {
-      INFO("timeStepReduced");
+      INFO_GRP("timeStepReduced", TIME_STEP_LOOP_INFO_GRP);
       this->addResult(std::make_shared<Parameters<ParameterIds::Finished>>(
           std::move(parameters)));
     } else {
-      INFO("continue time step loop");
+      INFO_GRP("continue time step loop", TIME_STEP_LOOP_INFO_GRP);
       this->addResult(std::make_shared<Parameters<ParameterIds::None>>(
           std::move(parameters)));
     }

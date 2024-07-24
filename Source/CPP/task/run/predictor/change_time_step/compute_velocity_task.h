@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("computeVelocity");
+    INFO_GRP("computeVelocity", TIME_STEP_LOOP_INFO_GRP);
     computeVelocity();
     this->addResult(parameters);
   }

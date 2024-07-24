@@ -19,7 +19,7 @@ public:
 
   void execute(
       std::shared_ptr<Parameters<ParameterIds::Finished>> parameters) override {
-    INFO("finish predictor");
+    INFO_GRP("finish predictor", PREDICTOR_GRP);
     finishPredictor();
     this->addResult(
         std::make_shared<Parameters<ParameterIds::None>>(parameters));

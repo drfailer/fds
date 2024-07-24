@@ -9,6 +9,12 @@
 #define LOG_ERR
 #define LOG_TODO
 
+// groups
+#define MAIN_LOOP_GRP 1
+#define TIME_STEP_LOOP_INFO_GRP 2
+#define PREDICTOR_GRP 3
+#define CORRECTOR_GRP 4
+
 // info groups active
 #define INFO_GRPS 0
 

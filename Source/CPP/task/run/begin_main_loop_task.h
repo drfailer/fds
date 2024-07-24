@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("begin main loop");
+    INFO_GRP("begin main loop", MAIN_LOOP_GRP);
     mainLoopBegin();
     this->addResult(parameters);
   }

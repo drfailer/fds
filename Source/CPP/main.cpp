@@ -22,6 +22,7 @@ int main(int argc, char **argv) {
   fdsGraph.finishPushingData();
   fdsGraph.waitForTermination();
 
+  INFO("generate the graph");
   fdsGraph.createDotFile("./graphFDS.dot", hh::ColorScheme::EXECUTION,
                          hh::StructureOptions::QUEUE);
 

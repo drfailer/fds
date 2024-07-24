@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("predictVelocity");
+    INFO_GRP("predictVelocity", TIME_STEP_LOOP_INFO_GRP);
     predictVelocity();
     this->addResult(
         std::make_shared<Parameters<ParameterIds::InstabilityCheck>>(

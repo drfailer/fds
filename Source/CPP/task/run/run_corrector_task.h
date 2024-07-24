@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("run corrector");
+    INFO_GRP("run corrector", CORRECTOR_GRP);
     runCorrector();
     this->addResult(parameters);
   }

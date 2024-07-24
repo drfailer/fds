@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("updateGlobalPressure");
+    INFO_GRP("updateGlobalPressure", TIME_STEP_LOOP_INFO_GRP);
     updateGlobalPressure();
     this->addResult(parameters);
   }

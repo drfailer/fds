@@ -20,7 +20,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("computeDivergencePhase2");
+    INFO_GRP("computeDivergencePhase2", TIME_STEP_LOOP_INFO_GRP);
     computeDivergencePhase2();
     this->addResult(parameters);
   }

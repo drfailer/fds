@@ -19,7 +19,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("dump output files");
+    INFO_GRP("dump output files", MAIN_LOOP_GRP);
     dumpOutputFiles();
     this->addResult(parameters);
   }

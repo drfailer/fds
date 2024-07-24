@@ -18,7 +18,7 @@ public:
 
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
-    INFO("hvacSolver");
+    INFO_GRP("hvacSolver", TIME_STEP_LOOP_INFO_GRP);
     hvacSolver();
     this->addResult(parameters);
   }

@@ -20,7 +20,7 @@ public:
 
   void execute(
       std::shared_ptr<Parameters<ParameterIds::UpdateTS>> parameters) override {
-    INFO("updateTimeStepIndex");
+    INFO_GRP("updateTimeStepIndex", TIME_STEP_LOOP_INFO_GRP);
     updateTimeStepIndex();
     this->addResult(std::make_shared<Parameters<ParameterIds::TimeStepReduced>>(
         parameters));

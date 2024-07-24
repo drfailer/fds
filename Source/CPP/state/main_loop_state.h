@@ -19,7 +19,7 @@ public:
   void
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
     if (stopMainLoop()) {
-      std::cout << "HH STOP" << std::endl;
+      INFO("HH STOP");
       stop_ = true;
       this->addResult(std::make_shared<bool>(true)); // todo: bool is temporary
     } else {
