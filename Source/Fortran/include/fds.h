@@ -14,7 +14,7 @@ void predictorFinitDifference();
 // change time step loop functions
 void computeDensity();
 void exchangeValues();
-void computeDivergence();
+void computeVelocity();
 void hvacSolver();
 void computeWallBC();
 void exchangeMeshDivergence();
@@ -29,6 +29,9 @@ int timeStepReduced();
 void runCorrector();
 void dumpOutputFiles();
 int stopMainLoop();
+
+void startPredictor();
+void finishPredictor();
 
 void finish();
 
