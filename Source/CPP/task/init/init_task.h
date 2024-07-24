@@ -6,8 +6,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define InitTaskInNb 1
-#define InitTaskIn Parameters
-#define InitTaskOut Parameters
+#define InitTaskIn Parameters<ParameterIds::None>
+#define InitTaskOut Parameters<ParameterIds::None>
 
 class InitTask
     : public hh::AbstractTask<InitTaskInNb, InitTaskIn, InitTaskOut> {
@@ -16,7 +16,9 @@ public:
       : hh::AbstractTask<InitTaskInNb, InitTaskIn, InitTaskOut>("Init Task",
                                                                 nbThreads) {}
 
-  void execute(std::shared_ptr<Parameters> parameters) override {
+  void
+  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
+    INFO("start");
     start(parameters->fnInput.data());
     this->addResult(parameters);
   }

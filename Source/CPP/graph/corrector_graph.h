@@ -4,8 +4,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define CorrectorGraphInNb 1
-#define CorrectorGraphIn Parameters
-#define CorrectorGraphOut Parameters
+#define CorrectorGraphIn Parameters<ParameterIds::None>
+#define CorrectorGraphOut Parameters<ParameterIds::None>
 
 class CorrectorGraph : public hh::Graph<CorrectorGraphInNb, CorrectorGraphIn,
                                         CorrectorGraphOut> {

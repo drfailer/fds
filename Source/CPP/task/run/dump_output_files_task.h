@@ -5,19 +5,21 @@
 #include <hedgehog/hedgehog.h>
 
 #define DumpOutputFilesTaskInNb 1
-#define DumpOutputFilesTaskIn Parameters
-#define DumpOutputFilesTaskOut Parameters
+#define DumpOutputFilesTaskIn Parameters<ParameterIds::None>
+#define DumpOutputFilesTaskOut Parameters<ParameterIds::None>
 
 class DumpOutputFilesTask
     : public hh::AbstractTask<DumpOutputFilesTaskInNb, DumpOutputFilesTaskIn,
-                       DumpOutputFilesTaskOut> {
+                              DumpOutputFilesTaskOut> {
 public:
   DumpOutputFilesTask(size_t nbThreads)
       : hh::AbstractTask<DumpOutputFilesTaskInNb, DumpOutputFilesTaskIn,
                          DumpOutputFilesTaskOut>("Dump Output Files Task",
                                                  nbThreads) {}
 
-  void execute(std::shared_ptr<Parameters> parameters) override {
+  void
+  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
+    INFO("dump output files");
     dumpOutputFiles();
     this->addResult(parameters);
   }

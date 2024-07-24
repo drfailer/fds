@@ -4,8 +4,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define InitGraphInNb 1
-#define InitGraphIn Parameters
-#define InitGraphOut Parameters
+#define InitGraphIn Parameters<ParameterIds::None>
+#define InitGraphOut Parameters<ParameterIds::None>
 
 class InitGraph : public hh::Graph<InitGraphInNb, InitGraphIn, InitGraphOut> {
 public:

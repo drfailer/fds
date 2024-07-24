@@ -16,6 +16,7 @@ public:
             "Finish Task", nbThreads) {}
 
   void execute(std::shared_ptr<bool> result) override {
+    INFO("finish");
     finish();
     this->addResult(result);
   }

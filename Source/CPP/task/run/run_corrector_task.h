@@ -5,19 +5,21 @@
 #include <hedgehog/hedgehog.h>
 
 #define RunCorrectorTaskInNb 1
-#define RunCorrectorTaskIn Parameters
-#define RunCorrectorTaskOut Parameters
+#define RunCorrectorTaskIn Parameters<ParameterIds::None>
+#define RunCorrectorTaskOut Parameters<ParameterIds::None>
 
 class RunCorrectorTask
     : public hh::AbstractTask<RunCorrectorTaskInNb, RunCorrectorTaskIn,
-                       RunCorrectorTaskOut> {
+                              RunCorrectorTaskOut> {
 public:
   RunCorrectorTask(size_t nbThreads)
       : hh::AbstractTask<RunCorrectorTaskInNb, RunCorrectorTaskIn,
                          RunCorrectorTaskOut>("Run Corrector Taks", nbThreads) {
   }
 
-  void execute(std::shared_ptr<Parameters> parameters) override {
+  void
+  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
+    INFO("run corrector");
     runCorrector();
     this->addResult(parameters);
   }

@@ -5,8 +5,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define MainLoopStateInNb 1
-#define MainLoopStateIn Parameters
-#define MainLoopStateOut Parameters, bool
+#define MainLoopStateIn Parameters<ParameterIds::None>
+#define MainLoopStateOut Parameters<ParameterIds::None>, bool
 
 class MainLoopState
     : public hh::AbstractState<MainLoopStateInNb, MainLoopStateIn,
@@ -16,7 +16,8 @@ public:
       : hh::AbstractState<MainLoopStateInNb, MainLoopStateIn,
                           MainLoopStateOut>() {}
 
-  void execute(std::shared_ptr<Parameters> parameters) override {
+  void
+  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
     if (stopMainLoop()) {
       std::cout << "HH STOP" << std::endl;
       stop_ = true;

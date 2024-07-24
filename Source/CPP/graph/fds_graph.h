@@ -6,7 +6,7 @@
 #include <hedgehog/hedgehog.h>
 
 #define FDSGraphInNb 1
-#define FDSGraphIn Parameters
+#define FDSGraphIn Parameters<ParameterIds::None>
 #define FDSGraphOut bool
 
 class FDSGraph : public hh::Graph<FDSGraphInNb, FDSGraphIn, FDSGraphOut> {

@@ -5,8 +5,8 @@
 #include <hedgehog/hedgehog.h>
 
 #define BeginMainLoopTaskInNb 1
-#define BeginMainLoopTaskIn Parameters
-#define BeginMainLoopTaskOut Parameters
+#define BeginMainLoopTaskIn Parameters<ParameterIds::None>
+#define BeginMainLoopTaskOut Parameters<ParameterIds::None>
 
 class BeginMainLoopTask
     : public hh::AbstractTask<BeginMainLoopTaskInNb, BeginMainLoopTaskIn,
@@ -17,7 +17,9 @@ public:
                          BeginMainLoopTaskOut>("Begin Main Loop Task",
                                                nbThreads) {}
 
-  void execute(std::shared_ptr<Parameters> parameters) override {
+  void
+  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
+    INFO("begin main loop");
     mainLoopBegin();
     this->addResult(parameters);
   }
