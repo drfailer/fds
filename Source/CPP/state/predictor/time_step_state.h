@@ -3,11 +3,10 @@
 #include "../../../Fortran/include/fds.h"
 #include "../../data/parameters.h"
 #include <hedgehog/hedgehog.h>
-#include <iostream>
 
-#define TSStateInNb 2
+#define TSStateInNb 3
 #define TSStateIn                                                              \
-  Parameters<ParameterIds::InstabilityCheck>,                                  \
+  bool, Parameters<ParameterIds::InstabilityCheck>,                            \
       Parameters<ParameterIds::TimeStepReduced>
 #define TSStateOut                                                             \
   Parameters<ParameterIds::None>, Parameters<ParameterIds::UpdateTS>,          \
@@ -41,6 +40,12 @@ public:
       this->addResult(std::make_shared<Parameters<ParameterIds::None>>(
           std::move(parameters)));
     }
+  }
+
+  // end signal
+  void execute(std::shared_ptr<bool>) override {
+    INFO("stop time step state");
+    loop_ = false;
   }
 
   [[nodiscard]] bool isDone() { return !loop_; }

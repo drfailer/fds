@@ -5,7 +5,7 @@
 #include <hedgehog/hedgehog.h>
 
 #define StartPredictorTaskInNb 1
-#define StartPredictorTaskIn Parameters<ParameterIds::None>
+#define StartPredictorTaskIn Parameters<ParameterIds::Start>
 #define StartPredictorTaskOut Parameters<ParameterIds::None>
 
 class StartPredictorTask
@@ -17,11 +17,12 @@ public:
                          StartPredictorTaskOut>("Start Predictor Task",
                                                 nbThreads) {}
 
-  void
-  execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
+  void execute(
+      std::shared_ptr<Parameters<ParameterIds::Start>> parameters) override {
     INFO_GRP("start predictor", PREDICTOR_GRP);
     startPredictor();
-    this->addResult(parameters);
+    this->addResult(
+        std::make_shared<Parameters<ParameterIds::None>>(parameters));
   }
 
   std::shared_ptr<hh::AbstractTask<StartPredictorTaskInNb, StartPredictorTaskIn,

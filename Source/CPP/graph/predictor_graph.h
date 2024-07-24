@@ -18,8 +18,8 @@
 #include "../task/run/predictor/start_predictor_task.h"
 #include <hedgehog/hedgehog.h>
 
-#define PredictorGraphInNb 1
-#define PredictorGraphIn Parameters<ParameterIds::None>
+#define PredictorGraphInNb 2
+#define PredictorGraphIn Parameters<ParameterIds::Start>, bool
 #define PredictorGraphOut Parameters<ParameterIds::None>
 
 class PredictorGraph : public hh::Graph<PredictorGraphInNb, PredictorGraphIn,
@@ -48,6 +48,7 @@ public:
         std::make_shared<TimeStepState>());
 
     this->inputs(startPredictorTask);
+    this->inputs(timeStepStateManager);
 
     this->edges(startPredictorTask, computeDensityTask);
     this->edges(computeDensityTask, exchangeValuesTask); // MPI

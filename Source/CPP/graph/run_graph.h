@@ -32,6 +32,10 @@ public:
     this->edges(dumpOutputFilesTask, mainLoopStateManager);
     this->edges(mainLoopStateManager, beginMainLoopTask);
 
+    // WARN: this can cause a deadlock if these 2 state have more that 1 type in
+    // common
+    this->edges(mainLoopStateManager, predictorGraph);
+
     this->outputs(mainLoopStateManager);
   }
 };
