@@ -1,6 +1,7 @@
 #ifndef FINISH_TASK_H
 #define FINISH_TASK_H
 #include "../../../Fortran/include/fds.h"
+#include "../../log.h"
 #include "hedgehog/src/api/task/abstract_task.h"
 #include <hedgehog/hedgehog.h>
 
