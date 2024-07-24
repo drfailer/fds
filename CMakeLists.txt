@@ -19,6 +19,7 @@ find_package(MPI REQUIRED)
 # find_package(OpenBLAS QUIET)
 
 set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${Hedgehog_CXX_FLAGS})
+set(CMAKE_Fortran_MODULE_DIRECTORY modules)
 set(CMAKE_Fortran_COMPILER mpifort)
 set(CMAKE_Fortran_FLAGS
   "-m64 -O2 -std=f2018 -frecursive -ffpe-summary=none -fall-intrinsics -fPIC -fopenmp -cpp"
