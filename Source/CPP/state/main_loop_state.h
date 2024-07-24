@@ -2,11 +2,15 @@
 #define MAIN_LOOP_STATE_H
 #include "../../Fortran/include/fds.h"
 #include "../data/parameters.h"
+#include "../data/signal.h"
 #include <hedgehog/hedgehog.h>
+
+class TimeStepState;
 
 #define MainLoopStateInNb 1
 #define MainLoopStateIn Parameters<ParameterIds::None>
-#define MainLoopStateOut Parameters<ParameterIds::None>, bool
+#define MainLoopStateOut                                                       \
+  Parameters<ParameterIds::None>, bool, Signal<Sigs::Stop>
 
 class MainLoopState
     : public hh::AbstractState<MainLoopStateInNb, MainLoopStateIn,
@@ -22,6 +26,8 @@ public:
       INFO("HH STOP");
       stop_ = true;
       this->addResult(std::make_shared<bool>(true)); // todo: bool is temporary
+      // send stop signal to the TimeStepState
+      this->addResult(std::make_shared<Signal<Sigs::Stop>>());
     } else {
       this->addResult(parameters);
     }

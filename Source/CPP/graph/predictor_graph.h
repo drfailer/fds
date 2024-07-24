@@ -16,10 +16,12 @@
 #include "../task/run/predictor/change_time_step/update_time_step_index_task.h"
 #include "../task/run/predictor/finish_predictor_task.h"
 #include "../task/run/predictor/start_predictor_task.h"
+#include "../task/signal_filter.h"
+#include "../data/signal.h"
 #include <hedgehog/hedgehog.h>
 
 #define PredictorGraphInNb 2
-#define PredictorGraphIn Parameters<ParameterIds::Start>, bool
+#define PredictorGraphIn Parameters<ParameterIds::None>, Signal<Sigs::Stop>
 #define PredictorGraphOut Parameters<ParameterIds::None>
 
 class PredictorGraph : public hh::Graph<PredictorGraphInNb, PredictorGraphIn,
@@ -46,9 +48,14 @@ public:
     // state managers
     auto timeStepStateManager = std::make_shared<TimeStepStateManager>(
         std::make_shared<TimeStepState>());
+    // signals
+    auto signalFilter = std::make_shared<SignalFilter<Sigs::Stop>>();
 
     this->inputs(startPredictorTask);
-    this->inputs(timeStepStateManager);
+
+    // catch signals
+    this->inputs(signalFilter);
+    this->edges(signalFilter, timeStepStateManager);
 
     this->edges(startPredictorTask, computeDensityTask);
     this->edges(computeDensityTask, exchangeValuesTask); // MPI

@@ -6,7 +6,7 @@
 
 #define BeginMainLoopTaskInNb 1
 #define BeginMainLoopTaskIn Parameters<ParameterIds::None>
-#define BeginMainLoopTaskOut Parameters<ParameterIds::Start>
+#define BeginMainLoopTaskOut Parameters<ParameterIds::None>
 
 class BeginMainLoopTask
     : public hh::AbstractTask<BeginMainLoopTaskInNb, BeginMainLoopTaskIn,
@@ -21,8 +21,7 @@ public:
   execute(std::shared_ptr<Parameters<ParameterIds::None>> parameters) override {
     INFO_GRP("begin main loop", MAIN_LOOP_GRP);
     mainLoopBegin();
-    this->addResult(
-        std::make_shared<Parameters<ParameterIds::Start>>(parameters));
+    this->addResult(parameters);
   }
 
   std::shared_ptr<hh::AbstractTask<BeginMainLoopTaskInNb, BeginMainLoopTaskIn,

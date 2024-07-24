@@ -2,12 +2,13 @@
 #define TIME_STEP_STATE_H
 #include "../../../Fortran/include/fds.h"
 #include "../../data/parameters.h"
+#include "../../data/signal.h"
 #include <hedgehog/hedgehog.h>
 
 #define TSStateInNb 3
 #define TSStateIn                                                              \
-  bool, Parameters<ParameterIds::InstabilityCheck>,                            \
-      Parameters<ParameterIds::TimeStepReduced>
+  Parameters<ParameterIds::InstabilityCheck>,                                  \
+      Parameters<ParameterIds::TimeStepReduced>, Signal<Sigs::Stop>
 #define TSStateOut                                                             \
   Parameters<ParameterIds::None>, Parameters<ParameterIds::UpdateTS>,          \
       Parameters<ParameterIds::Finished>
@@ -42,16 +43,14 @@ public:
     }
   }
 
-  // end signal
-  void execute(std::shared_ptr<bool>) override {
-    INFO("stop time step state");
-    loop_ = false;
+  void execute(std::shared_ptr<Signal<Sigs::Stop>>) override {
+    isDone_ = true;
   }
 
-  [[nodiscard]] bool isDone() { return !loop_; }
+  [[nodiscard]] bool isDone() { return isDone_; }
 
 private:
-  bool loop_ = true;
+  bool isDone_ = false;
 };
 
 #endif

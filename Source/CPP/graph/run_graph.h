@@ -5,6 +5,7 @@
 #include "../task/run/begin_main_loop_task.h"
 #include "../task/run/dump_output_files_task.h"
 #include "../task/run/run_corrector_task.h"
+#include "../task/signal_filter.h"
 #include "predictor_graph.h"
 #include <hedgehog/hedgehog.h>
 
@@ -15,14 +16,16 @@
 class RunGraph : public hh::Graph<RunGraphInNb, RunGraphIn, RunGraphOut> {
 public:
   RunGraph() : hh::Graph<RunGraphInNb, RunGraphIn, RunGraphOut>("Run Graph") {
+    // states
+    auto mainLoopStateManager =
+        std::make_shared<MainLoopStateManager>(std::make_shared<MainLoopState>());
     // tasks
     auto beginMainLoopTask = std::make_shared<BeginMainLoopTask>(1);
     auto predictorGraph = std::make_shared<PredictorGraph>();
     auto runCorrectorTask = std::make_shared<RunCorrectorTask>(1);
     auto dumpOutputFilesTask = std::make_shared<DumpOutputFilesTask>(1);
-    // states
-    auto mainLoopStateManager = std::make_shared<MainLoopStateManager>(
-        std::make_shared<MainLoopState>());
+    // signals
+    auto signalFilter = std::make_shared<SignalFilter<Sigs::Stop>>();
 
     this->inputs(beginMainLoopTask);
 
@@ -32,9 +35,8 @@ public:
     this->edges(dumpOutputFilesTask, mainLoopStateManager);
     this->edges(mainLoopStateManager, beginMainLoopTask);
 
-    // WARN: this can cause a deadlock if these 2 state have more that 1 type in
-    // common
-    this->edges(mainLoopStateManager, predictorGraph);
+    this->edges(mainLoopStateManager, signalFilter);
+    this->edges(signalFilter, predictorGraph);
 
     this->outputs(mainLoopStateManager);
   }
