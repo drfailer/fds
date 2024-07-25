@@ -51,19 +51,20 @@ public:
     // signals
     auto signalFilter = std::make_shared<SignalFilter<Sigs::Stop>>();
 
-    this->inputs(startPredictorTask);
-
     // catch signals
     this->inputs(signalFilter);
     this->edges(signalFilter, timeStepStateManager);
 
+    // the graph
+    this->inputs(startPredictorTask);
+
     this->edges(startPredictorTask, computeDensityTask);
-    this->edges(computeDensityTask, exchangeValuesTask); // MPI
-    this->edges(exchangeValuesTask, computeVelocityTask);
+    /* this->edges(computeDensityTask, exchangeValuesTask); // MPI */
+    this->edges(computeDensityTask, computeVelocityTask);
     this->edges(computeVelocityTask, hvacSolverTask);
     this->edges(hvacSolverTask, computeWallBCTask);
-    this->edges(computeWallBCTask, exchangeMeshDivergenceTask); // MPI
-    this->edges(exchangeMeshDivergenceTask, updateGlobalPressureTask);
+    /* this->edges(computeWallBCTask, exchangeMeshDivergenceTask); // MPI */
+    this->edges(computeWallBCTask, updateGlobalPressureTask);
     this->edges(updateGlobalPressureTask, computeDivergence2Task);
     this->edges(computeDivergence2Task, solvePressureTask);
     this->edges(solvePressureTask, predictVelocityTask);
