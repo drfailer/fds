@@ -14,6 +14,7 @@ struct Dimensions {
   size_t IBP1; ///< IBAR plus 1
   size_t JBP1; ///< JBAR plus 1
   size_t KBP1; ///< KBAR plus 1
+  double *LES_FILTER_WIDTH; ///< Characteristic cell dimension (m)
 };
 
 }

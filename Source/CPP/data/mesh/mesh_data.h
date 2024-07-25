@@ -33,9 +33,7 @@
 #include "velocity_components.h"
 #include "vents.h"
 #include "viscosity.h"
-#include "wall/external_wall.h"
-#include "wall/thin_wall.h"
-#include "wall/wall.h"
+#include "wall.h"
 #include "wind.h"
 #include "work.h"
 #include "zone_mesh.h"
@@ -65,37 +63,34 @@ struct Mesh {
   Dif dif;
   Work work;
 
-  double *H; ///< \f$ \tilde{p}_{ijk}/\rho_{ijk} + |\mathbf{u}|^2_{ijk}/2 \f$
-  double *HS; ///< H estimated at next time step
+  double *H;    ///< \f$ \tilde{p}_{ijk}/\rho_{ijk} + |\mathbf{u}|^2_{ijk}/2 \f$
+  double *HS;   ///< H estimated at next time step
   double *KRES; ///< Resolved kinetic energy, \f$ |\mathbf{u}|^2_{ijk}/2 \f$
-  double *TMP; ///< Gas temperature, \f$ T_{ijk} \f$ (K)
-  double *Q; ///< Heat release rate per unit volume, \f$ \dot{q}_{ijk}''' \f$
+  double *TMP;  ///< Gas temperature, \f$ T_{ijk} \f$ (K)
+  double *Q;    ///< Heat release rate per unit volume, \f$ \dot{q}_{ijk}''' \f$
   double *RSUM; ///< \f$ R_0 \sum_\alpha Z_{\alpha,ijk}/W_\alpha \f$
   double *CSD2; ///< \f$ C_s \Delta^2 \f$ in Smagorinsky turbulence expression
-  double *CHEM_SUBIT; ///< Number of chemistry sub-iterations
-  double *MIX_TIME; ///< Mixing-controlled combustion reaction time (s)
+  double *CHEM_SUBIT;  ///< Number of chemistry sub-iterations
+  double *MIX_TIME;    ///< Mixing-controlled combustion reaction time (s)
   double *STRAIN_RATE; ///< Strain rate \f$ |S|_{ijk} \f$ (1/s)
-  double *D_Z_MAX; ///< \f$ \max D_\alpha \f$
+  double *D_Z_MAX;     ///< \f$ \max D_\alpha \f$
   double *Q_DOT_PPP_S; ///< Heat release rate per unit volume in 3D pyrolysis model
-  double *PP_RESIDUAL; ///< Pressure Poisson residual (debug)
-  double *LES_FILTER_WIDTH; ///< Characteristic cell dimension (m)
 
   double *REAC_SOURCE_TERM; ///< \f$ \dot{m}_{\alpha,ijk}''' \f$
-  double *DEL_RHO_D_DEL_Z; ///< \f$ (\nabla \cdot \rho D_\alpha \nabla Z_\alpha)_{ijk} \f$
-  double *FX; ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ x \f$ face of cell
-  double *FY; ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ y \f$ face of cell
-  double *FZ; ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ z \f$ face of cell
-  double *Q_REAC; ///< \f$ \dot{q}_{ijk}''' \f$ for a specified reaction
+  double *DEL_RHO_D_DEL_Z;  ///< \f$ (\nabla \cdot \rho D_\alpha \nabla Z_\alpha)_{ijk} \f$
+  double *FX;        ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ x \f$ face of cell
+  double *FY;        ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ y \f$ face of cell
+  double *FZ;        ///< \f$ \rho Z_{\alpha,ijk} \f$ at \f$ z \f$ face of cell
+  double *Q_REAC;    ///< \f$ \dot{q}_{ijk}''' \f$ for a specified reaction
   double *M_DOT_PPP; ///< Mass source term, \f$ \dot{m}_{\alpha,ijk}''' \f$
 
   double POIS_PTB, POIS_ERR;
   double *SAVE1, *SAVE2, *WORK;
-  double *PRHS; ///< Right hand side of Poisson (pressure) equation
   double *BXS, *BXF, *BYS, *BYF, *BZS, *BZF, *BXST, *BXFT, *BYST, *BYFT, *BZST,
       *BZFT;
   size_t LSAVE, LWORK, LBC, MBC, NBC, LBC2, MBC2, NBC2, ITRN, JTRN, KTRN, IPS;
 
-  double *D_PBAR_DT; ///< \f$ (\partial \overline{p}_m/\partial t)^n \f$
+  double *D_PBAR_DT;   ///< \f$ (\partial \overline{p}_m/\partial t)^n \f$
   double *D_PBAR_DT_S; ///< \f$ (\partial \overline{p}_m/\partial t)^* \f$
   double *U_LEAK;
   double *U_DUCT;
@@ -162,18 +157,18 @@ struct Mesh {
 
   // ...
 
-  size_t N_WALL_CELLS = 0, N_WALL_CELLS_DIM = 0, N_INTERNAL_WALL_CELLS = 0,
-         N_EXTERNAL_WALL_CELLS = 0;
-  size_t N_THIN_WALL_CELLS = 0, N_THIN_WALL_CELLS_DIM = 0;
+  Wall wall;
+
   size_t HT_3D_SWEEP_DIRECTION = 0;
+
   size_t N_EXTERNAL_CFACE_CELLS = 0, N_INTWALL_CFACE_CELLS = 0,
          INTERNAL_CFACE_CELLS_LB = 0, N_INTERNAL_CFACE_CELLS = 0,
          N_CFACE_CELLS_DIM = 0;
+
   double BC_CLOCK;
+
   double *UVW_SAVE, *U_GHOST, *V_GHOST, *W_GHOST;
-  wall::Wall *WALL;
-  wall::ThinWall *THIN_WALL;
-  wall::ExternalWall *EXTERNAL_WALL;
+
   OMesh *OMESH;
   LagrangianParticle *LAGRANGIAN_PARTICLE;
   size_t NLP, NLPDIM, PARTICLE_TAG;

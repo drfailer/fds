@@ -1,5 +1,5 @@
-#ifndef MESH_WALL_H
-#define MESH_WALL_H
+#ifndef MESH_WALL_WALL_H
+#define MESH_WALL_WALL_H
 
 namespace mesh::wall {
 
