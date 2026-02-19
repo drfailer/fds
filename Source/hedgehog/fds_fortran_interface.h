@@ -51,9 +51,17 @@ void fds_agglomeration(double dt, int nm);
 void fds_cc_end_step(double t, double dt, int diag);
 void fds_check_divergence(int nm);
 
-// Output subroutines
+// Output subroutines (per-mesh)
 void fds_update_global_outputs(double t, double dt, int nm);
 void fds_dump_mesh_outputs(double t, double dt, int nm);
+
+// Global output subroutines (called once after all meshes complete corrector)
+void fds_exchange_global_outputs(double t, double dt);
+void fds_update_controls(double t, double dt);
+void fds_dump_global_outputs(double t, double dt);
+void fds_write_strings(double t, double dt);
+void fds_write_diagnostics(double t, double dt);
+void fds_set_diagnostics(int icyc, double t, double dt);
 
 // Barrier / exchange subroutines
 void fds_mesh_exchange(int code);

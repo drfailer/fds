@@ -28,6 +28,29 @@ public:
             // CC_IBM end step (corrector side)
             fds_cc_end_step(t, dt, 0);
 
+            // In original main.f90, ICYC is incremented at the top of MAIN_LOOP
+            // (before physics), and DIAGNOSTICS is set based on that ICYC.
+            // We increment here before the output sequence so that the Fortran ICYC
+            // is correct when WRITE_DIAGNOSTICS writes _steps.csv.
+            icyc_++;
+            fds_set_icyc(icyc_);
+
+            // Set DIAGNOSTICS flag based on ICYC (controls _steps.csv output)
+            fds_set_diagnostics(icyc_, t, dt);
+
+            // Global output sequence (matches main.f90 lines 975-996)
+            fds_exchange_global_outputs(t, dt);
+            fds_update_controls(t, dt);
+
+            // Per-mesh dump (must happen after UPDATE_CONTROLS)
+            for (auto &md : collected_) {
+                fds_dump_mesh_outputs(md->t, md->dt, md->nm);
+            }
+
+            fds_dump_global_outputs(t, dt);
+            fds_write_strings(t, dt);
+            fds_write_diagnostics(t, dt);
+
             // Stop check
             fds_stop_check(1, t, dt);
 
@@ -42,9 +65,7 @@ public:
                 return;
             }
 
-            // Prepare next time step
-            icyc_++;
-            fds_set_icyc(icyc_);
+            // Prepare next time step (ICYC already incremented above)
             fds_set_predictor(1);  // PREDICTOR=TRUE
 
             // Adjust DT based on CFL conditions from the velocity predictor.

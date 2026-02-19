@@ -169,7 +169,7 @@ public:
         fds_match_velocity(data->nm);
         fds_velocity_bc(data->t, data->nm, 0);  // estimated=false
         fds_update_global_outputs(data->t, data->dt, data->nm);
-        fds_dump_mesh_outputs(data->t, data->dt, data->nm);
+        // DUMP_MESH_OUTPUTS moved to TimestepState (must happen after global UPDATE_CONTROLS)
         this->addResult(data);
     }
 
