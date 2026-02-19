@@ -54,8 +54,7 @@ public:
             // Stop check
             fds_stop_check(1, t, dt);
 
-            int stopStatus = 0;
-            fds_get_stop_status(&stopStatus);
+            int stopStatus = fds_get_stop_status();
 
             // Check termination
             if (t >= tEnd_ || stopStatus != 0) {
@@ -74,8 +73,7 @@ public:
             //   IF (ALL(CHANGE_TIME_STEP_INDEX==1)) DT = MINVAL(DT_NEW)
             //   IF (ANY(CHANGE_TIME_STEP_INDEX==-1)) DT = MINVAL(DT_NEW)
             //   Clip final time step
-            double newDt = 0.0;
-            fds_adjust_dt(t, dt, &newDt);
+            double newDt = fds_adjust_dt(t, dt);
 
             // Re-emit tokens for next predictor step with updated DT
             for (auto &md : collected_) {

@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
     fds_initialize_all(&t, &dt, &nmeshes);
 
     // Get the end time from Fortran
-    fds_get_t_end(&tEnd);
+    tEnd = fds_get_t_end();
 
     std::cout << "[FDS-HH] Initialization complete." << std::endl;
     std::cout << "[FDS-HH] nmeshes=" << nmeshes

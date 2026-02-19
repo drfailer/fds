@@ -16,10 +16,10 @@ void fds_finalize_all(double t, double dt);
 // State setters
 void fds_set_predictor(int flag);
 void fds_set_icyc(int val);
-void fds_get_t_end(double *t_end);
-void fds_get_nmeshes(int *nmeshes);
+double fds_get_t_end();
+int fds_get_nmeshes();
 void fds_zero_q_m_dot();
-void fds_adjust_dt(double t, double dt, double *dt_out);
+double fds_adjust_dt(double t, double dt);
 
 // Predictor phase per-mesh subroutines
 void fds_insert_particles(double t, int nm);
@@ -76,7 +76,7 @@ void fds_create_or_remove_obstructions(double t, double dt);
 void fds_global_matrix_reassign(int force);
 void fds_rte_source_correction();
 void fds_stop_check(int end_code, double t, double dt);
-void fds_get_stop_status(int *status);
+int fds_get_stop_status();
 void fds_synthetic_turbulence(double dt, double t, int nm);
 void fds_hvac_calc(double t, double dt, int first);
 void fds_set_baroclinic_false(int nm);

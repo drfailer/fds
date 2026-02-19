@@ -108,8 +108,7 @@ public:
                 fds_stop_check_zero();
 
                 // Check for instability
-                int stopStatus = 0;
-                fds_get_stop_status(&stopStatus);
+                int stopStatus = fds_get_stop_status();
                 if (stopStatus != 0) {
                     break;  // Exit retry loop on instability
                 }
