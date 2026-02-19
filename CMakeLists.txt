@@ -14,46 +14,52 @@ option(USE_SUNDIALS        "Use the sundials library"                 ON)
 option(USE_SYSTEM_SUNDIALS "Use the sundials library from the system" OFF)
 
 option(USE_OPENMP          "Use OpenMP"                               ON)
+option(USE_HEDGEHOG        "Build fds_hh target with Hedgehog dataflow" OFF)
 
 # The existing FDS makefile links MKL statically, but this is optional and can
 # be changed to dynamic
 set(MKL_LINK static CACHE STRING "Linking method for MKL (static or dynamic)")
 set_property(CACHE MKL_LINK PROPERTY STRINGS static dynamic)
 
+# Fortran source files shared between fds and fds_hh targets (everything except main.f90)
+set(FDS_FORTRAN_SOURCES
+    ${CMAKE_SOURCE_DIR}/Source/prec.f90
+    ${CMAKE_SOURCE_DIR}/Source/cons.f90
+    ${CMAKE_SOURCE_DIR}/Source/chem.f90
+    ${CMAKE_SOURCE_DIR}/Source/prop.f90
+    ${CMAKE_SOURCE_DIR}/Source/devc.f90
+    ${CMAKE_SOURCE_DIR}/Source/type.f90
+    ${CMAKE_SOURCE_DIR}/Source/data.f90
+    ${CMAKE_SOURCE_DIR}/Source/mesh.f90
+    ${CMAKE_SOURCE_DIR}/Source/func.f90
+    ${CMAKE_SOURCE_DIR}/Source/gsmv.f90
+    ${CMAKE_SOURCE_DIR}/Source/smvv.f90
+    ${CMAKE_SOURCE_DIR}/Source/rcal.f90
+    ${CMAKE_SOURCE_DIR}/Source/turb.f90
+    ${CMAKE_SOURCE_DIR}/Source/soot.f90
+    ${CMAKE_SOURCE_DIR}/Source/pois.f90
+    ${CMAKE_SOURCE_DIR}/Source/geom.f90
+    ${CMAKE_SOURCE_DIR}/Source/ccib.f90
+    ${CMAKE_SOURCE_DIR}/Source/radi.f90
+    ${CMAKE_SOURCE_DIR}/Source/part.f90
+    ${CMAKE_SOURCE_DIR}/Source/vege.f90
+    ${CMAKE_SOURCE_DIR}/Source/ctrl.f90
+    ${CMAKE_SOURCE_DIR}/Source/hvac.f90
+    ${CMAKE_SOURCE_DIR}/Source/mass.f90
+    ${CMAKE_SOURCE_DIR}/Source/imkl.f90
+    ${CMAKE_SOURCE_DIR}/Source/wall.f90
+    ${CMAKE_SOURCE_DIR}/Source/fire.f90
+    ${CMAKE_SOURCE_DIR}/Source/velo.f90
+    ${CMAKE_SOURCE_DIR}/Source/pres.f90
+    ${CMAKE_SOURCE_DIR}/Source/init.f90
+    ${CMAKE_SOURCE_DIR}/Source/dump.f90
+    ${CMAKE_SOURCE_DIR}/Source/read.f90
+    ${CMAKE_SOURCE_DIR}/Source/divg.f90
+)
+
 add_executable(fds
-    Source/main.f90
-    Source/prec.f90
-    Source/cons.f90
-    Source/chem.f90
-    Source/prop.f90
-    Source/devc.f90
-    Source/type.f90
-    Source/data.f90
-    Source/mesh.f90
-    Source/func.f90
-    Source/gsmv.f90
-    Source/smvv.f90
-    Source/rcal.f90
-    Source/turb.f90
-    Source/soot.f90
-    Source/pois.f90
-    Source/geom.f90
-    Source/ccib.f90
-    Source/radi.f90
-    Source/part.f90
-    Source/vege.f90
-    Source/ctrl.f90
-    Source/hvac.f90
-    Source/mass.f90
-    Source/imkl.f90
-    Source/wall.f90
-    Source/fire.f90
-    Source/velo.f90
-    Source/pres.f90
-    Source/init.f90
-    Source/dump.f90
-    Source/read.f90
-    Source/divg.f90
+    ${CMAKE_SOURCE_DIR}/Source/main.f90
+    ${FDS_FORTRAN_SOURCES}
 )
 target_include_directories(fds PRIVATE .)
 
@@ -226,6 +232,11 @@ if(USE_SUNDIALS)
 endif()
 
 install(TARGETS fds)
+
+# Hedgehog dataflow integration
+if(USE_HEDGEHOG)
+    add_subdirectory(Source/hedgehog)
+endif()
 
 include(CTest)
 enable_testing()
