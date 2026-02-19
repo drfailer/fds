@@ -9,6 +9,7 @@
 #include "../state/mesh_barrier_state.h"
 #include "../state/divergence_barrier_state.h"
 #include "../state/pressure_barrier_state.h"
+#include "../state/change_timestep_state.h"
 #include "../state/phase_transition_state.h"
 #include "../state/timestep_state.h"
 
@@ -67,7 +68,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
         std::make_shared<DivergenceBarrierState>(nmeshes, /*corrector=*/false), "PredDivBarrier");
 
     auto predPressureBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PressureBarrierState>(nmeshes), "PredPressureBarrier");
+        std::make_shared<PressureBarrierState>(nmeshes, /*predictor=*/true), "PredPressureBarrier");
+
+    // CHANGE_TIME_STEP_LOOP: after VelPredictor, check CFL and retry internally or proceed
+    auto changeTimeStepSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<ChangeTimeStepState>(nmeshes), "ChangeTimeStep");
 
     auto barrier3SM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<MeshBarrierState>(nmeshes, 3), "Barrier(3)");
@@ -127,7 +132,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(predDivBarrierSM, divPart2Pred);
     graph->edges(divPart2Pred, predPressureBarrierSM);  // Barrier: PRESSURE_ITERATION_SCHEME
     graph->edges(predPressureBarrierSM, velPredictor);
-    graph->edges(velPredictor, barrier3SM);              // Barrier: MESH_EXCHANGE(3)
+    graph->edges(velPredictor, changeTimeStepSM);        // CHANGE_TIME_STEP_LOOP (retry handled internally)
+    graph->edges(changeTimeStepSM, barrier3SM);           // Barrier: MESH_EXCHANGE(3)
     graph->edges(barrier3SM, predFinal);
     graph->edges(predFinal, phaseTransSM);              // Barrier: Phase transition
 

@@ -48,8 +48,9 @@ int main(int argc, char *argv[]) {
     graph->executeGraph();
 
     // Step 4: Push initial MeshData tokens (one per mesh) into the graph.
-    // Set PREDICTOR=TRUE for the first time step
+    // Set PREDICTOR=TRUE and FIRST_PASS=TRUE for the first time step
     fds_set_predictor(1);
+    fds_set_first_pass(1);
     fds_set_icyc(1);
 
     for (int nm = 1; nm <= nmeshes; ++nm) {

@@ -67,6 +67,7 @@ public:
 
             // Prepare next time step (ICYC already incremented above)
             fds_set_predictor(1);  // PREDICTOR=TRUE
+            fds_set_first_pass(1); // FIRST_PASS=TRUE for new CHANGE_TIME_STEP_LOOP
 
             // Adjust DT based on CFL conditions from the velocity predictor.
             // This replaces the logic at the top of MAIN_LOOP in main.f90:
@@ -80,6 +81,7 @@ public:
             for (auto &md : collected_) {
                 md->phase = 0;  // predictor
                 md->dt = newDt; // use CFL-adjusted DT
+                md->firstPass = true; // new CHANGE_TIME_STEP_LOOP starts with FIRST_PASS=TRUE
                 // T remains as-is (already advanced in corrector phase transition)
                 this->addResult(md);
             }

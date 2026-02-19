@@ -11,9 +11,9 @@
 /// then re-emits all tokens.
 class PressureBarrierState : public hh::AbstractState<1, MeshData, MeshData> {
 public:
-    explicit PressureBarrierState(int nmeshes)
+    PressureBarrierState(int nmeshes, bool predictor = false)
         : hh::AbstractState<1, MeshData, MeshData>(),
-          nmeshes_(nmeshes) {
+          nmeshes_(nmeshes), predictor_(predictor) {
         collected_.reserve(nmeshes);
     }
 
@@ -24,6 +24,15 @@ public:
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
             fds_pressure_iteration(t, dt);
+
+            // Initialize CHANGE_TIME_STEP arrays before VelPredictor runs per-mesh.
+            // In main.f90 (lines 722-724): CHANGE_TIME_STEP_INDEX=0, DT_NEW=DT
+            // Only done in predictor phase (not corrector, which would overwrite
+            // the predictor's CFL values needed by fds_adjust_dt).
+            if (predictor_) {
+                fds_init_change_time_step(dt);
+            }
+
             for (auto &md : collected_) {
                 this->addResult(md);
             }
@@ -33,6 +42,7 @@ public:
 
 private:
     int nmeshes_;
+    bool predictor_;
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 

@@ -98,8 +98,8 @@ public:
         : hh::AbstractTask<1, MeshData, MeshData>("VelPredictor", nThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        // Initialize CHANGE_TIME_STEP_INDEX and DT_NEW before velocity prediction
-        fds_init_change_time_step(data->dt);
+        // CHANGE_TIME_STEP_INDEX and DT_NEW are initialized in PressureBarrierState
+        // before VelPredictor runs, so each per-mesh call can set its own index.
         fds_velocity_predictor(data->t + data->dt, data->dt, data->nm);
         // Check for numerical instability
         fds_stop_check_zero();
