@@ -18,6 +18,8 @@ void fds_set_predictor(int flag);
 void fds_set_icyc(int val);
 double fds_get_t_end();
 int fds_get_nmeshes();
+int fds_get_lower_mesh_index();
+int fds_get_upper_mesh_index();
 void fds_zero_q_m_dot();
 double fds_adjust_dt(double t, double dt);
 

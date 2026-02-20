@@ -86,8 +86,21 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
         std::make_shared<MeshBarrierState>(nmeshes, 4), "Barrier(4)");
 
     auto corrCombustionBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<MeshBarrierState>(nmeshes, 0), "CombustionBarrier");
-    // Note: combustion is load-balanced across all meshes, so it acts as a barrier
+        std::make_shared<CombustionBarrierState>(nmeshes), "CombustionBarrier");
+
+    // HVAC barriers (predictor and corrector)
+    auto predHvacBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<HvacBarrierState>(nmeshes, 1), "PredHvacBarrier");  // first=1 (FIRST_PASS)
+    auto corrHvacBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<HvacBarrierState>(nmeshes, 1), "CorrHvacBarrier");  // first=1
+
+    // Passthrough barriers to prevent concurrent Fortran calls between adjacent
+    // tasks that share no barrier. Hedgehog runs each task on its own thread,
+    // but Fortran module-level pointers (set via POINT_TO_MESH) are not thread-safe.
+    auto predStep1BarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<PassthroughBarrierState>(nmeshes), "PredStep1Barrier");
+    auto corrCondensBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<PassthroughBarrierState>(nmeshes), "CorrCondensBarrier");
 
     auto barrier7SM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<MeshBarrierState>(nmeshes, 7), "Barrier(7)");
@@ -123,10 +136,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->inputs(predStep1);
 
     // Predictor pipeline
-    graph->edges(predStep1, densityPred);
+    graph->edges(predStep1, predStep1BarrierSM);         // Barrier: prevent concurrent Fortran
+    graph->edges(predStep1BarrierSM, densityPred);
     graph->edges(densityPred, barrier1SM);              // Barrier: MESH_EXCHANGE(1)
     graph->edges(barrier1SM, predDivSetup);
-    graph->edges(predDivSetup, predInitDivSM);          // Barrier: INITIALIZE_DIVERGENCE_INTEGRALS
+    graph->edges(predDivSetup, predHvacBarrierSM);      // Barrier: HVAC_CALC (predictor)
+    graph->edges(predHvacBarrierSM, predInitDivSM);     // Barrier: INITIALIZE_DIVERGENCE_INTEGRALS
     graph->edges(predInitDivSM, predWallDiv);           // wall_bc + particle_momentum + divergence_part_1
     graph->edges(predWallDiv, predDivBarrierSM);        // Barrier: EXCHANGE_DIVERGENCE_INFO
     graph->edges(predDivBarrierSM, divPart2Pred);
@@ -142,8 +157,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(corrStep1, barrier4SM);                // Barrier: MESH_EXCHANGE(4)
     graph->edges(barrier4SM, corrDivSetup);
     graph->edges(corrDivSetup, corrCombustionBarrierSM); // Barrier: combustion
-    graph->edges(corrCombustionBarrierSM, corrCondens);
-    graph->edges(corrCondens, corrParticle);
+    graph->edges(corrCombustionBarrierSM, corrHvacBarrierSM); // Barrier: HVAC_CALC (corrector)
+    graph->edges(corrHvacBarrierSM, corrCondens);
+    graph->edges(corrCondens, corrCondensBarrierSM);      // Barrier: prevent concurrent Fortran
+    graph->edges(corrCondensBarrierSM, corrParticle);
     graph->edges(corrParticle, barrier7SM);              // Barrier: MESH_EXCHANGE(7) particles
     graph->edges(barrier7SM, corrWallBC);
     graph->edges(corrWallBC, barrier6aSM);               // Barrier: MESH_EXCHANGE(6) back wall

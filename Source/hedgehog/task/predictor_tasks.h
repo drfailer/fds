@@ -101,8 +101,6 @@ public:
         // CHANGE_TIME_STEP_INDEX and DT_NEW are initialized in PressureBarrierState
         // before VelPredictor runs, so each per-mesh call can set its own index.
         fds_velocity_predictor(data->t + data->dt, data->dt, data->nm);
-        // Check for numerical instability
-        fds_stop_check_zero();
         this->addResult(data);
     }
 

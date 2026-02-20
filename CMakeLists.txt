@@ -3,9 +3,14 @@ cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 project(
     fds
     VERSION 6.9.1
-    LANGUAGES Fortran
+    LANGUAGES Fortran C
 )
 enable_language(Fortran)
+
+# Enable C++ if building with Hedgehog
+if(USE_HEDGEHOG)
+    enable_language(CXX)
+endif()
 
 option(USE_HYPRE           "Use the hypre library"                    ON)
 option(USE_SYSTEM_HYPRE    "Use the hypre library from the system"    OFF)
@@ -95,7 +100,14 @@ target_compile_definitions(fds PRIVATE GITHASH_PP="${GIT_HASH}${GIT_STAT}-${GIT_
 target_compile_definitions(fds PRIVATE GITDATE_PP="${GIT_DATE}")
 
 # Use MPI (mandatory)
-find_package(MPI REQUIRED)
+# When building with Hedgehog, we enable C++ for Hedgehog itself, not for MPI
+# However, HYPRE and SUNDIALS detect C++ is enabled and try to find MPI::MPI_CXX
+# We find it here to satisfy their build system, but FDS only uses MPI::MPI_Fortran
+if(USE_HEDGEHOG)
+    find_package(MPI REQUIRED COMPONENTS Fortran C CXX)
+else()
+    find_package(MPI REQUIRED COMPONENTS Fortran)
+endif()
 target_link_libraries(fds PRIVATE MPI::MPI_Fortran)
 
 # FDS use lp64 (4-byte integer), MKL often defaults to ilp64 (8-byte integer)
@@ -207,7 +219,8 @@ if(USE_SUNDIALS)
         set(EXAMPLES_ENABLE_F2003 OFF CACHE BOOL "" FORCE)
         set(EXAMPLES_INSTALL OFF CACHE BOOL "" FORCE)
         set(ENABLE_OPENMP ON CACHE BOOL "" FORCE)
-        set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
         # if(HYPRE_FOUND)
         #     set(ENABLE_HYPRE ON CACHE BOOL "" FORCE)
         #     FetchContent_MakeAvailable(HYPRE SUNDIALS)

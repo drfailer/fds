@@ -31,29 +31,36 @@ int main(int argc, char *argv[]) {
     // This initializes MPI, reads the input file, sets up meshes, etc.
     fds_initialize_all(&t, &dt, &nmeshes);
 
-    // Get the end time from Fortran
+    // Get the end time and mesh indices for this MPI process
     tEnd = fds_get_t_end();
+    int lower_mesh_index = fds_get_lower_mesh_index();
+    int upper_mesh_index = fds_get_upper_mesh_index();
+    int local_nmeshes = upper_mesh_index - lower_mesh_index + 1;
 
     std::cout << "[FDS-HH] Initialization complete." << std::endl;
-    std::cout << "[FDS-HH] nmeshes=" << nmeshes
+    std::cout << "[FDS-HH] Total meshes=" << nmeshes
+              << " Local meshes=" << local_nmeshes
+              << " (range: " << lower_mesh_index << "-" << upper_mesh_index << ")"
               << " t=" << t << " dt=" << dt << " tEnd=" << tEnd << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
     // Phase 1: numThreads=1 (sequential for correctness verification)
-    // Phase 2: change to numThreads=nmeshes for parallel mesh processing
+    // Phase 2: change to numThreads=local_nmeshes for parallel mesh processing
+    // IMPORTANT: Use local_nmeshes, not total nmeshes, for barrier configuration
     size_t numThreads = 1;  // Phase 1: sequential
-    auto graph = buildFDSGraph(nmeshes, t, dt, tEnd, numThreads);
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, numThreads);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
 
-    // Step 4: Push initial MeshData tokens (one per mesh) into the graph.
+    // Step 4: Push initial MeshData tokens (one per LOCAL mesh) into the graph.
     // Set PREDICTOR=TRUE and FIRST_PASS=TRUE for the first time step
+    // IMPORTANT: Only push tokens for meshes owned by this MPI process
     fds_set_predictor(1);
     fds_set_first_pass(1);
     fds_set_icyc(1);
 
-    for (int nm = 1; nm <= nmeshes; ++nm) {
+    for (int nm = lower_mesh_index; nm <= upper_mesh_index; ++nm) {
         auto md = std::make_shared<MeshData>(nm, t, dt, 0);  // phase=0 (predictor)
         graph->pushData(md);
     }

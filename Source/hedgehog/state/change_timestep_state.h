@@ -33,6 +33,9 @@ public:
     void execute(std::shared_ptr<MeshData> data) override {
         collected_.push_back(data);
         if (static_cast<int>(collected_.size()) == nmeshes_) {
+            // STOP_CHECK(0) after all meshes complete VELOCITY_PREDICTOR (main.f90:732)
+            fds_stop_check_zero();
+
             // Check if any mesh needs a DT reduction (main.f90 lines 753-758)
             int needRetry = 0;
             double newDt = 0.0;
