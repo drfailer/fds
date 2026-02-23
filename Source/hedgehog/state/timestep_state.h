@@ -9,8 +9,15 @@
 
 /// State at the end of the corrector phase (end of one full time step).
 /// Collects all mesh tokens, performs global output dumps, checks termination.
-/// If T < T_END, increments ICYC, adjusts DT based on CFL, sets PREDICTOR=TRUE,
-/// and re-emits tokens for the next time step. Otherwise, stops emitting.
+/// If T < T_END, adjusts DT, increments ICYC for the next step, sets
+/// PREDICTOR=TRUE, and re-emits tokens for the next time step.
+///
+/// ICYC timing: In the original main.f90, ICYC is incremented at the TOP of
+/// MAIN_LOOP (before physics), so during time step N the Fortran ICYC == N.
+/// Here, main_hh.cpp sets ICYC=1 before step 1's physics. For subsequent
+/// steps, we set ICYC=N+1 after step N's dumps, so that step N+1's physics
+/// sees the correct value. The dumps for step N use icyc_ which was already
+/// set to N at the start of the step.
 class TimestepState : public hh::AbstractState<1, MeshData, MeshData> {
 public:
     TimestepState(int nmeshes, double tEnd)
@@ -28,14 +35,9 @@ public:
             // CC_IBM end step (corrector side)
             fds_cc_end_step(t, dt, 0);
 
-            // In original main.f90, ICYC is incremented at the top of MAIN_LOOP
-            // (before physics), and DIAGNOSTICS is set based on that ICYC.
-            // We increment here before the output sequence so that the Fortran ICYC
-            // is correct when WRITE_DIAGNOSTICS writes _steps.csv.
-            icyc_++;
-            fds_set_icyc(icyc_);
-
-            // Set DIAGNOSTICS flag based on ICYC (controls _steps.csv output)
+            // Set DIAGNOSTICS flag based on current ICYC.
+            // icyc_ == N was set before this step's physics ran (by main_hh.cpp
+            // for step 1, or by the previous cycle's re-emission for step N>1).
             fds_set_diagnostics(icyc_, t, dt);
 
             // Global output sequence (matches main.f90 lines 975-996)
@@ -64,7 +66,7 @@ public:
                 return;
             }
 
-            // Prepare next time step (ICYC already incremented above)
+            // Prepare next time step
             fds_set_predictor(1);  // PREDICTOR=TRUE
             fds_set_first_pass(1); // FIRST_PASS=TRUE for new CHANGE_TIME_STEP_LOOP
 
@@ -74,6 +76,12 @@ public:
             //   IF (ANY(CHANGE_TIME_STEP_INDEX==-1)) DT = MINVAL(DT_NEW)
             //   Clip final time step
             double newDt = fds_adjust_dt(t, dt);
+
+            // Increment ICYC for the NEXT time step, matching the original
+            // main.f90 where ICYC is set at the top of MAIN_LOOP before physics.
+            // This ensures step N+1's physics sees ICYC == N+1.
+            icyc_++;
+            fds_set_icyc(icyc_);
 
             // Re-emit tokens for next predictor step with updated DT
             for (auto &md : collected_) {
@@ -92,7 +100,7 @@ public:
 private:
     int nmeshes_;
     double tEnd_;
-    int icyc_ = 0;
+    int icyc_ = 1;  // Matches main_hh.cpp's initial fds_set_icyc(1)
     bool done_ = false;
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
