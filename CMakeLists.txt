@@ -50,6 +50,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/vege.f90
     ${CMAKE_SOURCE_DIR}/Source/ctrl.f90
     ${CMAKE_SOURCE_DIR}/Source/hvac.f90
+    ${CMAKE_SOURCE_DIR}/Source/mass_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/mass.f90
     ${CMAKE_SOURCE_DIR}/Source/imkl.f90
     ${CMAKE_SOURCE_DIR}/Source/wall.f90
@@ -60,6 +61,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/init.f90
     ${CMAKE_SOURCE_DIR}/Source/dump.f90
     ${CMAKE_SOURCE_DIR}/Source/read.f90
+    ${CMAKE_SOURCE_DIR}/Source/divg_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/divg.f90
 )
 
