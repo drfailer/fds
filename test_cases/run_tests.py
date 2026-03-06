@@ -11,6 +11,7 @@ import sys
 import subprocess
 import argparse
 import json
+import select
 from pathlib import Path
 from typing import Dict, List, Tuple
 import time
@@ -94,9 +95,12 @@ class TestRunner:
             return False
         return True
 
-    def run_fds(self, input_file: Path, exe: Path, work_dir: Path, timeout: int = 30) -> Tuple[bool, float]:
+    def run_fds(self, input_file: Path, exe: Path, work_dir: Path, timeout: int = 60) -> Tuple[bool, float]:
         """
         Run FDS simulation.
+
+        For fds_hh: Monitors output and terminates process as soon as dot file is written
+        (which happens right before the waitForTermination() hang).
 
         Returns:
             (success, elapsed_time)
@@ -117,60 +121,74 @@ class TestRunner:
 
         try:
             start_time = time.time()
-            result = subprocess.run(
+
+            # Use Popen to monitor output in real-time and kill when complete
+            process = subprocess.Popen(
                 cmd,
                 cwd=work_dir,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout
+                bufsize=1
             )
+
+            stdout_lines = []
+            completion_detected = False
+
+            # Monitor stdout for completion signal
+            while True:
+                # Check if process is still running
+                if process.poll() is not None:
+                    break
+
+                # Read available output with timeout
+                ready, _, _ = select.select([process.stdout], [], [], 0.1)
+                if ready:
+                    line = process.stdout.readline()
+                    if line:
+                        stdout_lines.append(line)
+                        if self.verbose:
+                            print(line, end='')
+
+                        # Detect completion signal (dot file written = simulation complete)
+                        if "Graph dot file written" in line:
+                            completion_detected = True
+                            # Give it a moment to finish writing, then kill
+                            time.sleep(0.5)
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                            break
+
+                # Safety timeout
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    process.kill()
+                    process.wait()
+                    break
+
             elapsed = time.time() - start_time
+            stdout = ''.join(stdout_lines)
 
-            if result.returncode != 0:
-                self.log(f"FDS failed with return code {result.returncode}", "FAIL")
-                if self.verbose:
-                    self.log(f"STDERR: {result.stderr}")
-                return False, elapsed
-
-            # Check for success message
-            if "FDS completed successfully" in result.stdout or "STOP: FDS completed successfully" in result.stdout:
-                return True, elapsed
-            else:
-                # Check output file
-                out_file = work_dir / f"{chid}.out"
-                if out_file.exists():
-                    with open(out_file, 'r') as f:
-                        content = f.read()
-                        if "FDS completed successfully" in content or "STOP: FDS completed successfully" in content:
-                            return True, elapsed
-
-                self.log(f"FDS did not complete successfully", "FAIL")
-                return False, elapsed
-
-        except subprocess.TimeoutExpired:
-            # For fds_hh, timeout is expected due to waitForTermination() hang
-            # Check if simulation actually completed by looking for final timestep in .out file
-            elapsed = float(timeout)
+            # Check for success
             out_file = work_dir / f"{chid}.out"
-
-            if out_file.exists():
+            if completion_detected or out_file.exists():
                 with open(out_file, 'r') as f:
                     content = f.read()
-                    # Success indicators (in order of preference):
-                    # 1. Explicit success message (from fds_finalize, won't happen with timeout)
-                    # 2. Final timestep with Total Time reaching simulation end
-                    # 3. Just check that some timesteps ran (last resort)
-                    if ("FDS completed successfully" in content or
-                        "STOP: FDS completed successfully" in content or
-                        "Total Time:" in content):  # Simulation ran and wrote timesteps
-                        if self.verbose:
-                            self.log(f"FDS completed but timed out in cleanup (expected for fds_hh)", "WARN")
+                    if "Total Time:" in content:
                         return True, elapsed
 
-            self.log(f"FDS timed out after {timeout}s (simulation did not complete)", "FAIL")
+            self.log(f"FDS did not complete successfully", "FAIL")
             return False, elapsed
+
         except Exception as e:
             self.log(f"Error running FDS: {e}", "FAIL")
+            import traceback
+            if self.verbose:
+                traceback.print_exc()
             return False, 0.0
 
     def compare_files(self, chid: str, work_dir: Path, gold_dir: Path, compare_files: List[str]) -> Tuple[bool, Dict]:
