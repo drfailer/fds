@@ -1,0 +1,93 @@
+// FDS Pressure Iteration Loop Detail
+// Render: dot -Tsvg pressure_iteration.dot -o pressure_iteration.svg
+//
+// The pressure iteration is the most complex inner loop in FDS.
+// Called once during PREDICTOR and once during CORRECTOR.
+
+digraph pressure_iteration {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9, shape=box, style="filled,rounded"];
+    edge [fontsize=8];
+    label="Pressure Iteration Loop Detail\n(called within both PREDICTOR and CORRECTOR)";
+    labelloc=t;
+    fontsize=14;
+
+    start [label="PRESSURE_ITERATIONS = 0\nITERATE_BAROCLINIC_TERM = .TRUE.", shape=ellipse, fillcolor="#e0e0e0"];
+
+    iter_start [label="PRESSURE_ITERATIONS += 1", fillcolor="#b3cde3"];
+
+    // Baroclinic correction (per-mesh)
+    baro [label="BAROCLINIC_CORRECTION(NM)\n(velo.f90 -> velo_kernels.f90)\nAttach baroclinic torque to FVX/FVY/FVZ", fillcolor="#b3e2cd"];
+    cc_noflux1 [label="CC_NO_FLUX(NM, .TRUE.)\n(if CC_IBM)", fillcolor="#b3e2cd", style="filled,rounded,dashed"];
+
+    // MPI sync
+    exch5a [label="MESH_EXCHANGE(5)\nMomentum flux + pressure", fillcolor="#fbb4ae", shape=octagon];
+
+    // Per-mesh
+    match_flux [label="MATCH_VELOCITY_FLUX(NM)\nForce flux continuity at\nmesh boundaries", fillcolor="#b3e2cd"];
+    noflux [label="NO_FLUX(NM)\nEnforce divergence-free\nat solid boundaries", fillcolor="#b3e2cd"];
+    cc_noflux2 [label="CC_NO_FLUX(NM, .FALSE.)\n(if CC_IBM)", fillcolor="#b3e2cd", style="filled,rounded,dashed"];
+    compute_rhs [label="PRESSURE_SOLVER_COMPUTE_RHS(NM)\n(pres.f90 -> pres_kernels.f90)\nPRHS = -(dD/dt) - div(F)", fillcolor="#b3e2cd"];
+
+    // Solver selection
+    solver_select [label="PRES_FLAG?", shape=diamond, fillcolor="#fff2ae"];
+
+    // FFT path
+    tunnel [label="TUNNEL_POISSON_SOLVER\n(if tunnel preconditioner)", fillcolor="#b3cde3"];
+    fft [label="PRESSURE_SOLVER_FFT(NM)\n(pres.f90 -> pres_kernels.f90)\nSolve Laplacian(H) = PRHS\nusing FFT", fillcolor="#b3e2cd"];
+
+    // GLMAT path
+    glmat [label="GLMAT_SOLVER(T,DT)\n(global, all meshes at once)\nSparse direct solve", fillcolor="#fbb4ae", shape=octagon];
+    glmat_exch [label="MESH_EXCHANGE(5)\n+ COPY_H_OMESH_TO_MESH", fillcolor="#fbb4ae", shape=octagon];
+
+    // ULMAT path
+    ulmat [label="ULMAT_SOLVER(NM)\n(per-mesh, per pressure zone)\nSparse local solve", fillcolor="#b3e2cd"];
+
+    // Check residuals
+    check_resid [label="PRESSURE_SOLVER_CHECK_RESIDUALS(NM)\nVerify Poisson solution", fillcolor="#b3e2cd"];
+
+    // Iteration decision
+    iterate_check [label="ITERATE_PRESSURE?", shape=diamond, fillcolor="#fff2ae"];
+    no_iterate [label="EXIT\n(single-pass mode)", fillcolor="#e0e0e0", shape=ellipse];
+
+    // Velocity error computation
+    exch5b [label="MESH_EXCHANGE(5)\nUpdated pressure + flux", fillcolor="#fbb4ae", shape=octagon];
+    vel_error [label="COMPUTE_VELOCITY_ERROR(NM)\nEstimate U^{n+1}\nCompute L2 error norm", fillcolor="#b3e2cd"];
+    cc_vel_error [label="CC_COMPUTE_VELOCITY_ERROR(NM)\n(if CC_IBM)", fillcolor="#b3e2cd", style="filled,rounded,dashed"];
+    error_sync [label="MPI_ALLGATHERV\nSync velocity/pressure\nerrors across all processes", fillcolor="#fbb4ae", shape=octagon];
+
+    // Convergence check
+    converge_check [label="Converged?\nVELOCITY_ERROR < VELOCITY_TOLERANCE\nPRESSURE_ERROR < PRESSURE_TOLERANCE", shape=diamond, fillcolor="#fff2ae"];
+    max_iter [label="Max iterations\nreached?", shape=diamond, fillcolor="#fff2ae"];
+
+    exit [label="EXIT\nPRESSURE_ITERATION_LOOP", shape=ellipse, fillcolor="#e0e0e0"];
+
+    // Edges
+    start -> iter_start;
+    iter_start -> baro -> cc_noflux1 -> exch5a;
+    exch5a -> match_flux -> noflux -> cc_noflux2 -> compute_rhs;
+    compute_rhs -> solver_select;
+
+    solver_select -> tunnel [label="FFT_FLAG"];
+    solver_select -> glmat [label="GLMAT_FLAG"];
+    solver_select -> ulmat [label="ULMAT_FLAG"];
+
+    tunnel -> fft;
+    glmat -> glmat_exch;
+    // Merge paths
+    fft -> check_resid;
+    glmat_exch -> check_resid;
+    ulmat -> check_resid;
+
+    check_resid -> iterate_check;
+    iterate_check -> no_iterate [label="No"];
+    iterate_check -> exch5b [label="Yes"];
+
+    exch5b -> vel_error -> cc_vel_error -> error_sync -> converge_check;
+
+    converge_check -> exit [label="Yes"];
+    converge_check -> max_iter [label="No"];
+    max_iter -> exit [label="Yes"];
+    max_iter -> iter_start [label="No\n(next iteration)", color=red];
+}

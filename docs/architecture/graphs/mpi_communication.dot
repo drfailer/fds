@@ -1,0 +1,187 @@
+// FDS MPI Communication Flow
+// Render: dot -Tsvg mpi_communication.dot -o mpi_communication.svg
+//
+// Shows all MPI synchronization points in one time step, organized
+// as a timeline from top to bottom. Each row is a distinct phase
+// of computation, and red nodes are MPI barriers/exchanges.
+
+digraph mpi_communication {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9, shape=box, style="filled,rounded"];
+    edge [fontsize=8];
+    label="FDS MPI Communication Timeline (One Time Step)";
+    labelloc=t;
+    fontsize=14;
+
+    // =========================================================================
+    // Legend
+    // =========================================================================
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled; fillcolor="#f8f8f8";
+        rank=same;
+        leg_compute [label="Per-mesh computation\n(parallelizable)", fillcolor="#b3e2cd"];
+        leg_persist [label="Persistent MPI\n(MESH_EXCHANGE)", fillcolor="#fbb4ae", shape=octagon];
+        leg_reduce  [label="Global reduction\n(MPI_ALLREDUCE)", fillcolor="#fdcdac", shape=hexagon];
+        leg_block   [label="Blocking MPI\n(ISEND/IRECV)", fillcolor="#fbb4ae", shape=doubleoctagon];
+        leg_compute -> leg_persist [style=invis];
+        leg_persist -> leg_reduce [style=invis];
+        leg_reduce -> leg_block [style=invis];
+    }
+
+    // =========================================================================
+    // PREDICTOR PHASE
+    // =========================================================================
+    subgraph cluster_predictor {
+        label="PREDICTOR PHASE";
+        style=filled; fillcolor="#f0fff0";
+
+        // Phase 1: particle insertion + viscosity + mass discretization
+        p1_compute [label="Per-mesh:\nINSERT_PARTICLES\nCOMPUTE_VISCOSITY\nMASS_FINITE_DIFFERENCES\nDENSITY", fillcolor="#b3e2cd"];
+
+        // Sync 1: species exchange
+        p1_exch [label="MESH_EXCHANGE(1)\nExchange: RHO, MU, KRES,\nD, Q, ZZ\n(6 + 2*N_SPECIES reals per cell)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Sync 1b: particle exchange (conditional)
+        p1_lor [label="MPI_ALLREDUCE(LOR)\nEXCHANGE_INSERTED_PARTICLES?", fillcolor="#fdcdac", shape=hexagon];
+        p1_part [label="MESH_EXCHANGE(7)\nParticle counts\n+\nMESH_EXCHANGE(11)\nParticle data arrays", fillcolor="#fbb4ae", shape=doubleoctagon];
+
+        // Phase 2: velocity flux + wall BC + divergence
+        p2_compute [label="Per-mesh:\nVELOCITY_FLUX\nWALL_BC\nDIVERGENCE_PART_1", fillcolor="#b3e2cd"];
+
+        // Sync 2: HVAC
+        p2_hvac [label="EXCHANGE_HVAC_BC\n+ HVAC_CALC (rank 0)\n+ EXCHANGE_HVAC_SOLUTION\n(if HVAC enabled)", fillcolor="#fdcdac", shape=hexagon];
+
+        // Sync 3: divergence info
+        p3_divexch [label="EXCHANGE_DIVERGENCE_INFO\nMPI_ALLREDUCE(SUM):\nDSUM, PSUM, USUM\n(N_ZONE values each)\n+\nMPI_ALLREDUCE(MAX):\nCONNECTED_ZONES", fillcolor="#fdcdac", shape=hexagon];
+
+        // Phase 3: divergence part 2
+        p3_compute [label="Per-mesh:\nDIVERGENCE_PART_2", fillcolor="#b3e2cd"];
+
+        // Pressure iteration (inner loop, multiple syncs)
+        subgraph cluster_pres_iter {
+            label="PRESSURE ITERATION LOOP";
+            style=filled; fillcolor="#e8e8ff";
+
+            pi_compute1 [label="Per-mesh:\nBAROCLINIC_CORRECTION\nNO_FLUX\nCOMPUTE_RHS", fillcolor="#b3e2cd"];
+            pi_exch5a [label="MESH_EXCHANGE(5)\nExchange: FVX, FVY, FVZ, H\n(momentum flux + pressure)", fillcolor="#fbb4ae", shape=octagon];
+            pi_solve [label="Per-mesh:\nPRESSURE_SOLVER_FFT\nor ULMAT_SOLVER\nor GLMAT_SOLVER (global)", fillcolor="#b3e2cd"];
+            pi_exch5b [label="MESH_EXCHANGE(5)\nUpdated H + fluxes\n(if iterating)", fillcolor="#fbb4ae", shape=octagon];
+            pi_error [label="Per-mesh:\nCOMPUTE_VELOCITY_ERROR", fillcolor="#b3e2cd"];
+            pi_allgather [label="MPI_ALLGATHERV\nVELOCITY_ERROR_MAX\nPRESSURE_ERROR_MAX\n(convergence check)", fillcolor="#fdcdac", shape=hexagon];
+            pi_converge [label="Converged?", shape=diamond, fillcolor="#fff2ae"];
+
+            pi_compute1 -> pi_exch5a -> pi_solve -> pi_exch5b;
+            pi_exch5b -> pi_error -> pi_allgather -> pi_converge;
+            pi_converge -> pi_compute1 [label="No", color=red, style=dashed];
+        }
+
+        // Phase 4: velocity prediction + CFL
+        p4_compute [label="Per-mesh:\nVELOCITY_PREDICTOR\nCHECK_STABILITY", fillcolor="#b3e2cd"];
+
+        // Sync 4: CFL
+        p4_allgather [label="MPI_ALLGATHERV\nCHANGE_TIME_STEP_INDEX\n(sync CFL decision)", fillcolor="#fdcdac", shape=hexagon];
+        p4_cfl_fail [label="DT retry?\n(if CFL failed)", shape=diamond, fillcolor="#fff2ae"];
+
+        // Sync 5: velocity exchange
+        p5_exch3 [label="MESH_EXCHANGE(3)\nExchange: H, U, V, W\n(4 reals per cell)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Phase 5: velocity matching
+        p5_compute [label="Per-mesh:\nMATCH_VELOCITY\nVELOCITY_BC", fillcolor="#b3e2cd"];
+
+        // Edges
+        p1_compute -> p1_exch -> p1_lor;
+        p1_lor -> p1_part [label="if particles"];
+        p1_lor -> p2_compute [label="no particles"];
+        p1_part -> p2_compute;
+        p2_compute -> p2_hvac -> p3_divexch -> p3_compute;
+        p3_compute -> pi_compute1;
+        pi_converge -> p4_compute [label="Yes"];
+        p4_compute -> p4_allgather -> p4_cfl_fail;
+        p4_cfl_fail -> p1_compute [label="Retry\n(reduce DT)", color=red, style=dashed];
+        p4_cfl_fail -> p5_exch3 [label="OK"];
+        p5_exch3 -> p5_compute;
+    }
+
+    // =========================================================================
+    // CORRECTOR PHASE
+    // =========================================================================
+    subgraph cluster_corrector {
+        label="CORRECTOR PHASE";
+        style=filled; fillcolor="#fff0f0";
+
+        // Phase 6: density correction
+        c1_compute [label="Per-mesh:\nCOMPUTE_VISCOSITY\nMASS_FINITE_DIFFERENCES\nDENSITY (corrector)", fillcolor="#b3e2cd"];
+
+        // Sync 6: species exchange
+        c1_exch4 [label="MESH_EXCHANGE(4)\nExchange: RHO, MU, D, ZZ\n(corrected species)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Phase 7: combustion
+        c2_compute [label="Per-mesh:\nVELOCITY_FLUX\nAGGLOMERATION", fillcolor="#b3e2cd"];
+        c2_combust [label="COMBUSTION_LOAD_BALANCED\n(load-balanced across all meshes)\nMPI_ALLREDUCE(SUM):\nCVODE warnings", fillcolor="#fdcdac", shape=hexagon];
+
+        // Phase 8: particles
+        c3_compute [label="Per-mesh:\nPARTICLE_MASS_ENERGY_TRANSFER\nMOVE_PARTICLES\nPARTICLE_MOMENTUM_TRANSFER", fillcolor="#b3e2cd"];
+
+        // Sync 8: particle migration
+        c3_part [label="MESH_EXCHANGE(7+11)\nParticle migration\n(variable size per step)", fillcolor="#fbb4ae", shape=doubleoctagon];
+
+        // Phase 9: wall + radiation
+        c4_compute [label="Per-mesh:\nWALL_BC\nCOMPUTE_RADIATION", fillcolor="#b3e2cd"];
+
+        // Sync 9: radiation
+        c4_exch2 [label="MESH_EXCHANGE(2)\nExchange: IL_S, IL_R\n(radiation intensity)\nNRA * N_BANDS * NIC reals", fillcolor="#fbb4ae", shape=octagon];
+
+        // Sync 9b: HT3D
+        c4_exch6_ht3d [label="MESH_EXCHANGE(6)\n3D solid conduction\n(every WALL_INCREMENT steps)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Phase 10: divergence
+        c5_compute [label="Per-mesh:\nCOMBUSTION_BC\nDIVERGENCE_PART_1", fillcolor="#b3e2cd"];
+
+        // Sync 10: divergence info
+        c5_divexch [label="EXCHANGE_DIVERGENCE_INFO\n(same as predictor)", fillcolor="#fdcdac", shape=hexagon];
+
+        // Sync 10b: obstruction mass (conditional)
+        c5_obst [label="MESH_EXCHANGE(15,16,17,18)\nObstruction mass exchange\n(if EXCHANGE_OBST_MASS)", fillcolor="#fbb4ae", shape=doubleoctagon];
+
+        // Phase 11: divergence part 2 + pressure
+        c6_compute [label="Per-mesh:\nDIVERGENCE_PART_2", fillcolor="#b3e2cd"];
+        c6_pressure [label="PRESSURE_ITERATION_SCHEME\n(same loop as predictor)", fillcolor="#b3cde3", shape=box3d];
+
+        // Phase 12: velocity correction
+        c7_compute [label="Per-mesh:\nVELOCITY_CORRECTOR", fillcolor="#b3e2cd"];
+
+        // Sync 12: final exchange
+        c7_exch6 [label="MESH_EXCHANGE(6)\nExchange: H, U, V, W\n+ BACK_WALL data\n(surface T, fluxes)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Phase 13: output
+        c8_compute [label="Per-mesh:\nMATCH_VELOCITY\nVELOCITY_BC\nUPDATE_GLOBAL_OUTPUTS\nDUMP_MESH_OUTPUTS", fillcolor="#b3e2cd"];
+
+        // Sync 13: global output
+        c8_outexch [label="EXCHANGE_GLOBAL_OUTPUTS\nMPI_ALLREDUCE(SUM):\nHRR, mass balance,\nenergy balance", fillcolor="#fdcdac", shape=hexagon];
+
+        // Edges
+        c1_compute -> c1_exch4 -> c2_compute -> c2_combust;
+        c2_combust -> c3_compute -> c3_part;
+        c3_part -> c4_compute -> c4_exch2;
+        c4_exch2 -> c4_exch6_ht3d [style=dashed, label="if HT3D"];
+        c4_exch2 -> c5_compute;
+        c4_exch6_ht3d -> c5_compute;
+        c5_compute -> c5_divexch -> c5_obst [style=dashed, label="if OBST"];
+        c5_divexch -> c6_compute;
+        c5_obst -> c6_compute;
+        c6_compute -> c6_pressure -> c7_compute -> c7_exch6;
+        c7_exch6 -> c8_compute -> c8_outexch;
+    }
+
+    // =========================================================================
+    // End of step
+    // =========================================================================
+    stop_check [label="STOP_CHECK(1)\nMPI_ALLREDUCE(MAX)\nSTOP_STATUS", fillcolor="#fdcdac", shape=hexagon];
+    restart [label="DUMP_RESTART\n(if restart time reached)", fillcolor="#e0e0e0"];
+
+    // Main flow
+    p5_compute -> c1_compute;
+    c8_outexch -> stop_check -> restart;
+}

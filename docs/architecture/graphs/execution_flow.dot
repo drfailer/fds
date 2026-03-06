@@ -1,0 +1,197 @@
+// FDS Execution Flow - Main Time-Stepping Loop
+// Render: dot -Tsvg execution_flow.dot -o execution_flow.svg
+//
+// Shows the predictor-corrector time stepping with MPI synchronization points.
+// Green nodes  = per-mesh computation (parallelizable)
+// Red nodes    = MPI synchronization / global operations
+// Blue nodes   = pressure iteration (inner loop)
+// Yellow nodes = conditional branches
+
+digraph execution_flow {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=9, shape=box, style="filled,rounded"];
+    edge [fontsize=8];
+    label="FDS Main Time-Stepping Loop\n(one iteration = one DT)";
+    labelloc=t;
+    fontsize=14;
+    compound=true;
+    splines=true;
+
+    // =========================================================================
+    // Loop start
+    // =========================================================================
+    start [label="ICYC = ICYC + 1\nCheck STOP file\nAdjust DT", shape=ellipse, fillcolor="#e0e0e0"];
+
+    // =========================================================================
+    // PREDICTOR
+    // =========================================================================
+    subgraph cluster_predictor {
+        label="PREDICTOR  (PREDICTOR=.TRUE., CORRECTOR=.FALSE.)";
+        style=filled; fillcolor="#f0fff0";
+        fontsize=12;
+
+        // Per-mesh block 1
+        pred_insert [label="INSERT_ALL_PARTICLES\n(part.f90)", fillcolor="#b3e2cd"];
+        pred_visc   [label="COMPUTE_VISCOSITY\n(turb.f90)", fillcolor="#b3e2cd"];
+        pred_massd  [label="MASS_FINITE_DIFFERENCES_NEW\n(mass.f90)", fillcolor="#b3e2cd"];
+
+        // CFL retry loop
+        pred_cfl_start [label="CHANGE_TIME_STEP_LOOP\nstart", shape=diamond, fillcolor="#fff2ae"];
+
+        // Per-mesh block 2
+        pred_density [label="DENSITY\n(mass.f90 -> mass_kernels.f90)\nPredict ZZS, RHOS", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        pred_exch1 [label="MESH_EXCHANGE(1)\nSpecies/density", fillcolor="#fbb4ae", shape=octagon];
+
+        // Particle exchange (conditional)
+        pred_part_exch [label="MESH_EXCHANGE(7+11)\nParticle exchange\n(if needed)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 3
+        pred_velflux [label="VELOCITY_FLUX\n(velo.f90 -> velo_kernels.f90)\nCompute FVX, FVY, FVZ", fillcolor="#b3e2cd"];
+        pred_hvac_bc [label="HVAC_BC_IN\n(hvac.f90)", fillcolor="#b3e2cd"];
+
+        // HVAC global
+        pred_hvac [label="HVAC_CALC\n(hvac.f90, rank 0 only)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 4
+        pred_wallbc [label="WALL_BC\n(wall.f90 -> wall_kernels.f90)\nSurface T, species, fluxes", fillcolor="#b3e2cd"];
+        pred_partmom [label="PARTICLE_MOMENTUM_TRANSFER\n(part.f90)", fillcolor="#b3e2cd"];
+        pred_div1 [label="DIVERGENCE_PART_1\n(divg.f90 -> divg_kernels.f90)\nCompute D, accumulate Q_DOT/M_DOT", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        pred_divexch [label="EXCHANGE_DIVERGENCE_INFO\nZone pressure integrals\n(MPI_ALLREDUCE)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 5
+        pred_div2 [label="DIVERGENCE_PART_2\n(divg.f90 -> divg_kernels.f90)\nCompute DDDT", fillcolor="#b3e2cd"];
+
+        // Pressure iteration (see detail graph)
+        pred_pressure [label="PRESSURE_ITERATION_SCHEME\n(see pressure detail graph)", fillcolor="#b3cde3", shape=box3d];
+
+        // Per-mesh block 6
+        pred_velpred [label="VELOCITY_PREDICTOR\n(velo.f90 -> velo_kernels.f90)\nUS = U - dt*dH/dx", fillcolor="#b3e2cd"];
+        pred_cfl [label="CHECK_STABILITY\nCFL check", fillcolor="#b3e2cd"];
+
+        // CFL sync
+        pred_cflsync [label="MPI_ALLGATHERV\nSync time step changes", fillcolor="#fbb4ae", shape=octagon];
+        pred_cfl_check [label="CFL OK?", shape=diamond, fillcolor="#fff2ae"];
+
+        // MPI sync
+        pred_exch3 [label="MESH_EXCHANGE(3)\nVelocity/pressure", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 7
+        pred_match [label="MATCH_VELOCITY\n(velo.f90)", fillcolor="#b3e2cd"];
+        pred_velbc [label="VELOCITY_BC\n(velo.f90)", fillcolor="#b3e2cd"];
+
+        // Edges within predictor
+        pred_insert -> pred_visc -> pred_massd -> pred_cfl_start;
+        pred_cfl_start -> pred_density;
+        pred_density -> pred_exch1 -> pred_part_exch;
+        pred_part_exch -> pred_velflux;
+        pred_velflux -> pred_hvac_bc -> pred_hvac;
+        pred_hvac -> pred_wallbc -> pred_partmom -> pred_div1;
+        pred_div1 -> pred_divexch -> pred_div2;
+        pred_div2 -> pred_pressure;
+        pred_pressure -> pred_velpred -> pred_cfl -> pred_cflsync;
+        pred_cflsync -> pred_cfl_check;
+        pred_cfl_check -> pred_cfl_start [label="DT too large\n(reduce & retry)", style=dashed, color=red];
+        pred_cfl_check -> pred_exch3 [label="OK"];
+        pred_exch3 -> pred_match -> pred_velbc;
+    }
+
+    // =========================================================================
+    // CORRECTOR
+    // =========================================================================
+    subgraph cluster_corrector {
+        label="CORRECTOR  (CORRECTOR=.TRUE., PREDICTOR=.FALSE.)\nT = T + DT;  Q_DOT = 0;  M_DOT = 0";
+        style=filled; fillcolor="#fff0f0";
+        fontsize=12;
+
+        // Per-mesh block 1
+        corr_obst [label="CREATE_OR_REMOVE_OBSTRUCTIONS", fillcolor="#b3e2cd"];
+        corr_visc [label="COMPUTE_VISCOSITY\n(turb.f90, estimated vars)", fillcolor="#b3e2cd"];
+        corr_massd [label="MASS_FINITE_DIFFERENCES_NEW\n(mass.f90)", fillcolor="#b3e2cd"];
+        corr_density [label="DENSITY\n(mass.f90 -> mass_kernels.f90)\nCorrect ZZ, RHO (final)", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_exch4 [label="MESH_EXCHANGE(4)\nSpecies/density (corrected)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 2
+        corr_velflux [label="VELOCITY_FLUX\n(velo.f90, estimated vars)", fillcolor="#b3e2cd"];
+        corr_agglom  [label="CALC_AGGLOMERATION\n(soot.f90)", fillcolor="#b3e2cd"];
+
+        // Global combustion
+        corr_combust [label="COMBUSTION_LOAD_BALANCED\n(fire.f90 -> fire_kernels.f90)\nSolve chemistry ODE\nCompute Q, REAC_SOURCE_TERM", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 3
+        corr_partmass [label="PARTICLE_MASS_ENERGY_TRANSFER\n(part.f90)\nDroplet evaporation, drag", fillcolor="#b3e2cd"];
+        corr_partmove [label="MOVE_PARTICLES\n(part.f90)\nAdvect through velocity field", fillcolor="#b3e2cd"];
+        corr_partmom  [label="PARTICLE_MOMENTUM_TRANSFER\n(part.f90)", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_partexch [label="MESH_EXCHANGE(7+11)\nParticle exchange", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 4
+        corr_wallbc [label="WALL_BC\n(wall.f90)\nFinal surface conditions", fillcolor="#b3e2cd"];
+        corr_rad [label="COMPUTE_RADIATION\n(radi.f90)\nSolve RTE -> QR, QR_W", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_exch2 [label="MESH_EXCHANGE(2)\nRadiation intensity", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 5
+        corr_combbc [label="COMBUSTION_BC\n(fire.f90)", fillcolor="#b3e2cd"];
+        corr_div1 [label="DIVERGENCE_PART_1\n(divg.f90 -> divg_kernels.f90)", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_divexch [label="EXCHANGE_DIVERGENCE_INFO\n(MPI_ALLREDUCE)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 6
+        corr_div2 [label="DIVERGENCE_PART_2\n(divg.f90 -> divg_kernels.f90)", fillcolor="#b3e2cd"];
+
+        // Pressure iteration
+        corr_pressure [label="PRESSURE_ITERATION_SCHEME\n(same as predictor)", fillcolor="#b3cde3", shape=box3d];
+
+        // Per-mesh block 7
+        corr_velcorr [label="VELOCITY_CORRECTOR\n(velo.f90 -> velo_kernels.f90)\nU = 0.5*(U + US - dt*dH/dx)", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_exch6 [label="MESH_EXCHANGE(6)\nFinal velocity/pressure\n+ wall data", fillcolor="#fbb4ae", shape=octagon];
+
+        // Per-mesh block 8
+        corr_match [label="MATCH_VELOCITY\n(velo.f90)", fillcolor="#b3e2cd"];
+        corr_velbc [label="VELOCITY_BC\n(velo.f90)", fillcolor="#b3e2cd"];
+        corr_output [label="UPDATE_GLOBAL_OUTPUTS\nDUMP_MESH_OUTPUTS\n(dump.f90)", fillcolor="#b3e2cd"];
+
+        // MPI sync
+        corr_outexch [label="EXCHANGE_GLOBAL_OUTPUTS\n(MPI_ALLREDUCE)", fillcolor="#fbb4ae", shape=octagon];
+
+        // Edges within corrector
+        corr_obst -> corr_visc -> corr_massd -> corr_density;
+        corr_density -> corr_exch4;
+        corr_exch4 -> corr_velflux -> corr_agglom -> corr_combust;
+        corr_combust -> corr_partmass -> corr_partmove -> corr_partmom -> corr_partexch;
+        corr_partexch -> corr_wallbc -> corr_rad -> corr_exch2;
+        corr_exch2 -> corr_combbc -> corr_div1 -> corr_divexch;
+        corr_divexch -> corr_div2 -> corr_pressure;
+        corr_pressure -> corr_velcorr -> corr_exch6;
+        corr_exch6 -> corr_match -> corr_velbc -> corr_output -> corr_outexch;
+    }
+
+    // =========================================================================
+    // Output and loop control
+    // =========================================================================
+    diagnostics [label="WRITE_DIAGNOSTICS\nDUMP_RESTART (if needed)\nSTOP_CHECK", shape=ellipse, fillcolor="#e0e0e0"];
+    loop_end [label="T >= T_END?", shape=diamond, fillcolor="#fff2ae"];
+    finish [label="END_FDS\nSolver cleanup\nMPI_FINALIZE", shape=ellipse, fillcolor="#e0e0e0"];
+
+    // =========================================================================
+    // Main flow
+    // =========================================================================
+    start -> pred_insert [lhead=cluster_predictor];
+    pred_velbc -> corr_obst [lhead=cluster_corrector];
+    corr_outexch -> diagnostics;
+    diagnostics -> loop_end;
+    loop_end -> start [label="No (next time step)"];
+    loop_end -> finish [label="Yes"];
+}
