@@ -8,9 +8,11 @@ MODULE POIS
 USE PRECISION_PARAMETERS
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
-REAL(EB) SCALE
+TYPE :: POIS_WORK
+   REAL(EB) :: SCALE = 0._EB
+   LOGICAL :: TPOSE = .FALSE., NOCOPY = .FALSE., OUTARY = .FALSE.
+END TYPE POIS_WORK
 INTEGER :: KAPPA,NMAX,IKPWR
-LOGICAL :: TPOSE,NOCOPY,OUTARY
 
 PUBLIC H3CZIS,H3CZSS,H2CZSS,H2CYSS,H3CSSS,H2CZIS,H3CSIS,H2CYIS
 
@@ -188,6 +190,7 @@ END SUBROUTINE H3CZIS
 
 SUBROUTINE H3CZSS(BDXS,BDXF,BDYS,BDYF,BDZS,BDZF,LDIMF,MDIMF,F,PERTRB,SAVE,W,H)
 
+TYPE(POIS_WORK) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -423,7 +426,7 @@ PRTSAV = PERT
 
 !                               SOLVE THE EQUATION
 
-CALL S3CFSS(LDIMF,MDIMF,F,SAVE(IS),W)
+CALL S3CFSS(PW,LDIMF,MDIMF,F,SAVE(IS),W)
 
 !                               IF A SINGULAR PROBLEM,
 !                               RE-NORMALIZE SOLUTION (ISING=2)
@@ -538,8 +541,9 @@ RETURN
 END SUBROUTINE S3CFIS
 
 
-SUBROUTINE S3CFSS(LDIMF,MDIMF,F,SAVE,W)
+SUBROUTINE S3CFSS(PW,LDIMF,MDIMF,F,SAVE,W)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -556,7 +560,7 @@ REAL(EB)   F(LDIMF,MDIMF,*), SAVE(-3:*), W(*)
 
 IF (ABS(SAVE(1))>=TWENTY_EPSILON_EB) RETURN
 
-CALL FSH02S(LDIMF,MDIMF,F,SAVE,W)
+CALL FSH02S(PW,LDIMF,MDIMF,F,SAVE,W)
 
 RETURN
 END SUBROUTINE S3CFSS
@@ -953,8 +957,9 @@ RETURN
 END SUBROUTINE FSH01S
 
 
-SUBROUTINE FSH02S(LDIMF,MDIMF,F,SAVE,W)
+SUBROUTINE FSH02S(PW,LDIMF,MDIMF,F,SAVE,W)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1001,7 +1006,7 @@ IF (LDIMF==L .AND. MDIMF==M) THEN
 
 !                               NO HOLES IN DATA ARRAY, SO CALL SOLVER
 
-  CALL FSH03S(IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,F,SAVE(ICFY), SAVE(ICFZ),  &
+  CALL FSH03S(PW,IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,F,SAVE(ICFY), SAVE(ICFZ),  &
       W,SAVE(IA),SAVE(IC),SAVE(IFCTRD),SAVE(IWSY), SAVE(IWSZ))
 ELSE
   IF (LDIMF>L .AND. MOD(L,2)==0) LDIMFT=L+1
@@ -1010,7 +1015,7 @@ ELSE
 !                               AND THEN UNPACK SOLUTION ARRAY
 
   CALL FSH04S(L,M,N,LDIMF,MDIMF,LDIMFT,F,W)
-  CALL FSH03S(IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,W,SAVE(ICFY),  &
+  CALL FSH03S(PW,IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,W,SAVE(ICFY),  &
       SAVE(ICFZ),F, SAVE(IA),SAVE(IC),SAVE(IFCTRD),SAVE(IWSY),  &
       SAVE(IWSZ))
   CALL FSH05S(L,M,N,LDIMF,MDIMF,LDIMFT,F,W)
@@ -1020,9 +1025,10 @@ RETURN
 END SUBROUTINE FSH02S
 
 
-SUBROUTINE FSH03S(IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,F,CFY,CFZ,  &
+SUBROUTINE FSH03S(PW,IGRID,L,LP,M,MP,N,NP,LDIMFC,LDIMFT,F,CFY,CFZ,  &
     FT,A,C,FCTRD,WSAVEY,WSAVEZ)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1060,24 +1066,24 @@ DO  K=1,N
   END DO
 END DO
 
-NOCOPY=.TRUE.
+PW%NOCOPY=.TRUE.
 DATARY=.TRUE.
-SCALE=1._EB
+PW%SCALE=1._EB
 IFWRD = 1
 100 CONTINUE
 
 IF (N/=1) THEN
-  TPOSE=.FALSE.
-  IF (IFWRD==2) TPOSE=.TRUE.
+  PW%TPOSE=.FALSE.
+  IF (IFWRD==2) PW%TPOSE=.TRUE.
 
 !                               TRANSFORM IN Z
   IF (DATARY) THEN
-    CALL FSH26S(IGRID,IFWRD,NP,L,N,M,LDIMFT,F,FT,CFZ,WSAVEZ)
-    DATARY=OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,NP,L,N,M,LDIMFT,F,FT,CFZ,WSAVEZ)
+    DATARY=PW%OUTARY
 
   ELSE
-    CALL FSH26S(IGRID,IFWRD,NP,L,N,M,LDIMFT,FT,F,CFZ,WSAVEZ)
-    DATARY=.NOT.OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,NP,L,N,M,LDIMFT,FT,F,CFZ,WSAVEZ)
+    DATARY=.NOT.PW%OUTARY
   END IF
 
 END IF
@@ -1088,18 +1094,18 @@ END SELECT
 
 490 CONTINUE
 IF (M/=1) THEN
-  TPOSE=.TRUE.
-  IF (IFWRD==2) TPOSE=.FALSE.
+  PW%TPOSE=.TRUE.
+  IF (IFWRD==2) PW%TPOSE=.FALSE.
 
 !                               TRANSFORM Y
 
 
   IF (DATARY) THEN
-    CALL FSH26S(IGRID,IFWRD,MP,L,M,N,LDIMFT,F,FT,CFY,WSAVEY)
-    DATARY=OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,MP,L,M,N,LDIMFT,F,FT,CFY,WSAVEY)
+    DATARY=PW%OUTARY
   ELSE
-    CALL FSH26S(IGRID,IFWRD,MP,L,M,N,LDIMFT,FT,F,CFY,WSAVEY)
-    DATARY=.NOT.OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,MP,L,M,N,LDIMFT,FT,F,CFY,WSAVEY)
+    DATARY=.NOT.PW%OUTARY
   END IF
 
 END IF
@@ -1122,17 +1128,17 @@ IF (L>1) THEN
   IF (MP==1) DATASW=.NOT.DATASW
   IF (DATARY) THEN
     IF (DATASW) THEN
-      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,SCALE,A,C,F,FT,FCTRD)
+      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,PW%SCALE,A,C,F,FT,FCTRD)
       DATARY=.FALSE.
     ELSE
-      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,SCALE,A,C,F,F,FCTRD)
+      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,PW%SCALE,A,C,F,F,FCTRD)
     END IF
   ELSE
     IF (DATASW) THEN
-      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,SCALE,A,C,FT,F,FCTRD)
+      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,PW%SCALE,A,C,FT,F,FCTRD)
       DATARY=.TRUE.
     ELSE
-      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,SCALE,A,C,FT,FT,FCTRD)
+      CALL FSH06S(L,LP,M*N,LDIMFC,LDIMFT,PW%SCALE,A,C,FT,FT,FCTRD)
     END IF
   END IF
 
@@ -1367,8 +1373,9 @@ RETURN
 END FUNCTION FSH20S
 
 
-SUBROUTINE FSH26S(IGRID,IFWRD,MP,L,M,N,LDIMFT,F,FT,CFY,WSAVEY)
+SUBROUTINE FSH26S(PW,IGRID,IFWRD,MP,L,M,N,LDIMFT,F,FT,CFY,WSAVEY)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1418,13 +1425,13 @@ CASE(2)   ; GO TO 150
 END SELECT
 140     CONTINUE
 
-CALL VSRFTF(F,L,M,N,LDIMFT,FT,WSAVEY)
+CALL VSRFTF(PW,F,L,M,N,LDIMFT,FT,WSAVEY)
 GO TO 280
 150     CONTINUE
-CALL VSRFTB(F,L,M,N,LDIMFT,FT,WSAVEY)
+CALL VSRFTB(PW,F,L,M,N,LDIMFT,FT,WSAVEY)
 GO TO 280
 160     CONTINUE
-CALL VSINT(F,L,M,N,LDIMFT,FT,CFY,WSAVEY)
+CALL VSINT(PW,F,L,M,N,LDIMFT,FT,CFY,WSAVEY)
 GO TO 280
 170     CONTINUE
 SELECT CASE(IFWRD)
@@ -1437,16 +1444,16 @@ CASE(1)   ; GO TO 190
 CASE(2)   ; GO TO 200
 END SELECT
 190     CONTINUE
-CALL VSSINF(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
+CALL VSSINF(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
 GO TO 280
 200     CONTINUE
-CALL VSSINB(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
+CALL VSSINB(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
 GO TO 280
 210     CONTINUE
-CALL VSSINQ(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1), CFY(2*M+1),CFY(3*M+1),WSAVEY)
+CALL VSSINQ(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1), CFY(2*M+1),CFY(3*M+1),WSAVEY)
 GO TO 280
 220     CONTINUE
-CALL VCOST(F,L,M,N,LDIMFT,FT,CFY,WSAVEY)
+CALL VCOST(PW,F,L,M,N,LDIMFT,FT,CFY,WSAVEY)
 GO TO 280
 230     CONTINUE
 SELECT CASE(IFWRD)
@@ -1459,21 +1466,22 @@ CASE(1)   ; GO TO 250
 CASE(2)   ; GO TO 260
 END SELECT
 250     CONTINUE
-CALL VSCOSF(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
+CALL VSCOSF(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
 GO TO 280
 260     CONTINUE
-CALL VSCOSB(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
+CALL VSCOSB(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1),WSAVEY)
 GO TO 280
 270     CONTINUE
-CALL VSCOSQ(F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1), CFY(2*M+1),CFY(3*M+1),WSAVEY)
+CALL VSCOSQ(PW,F,L,M,N,LDIMFT,FT,CFY(1),CFY(M+1), CFY(2*M+1),CFY(3*M+1),WSAVEY)
 280     CONTINUE
 
 RETURN
 END SUBROUTINE FSH26S
 
 
-SUBROUTINE VCOST(X,L,M,N,LDIMX,XT,C,WSAVE)
+SUBROUTINE VCOST(PW,X,L,M,N,LDIMX,XT,C,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1499,8 +1507,8 @@ INTEGER :: MM1, MS2, I, J, JC
 
 MM1 = M-1
 MS2 = M/2
-SCALE=SCALE*SQRT(0.5_EB)
-IF (TPOSE) THEN
+PW%SCALE=PW%SCALE*SQRT(0.5_EB)
+IF (PW%TPOSE) THEN
   CALL VCOST1(L,M,N,LDIMX,MS2,C,XT,X)
 ELSE
   DO  I=1,LDIMX*N
@@ -1522,22 +1530,22 @@ END DO
 404    CONTINUE
 END IF
 IF (M>3) THEN
-  CALL VRFFTF (LDIMX*N,MM1,XT,LDIMX*N,X,WSAVE)
-  IF (OUTARY) THEN
+  CALL VRFFTF (PW,LDIMX*N,MM1,XT,LDIMX*N,X,WSAVE)
+  IF (PW%OUTARY) THEN
     CALL VCOSTA(M,N*LDIMX,MM1,XT(1,M),X,XT)
   ELSE
     CALL VCOSTA(M,N*LDIMX,MM1,XT(1,M),XT,X)
   END IF
 ELSE IF (M==2) THEN
-  OUTARY=.FALSE.
+  PW%OUTARY=.FALSE.
 ELSE
   DO  I=1,LDIMX*N
     X(I,2)=XT(I,3)
     X(I,1)=XT(I,1)+XT(I,2)
     X(I,3)=XT(I,1)-XT(I,2)
   END DO
-OUTARY=.TRUE.
-SCALE=SCALE*SQRT(0.5_EB)
+PW%OUTARY=.TRUE.
+PW%SCALE=PW%SCALE*SQRT(0.5_EB)
 END IF
 RETURN
 END SUBROUTINE VCOST
@@ -1667,9 +1675,6 @@ REAL(EB) :: DT
 !                               INITIALIZE NOCOPY AND TPOSE TO DEFAULT
 !                               VALUES
 
-NOCOPY = .FALSE.
-TPOSE = .TRUE.
-
 IF (N <= 3) RETURN
 NP1 = N+1
 NS2 = N/2
@@ -1685,8 +1690,9 @@ RETURN
 END SUBROUTINE VCOSTI
 
 
-SUBROUTINE VRFFTF (M,N,R,MDIMR,RT,WSAVE)
+SUBROUTINE VRFFTF (PW,M,N,R,MDIMR,RT,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1706,7 +1712,7 @@ REAL(EB)   RT(M,N)
 REAL(EB)   WSAVE(N+15)
 REAL(EB)         R(MDIMR,N)
 IF (N == 1) RETURN
-CALL VRFTF1 (M,N,R,MDIMR,RT,WSAVE(1),WSAVE(N+1))
+CALL VRFTF1 (PW,M,N,R,MDIMR,RT,WSAVE(1),WSAVE(N+1))
 RETURN
 END SUBROUTINE VRFFTF
 
@@ -1731,17 +1737,15 @@ REAL(EB)         WSAVE(N+15)
 !                               INITIALIZE NOCOPY AND TPOSE TO DEFAULT
 !                               VALUES
 
-NOCOPY = .FALSE.
-TPOSE = .TRUE.
-
 IF (N <= 1) RETURN
 CALL VRFTI1 (N,WSAVE(1),WSAVE(N+1))
 RETURN
 END SUBROUTINE VRFFTI
 
 
-SUBROUTINE VRFTF1 (M,N,C,MDIMC,CH,WA,FAC)
+SUBROUTINE VRFTF1 (PW,M,N,C,MDIMC,CH,WA,FAC)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1814,24 +1818,24 @@ DO  K1=1,NF
   NA = 0
   110    L2 = L1
 END DO
-OUTARY=.TRUE.
-IF (NOCOPY) THEN
-  SCALE=SCALE*SQRT(1.0_EB/REAL(N,EB))
+PW%OUTARY=.TRUE.
+IF (PW%NOCOPY) THEN
+  PW%SCALE=PW%SCALE*SQRT(1.0_EB/REAL(N,EB))
   IF (NA==0) THEN
-    OUTARY=.FALSE.
+    PW%OUTARY=.FALSE.
   END IF
 ELSE
-  SCALE=SQRT(1.0_EB/REAL(N,EB))
+  PW%SCALE=SQRT(1.0_EB/REAL(N,EB))
   IF (NA == 1) GO TO 113
   DO  J=1,N
     DO  I=1,M
-      C(I,J) = SCALE*CH(I,J)
+      C(I,J) = PW%SCALE*CH(I,J)
     END DO
   END DO
   RETURN
   113    DO  J=1,N
     DO  I=1,M
-      C(I,J)=SCALE*C(I,J)
+      C(I,J)=PW%SCALE*C(I,J)
     END DO
   END DO
 END IF
@@ -1918,8 +1922,9 @@ RETURN
 END SUBROUTINE VRFTI1
 
 
-SUBROUTINE VSCOSB(F,L,M,N,LDIMF,FT,C1,C2,WORK)
+SUBROUTINE VSCOSB(PW,F,L,M,N,LDIMF,FT,C1,C2,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -1947,7 +1952,7 @@ INTEGER :: I, J
 
 !     PREPROCESSING
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
   CALL VSCSB1(L,M,N,LDIMF,F,FT,C1,C2)
 ELSE
   DO  I=1,LDIMF*N
@@ -1962,12 +1967,12 @@ END IF
 
 !     REAL(EB),PERIODIC ANALYSIS
 
-CALL VRFFTF(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTF(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-SCALE=SQRT(2.0_EB)*SCALE
-IF (OUTARY) THEN
+PW%SCALE=SQRT(2.0_EB)*PW%SCALE
+IF (PW%OUTARY) THEN
   CALL VSCSBA(M,N*LDIMF,FT,F)
 ELSE
   CALL VSCSBA(M,N*LDIMF,F,FT)
@@ -1976,8 +1981,9 @@ RETURN
 END SUBROUTINE VSCOSB
 
 
-SUBROUTINE VSCOSF(F,L,M,N,LDIMF,FT,C1,C2,WORK)
+SUBROUTINE VSCOSF(PW,F,L,M,N,LDIMF,FT,C1,C2,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2006,8 +2012,8 @@ INTEGER :: I, J
 
 !     PREPROCESSING
 
-SCALE=SQRT(2.0_EB)*SCALE
-IF (TPOSE) THEN
+PW%SCALE=SQRT(2.0_EB)*PW%SCALE
+IF (PW%TPOSE) THEN
   CALL VSCSF1(L,M,N,LDIMF,F,FT)
 ELSE
   DO  I=1,LDIMF*N
@@ -2029,11 +2035,11 @@ END IF
 
 !     REAL(EB),PERIODIC SYNTHESIS
 
-CALL VRFFTB(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTB(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-IF (OUTARY) THEN
+IF (PW%OUTARY) THEN
   CALL VSCSFA(M,N*LDIMF,F,FT,C1,C2)
 ELSE
   CALL VSCSFA(M,N*LDIMF,FT,F,C1,C2)
@@ -2081,8 +2087,9 @@ RETURN
 END SUBROUTINE VSCOSI
 
 
-SUBROUTINE VSCOSQ(F,L,M,N,LDIMF,FT,C1,C2,C3,C4,WORK)
+SUBROUTINE VSCOSQ(PW,F,L,M,N,LDIMF,FT,C1,C2,C3,C4,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2114,7 +2121,7 @@ INTEGER :: I, J, JBY2
 
 !     PREPROCESSING
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
    CALL VSCSQ1(L,M,N,LDIMF,F,FT,C1,C2)
 ELSE
   
@@ -2145,11 +2152,11 @@ END IF
 
 !     REAL(EB),PERIODIC SYNTHESIS
 
-CALL VRFFTB(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTB(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-IF (OUTARY) THEN
+IF (PW%OUTARY) THEN
   DO  J=1,M
     DO  I=1,LDIMF*N
       F(I,J)=C4(J)*FT(I,J)+C3(J)*FT(I,M+1-J)
@@ -2391,7 +2398,7 @@ REAL(EB)   C4(N)
 REAL(EB)   WSAVE(N+15)
 REAL(EB)   C1(N),C2(N)
 INTEGER :: I
-REAL(EB) :: DX,C,S
+REAL(EB) :: DX,C,S,SCALE
 
 DX=PI/N
 SCALE=SQRT(.5_EB)
@@ -2420,8 +2427,9 @@ RETURN
 END SUBROUTINE VSCSQI
 
 
-SUBROUTINE VSINT(X,L,M,N,LDIMX,XT,C,WSAVE)
+SUBROUTINE VSINT(PW,X,L,M,N,LDIMX,XT,C,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2457,7 +2465,7 @@ DO  I=1,LDIMX*N
 END DO
 !                         ZERO OUT LAST PLANE BECAUSE FOR SINE
 !                         IT DOESN'T GET DONE IN FSH02
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
   CALL VSINT1(L,M,N,LDIMX,MODM,MS2,C,XT,X)
 ELSE
   DO  J=1,MS2
@@ -2473,9 +2481,9 @@ ELSE
   END DO
 405    CONTINUE
 END IF
-CALL VRFFTF (LDIMX*N,MP1,XT,LDIMX*N,X,WSAVE)
-SCALE=SCALE*SQRT2I
-IF (OUTARY) THEN
+CALL VRFFTF (PW,LDIMX*N,MP1,XT,LDIMX*N,X,WSAVE)
+PW%SCALE=PW%SCALE*SQRT2I
+IF (PW%OUTARY) THEN
   CALL VSINTA(M,LDIMX*N,MODM,X,XT)
 ELSE
   CALL VSINTA(M,LDIMX*N,MODM,XT,X)
@@ -2599,9 +2607,6 @@ REAL(EB) :: DT
 !                               INITIALIZE NOCOPY AND TPOSE TO DEFAULT
 !                               VALUES
 
-NOCOPY = .FALSE.
-TPOSE = .TRUE.
-
 IF (N <= 1) RETURN
 NP1 = N+1
 NS2 = N/2
@@ -2614,8 +2619,9 @@ RETURN
 END SUBROUTINE VSINTI
 
 
-SUBROUTINE VSRFTB(F,L,M,N,LDIMF,FT,WSAVE)
+SUBROUTINE VSRFTB(PW,F,L,M,N,LDIMF,FT,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2653,7 +2659,7 @@ INTEGER :: I,K,J
 !     TPOSE = .TRUE. IF TRANSFORMING SECOND INDEX (SO TRANSPOSE)
 !           = .FALSE. IF TRANSFORMING THIRD INDEX
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
 
 !        RE-ORDER INPUT
 
@@ -2667,20 +2673,21 @@ IF (TPOSE) THEN
 
 !        REAL(EB), PERIODIC TRANSFORM
 
-  CALL VRFFTB(LDIMF*N,M,FT,LDIMF*N,F,WSAVE)
-  OUTARY=.NOT.OUTARY
-  IF (.NOT.NOCOPY) THEN
+  CALL VRFFTB(PW,LDIMF*N,M,FT,LDIMF*N,F,WSAVE)
+  PW%OUTARY=.NOT.PW%OUTARY
+  IF (.NOT.PW%NOCOPY) THEN
     CALL VSRTB1(M,N*LDIMF,F,FT)
   END IF
 ELSE
-  CALL VRFFTB(LDIMF*N,M,F,LDIMF*N,FT,WSAVE)
+  CALL VRFFTB(PW,LDIMF*N,M,F,LDIMF*N,FT,WSAVE)
 END IF
 RETURN
 END SUBROUTINE VSRFTB
 
 
-SUBROUTINE VSRFTF(F,L,M,N,LDIMF,FT,WSAVE)
+SUBROUTINE VSRFTF(PW,F,L,M,N,LDIMF,FT,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2702,7 +2709,7 @@ REAL(EB)   F(LDIMF,N,M)
 !     TPOSE = .TRUE. IF TRANSFORMING SECOND INDEX (SO TRANSPOSE)
 !           = .FALSE. IF TRANSFORMING THIRD INDEX
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
 
 !        RE-ORDER INPUT
 
@@ -2710,13 +2717,13 @@ IF (TPOSE) THEN
 
 !        REAL(EB), PERIODIC TRANSFORM
 
-  CALL VRFFTF(LDIMF*N,M,FT,LDIMF*N,F,WSAVE)
-  OUTARY=.NOT.OUTARY
-  IF (.NOT.NOCOPY) THEN
+  CALL VRFFTF(PW,LDIMF*N,M,FT,LDIMF*N,F,WSAVE)
+  PW%OUTARY=.NOT.PW%OUTARY
+  IF (.NOT.PW%NOCOPY) THEN
     CALL VSRTB1(M,N*LDIMF,F,FT)
   END IF
 ELSE
-  CALL VRFFTF(LDIMF*N,M,F,LDIMF*N,FT,WSAVE)
+  CALL VRFFTF(PW,LDIMF*N,M,F,LDIMF*N,FT,WSAVE)
 END IF
 RETURN
 END SUBROUTINE VSRFTF
@@ -2818,8 +2825,9 @@ RETURN
 END SUBROUTINE VSRTF1
 
 
-SUBROUTINE VSSINB(F,L,M,N,LDIMF,FT,C1,C2,WORK)
+SUBROUTINE VSSINB(PW,F,L,M,N,LDIMF,FT,C1,C2,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2847,7 +2855,7 @@ INTEGER :: I,J
 
 !     PREPROCESSING
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
   CALL VSSNB1(L,M,N,LDIMF,F,FT,C1,C2)
 ELSE
   DO  J=2,M
@@ -2862,12 +2870,12 @@ END IF
 
 !     REAL(EB),PERIODIC ANALYSIS
 
-CALL VRFFTF(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTF(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-SCALE=SQRT(2.0_EB)*SCALE
-IF (OUTARY) THEN
+PW%SCALE=SQRT(2.0_EB)*PW%SCALE
+IF (PW%OUTARY) THEN
   CALL VSSNBA(M,N*LDIMF,F,FT)
 ELSE
   CALL VSSNBA(M,N*LDIMF,FT,F)
@@ -2876,8 +2884,9 @@ RETURN
 END SUBROUTINE VSSINB
 
 
-SUBROUTINE VSSINF(F,L,M,N,LDIMF,FT,C1,C2,WORK)
+SUBROUTINE VSSINF(PW,F,L,M,N,LDIMF,FT,C1,C2,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2907,8 +2916,8 @@ INTEGER :: I,J
 
 !     PREPROCESSING
 
-SCALE=SQRT(2.0_EB)*SCALE
-IF (TPOSE) THEN
+PW%SCALE=SQRT(2.0_EB)*PW%SCALE
+IF (PW%TPOSE) THEN
   CALL VSSNF1(L,M,N,LDIMF,F,FT)
 ELSE
   DO  I=1,LDIMF*N
@@ -2929,11 +2938,11 @@ END IF
 
 !     REAL(EB),PERIODIC SYNTHESIS
 
-CALL VRFFTB(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTB(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-IF (OUTARY) THEN
+IF (PW%OUTARY) THEN
   CALL VSSNFA(M,N*LDIMF,F,FT,C1,C2)
 ELSE
   CALL VSSNFA(M,N*LDIMF,FT,F,C1,C2)
@@ -2942,8 +2951,9 @@ RETURN
 END SUBROUTINE VSSINF
 
 
-SUBROUTINE VSSINQ(F,L,M,N,LDIMF,FT,C1,C2,C3,C4,WORK)
+SUBROUTINE VSSINQ(PW,F,L,M,N,LDIMF,FT,C1,C2,C3,C4,WORK)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -2973,7 +2983,7 @@ INTEGER :: I,J,JBY2
 
 !     PREPROCESSING
 
-IF (TPOSE) THEN
+IF (PW%TPOSE) THEN
   CALL VSSNQ1(L,M,N,LDIMF,F,FT,C1,C2)
 ELSE
   DO  I=1,LDIMF*N
@@ -2995,11 +3005,11 @@ END IF
 
 !     REAL(EB),PERIODIC SYNTHESIS
 
-CALL VRFFTB(LDIMF*N,M,FT,LDIMF*N,F,WORK)
+CALL VRFFTB(PW,LDIMF*N,M,FT,LDIMF*N,F,WORK)
 
 !     POSTPROCESSING
 
-IF (OUTARY) THEN
+IF (PW%OUTARY) THEN
   DO  J=1,M
     DO  I=1,LDIMF*N
       F(I,J)=C3(J)*FT(I,J)-C4(J)*FT(I,M+1-J)
@@ -3789,8 +3799,9 @@ RETURN
 END SUBROUTINE VRADFG
 
 
-SUBROUTINE VRFFTB(M,N,R,MDIMR,RT,WSAVE)
+SUBROUTINE VRFFTB(PW,M,N,R,MDIMR,RT,WSAVE)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -3810,13 +3821,14 @@ REAL(EB)       RT(M,N)
 REAL(EB)       WSAVE(N+15)
 REAL(EB)       R(MDIMR,N)
 IF (N == 1) RETURN
-CALL VRFTB1 (M,N,R,MDIMR,RT,WSAVE(1),WSAVE(N+1))
+CALL VRFTB1 (PW,M,N,R,MDIMR,RT,WSAVE(1),WSAVE(N+1))
 RETURN
 END SUBROUTINE VRFFTB
 
 
-SUBROUTINE VRFTB1 (M,N,C,MDIMC,CH,WA,FAC)
+SUBROUTINE VRFTB1 (PW,M,N,C,MDIMC,CH,WA,FAC)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -3894,24 +3906,24 @@ DO  K1=1,NF
 END DO
 
 
-OUTARY=.TRUE.
-IF (NOCOPY) THEN
-  SCALE=SCALE*SQRT(1.0_EB/REAL(N,EB))
+PW%OUTARY=.TRUE.
+IF (PW%NOCOPY) THEN
+  PW%SCALE=PW%SCALE*SQRT(1.0_EB/REAL(N,EB))
   IF (NA==1) THEN
-    OUTARY=.FALSE.
+    PW%OUTARY=.FALSE.
   END IF
 ELSE
-  SCALE=SQRT(1.0_EB/REAL(N,EB))
+  PW%SCALE=SQRT(1.0_EB/REAL(N,EB))
   IF (NA == 0) GO TO 118
   DO  J=1,N
     DO  I=1,M
-      C(I,J) = SCALE*CH(I,J)
+      C(I,J) = PW%SCALE*CH(I,J)
     END DO
   END DO
   RETURN
   118    DO  J=1,N
     DO  I=1,M
-      C(I,J)=SCALE*C(I,J)
+      C(I,J)=PW%SCALE*C(I,J)
     END DO
   END DO
 END IF
@@ -4904,6 +4916,7 @@ END SUBROUTINE H3CSIS
 SUBROUTINE H3CSSS(BDRS,BDRF,BDTS,BDTF,BDPS,BDPF,LDIMF,MDIMF,F,  &
     PERTRB,SAVE,W,HX,HY)
 
+TYPE(POIS_WORK) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -5220,7 +5233,7 @@ END DO
 
 !                               SOLVE SYSTEM USING S3CCSS
 
-CALL S3CCSS(LDIMF,MDIMF,F,SAVE(ISVPS+1),W)
+CALL S3CCSS(PW,LDIMF,MDIMF,F,SAVE(ISVPS+1),W)
 
 !                               IF A SINGULAR PROBLEM,
 !                               RE-NORMALIZE SOLUTION (ISING=2)
@@ -5320,8 +5333,9 @@ RETURN
 END SUBROUTINE S3CCIS
 
 
-SUBROUTINE S3CCSS(LDIMF,MDIMF,F,SAVE,W)
+SUBROUTINE S3CCSS(PW,LDIMF,MDIMF,F,SAVE,W)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -5344,14 +5358,15 @@ REAL(EB)   F(LDIMF,MDIMF,*)
 
 IF (ABS(SAVE(1))>=TWENTY_EPSILON_EB) RETURN
 
-CALL FSH15S(LDIMF,MDIMF,F,SAVE,W)
+CALL FSH15S(PW,LDIMF,MDIMF,F,SAVE,W)
 
 RETURN
 END SUBROUTINE S3CCSS
 
 
-SUBROUTINE FSH15S(LDIMY,MDIMY,Y,SAVE,W)
+SUBROUTINE FSH15S(PW,LDIMY,MDIMY,Y,SAVE,W)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -5400,7 +5415,7 @@ IF (LDIMY==L .AND. MDIMY==M) THEN
 
 !                               DATA ARRAY HAS NO HOLES, SO CALL SOLVER
 
-  CALL FSH16S(IGRID,L,M,N,NP,SAVE(IAL),SAVE(IBL),SAVE(ICL),  &
+  CALL FSH16S(PW,IGRID,L,M,N,NP,SAVE(IAL),SAVE(IBL),SAVE(ICL),  &
       SAVE(IAM),SAVE(ICM),SAVE(ICFZ),SAVE(IWSZ),  &
       SAVE(IB),SAVE(ICF),Y,W,W(1+M),W(1+M+L*M))
 
@@ -5416,7 +5431,7 @@ ELSE
     LENY = L*M
   END IF
 
-  CALL FSH16S(IGRID,L,M,N,NP,SAVE(IAL),SAVE(IBL),SAVE(ICL),  &
+  CALL FSH16S(PW,IGRID,L,M,N,NP,SAVE(IAL),SAVE(IBL),SAVE(ICL),  &
       SAVE(IAM),SAVE(ICM),SAVE(ICFZ),SAVE(IWSZ),  &
       SAVE(IB),SAVE(ICF),W,W(1+LENY),W(1+LENY+M),Y)
 
@@ -5428,8 +5443,9 @@ RETURN
 END SUBROUTINE FSH15S
 
 
-SUBROUTINE FSH16S(IGRID,L,M,N,NP,AL,BL,CL,AM,CM,CFZ,WSAVEZ,B, COEF,F,W1,W2,FT)
+SUBROUTINE FSH16S(PW,IGRID,L,M,N,NP,AL,BL,CL,AM,CM,CFZ,WSAVEZ,B, COEF,F,W1,W2,FT)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -5463,11 +5479,11 @@ LOGICAL :: DATARY
 
 !                               BEGIN SOLUTION
 
-NOCOPY=.TRUE.
+PW%NOCOPY=.TRUE.
 DATARY=.TRUE.
-SCALE=1._EB
+PW%SCALE=1._EB
 IFWRD = 1
-TPOSE=.FALSE.
+PW%TPOSE=.FALSE.
 LDIMFT=L
 100 CONTINUE
 
@@ -5476,11 +5492,11 @@ IF (N/=1) THEN
 !                               TRANSFORM IN Z
 
   IF (DATARY) THEN
-    CALL FSH26S(IGRID,IFWRD,NP,L,N,M,LDIMFT,F,FT,CFZ,WSAVEZ)
-    DATARY=OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,NP,L,N,M,LDIMFT,F,FT,CFZ,WSAVEZ)
+    DATARY=PW%OUTARY
   ELSE
-    CALL FSH26S(IGRID,IFWRD,NP,L,N,M,LDIMFT,FT,F,CFZ,WSAVEZ)
-    DATARY=.NOT.OUTARY
+    CALL FSH26S(PW,IGRID,IFWRD,NP,L,N,M,LDIMFT,FT,F,CFZ,WSAVEZ)
+    DATARY=.NOT.PW%OUTARY
   END IF
 
 END IF
@@ -5507,7 +5523,7 @@ IF (DATARY) THEN
   DO K=1,N
     DO J=1,M
       DO I=1,L
-        F(I,J,K)=SCALE*F(I,J,K)
+        F(I,J,K)=PW%SCALE*F(I,J,K)
       END DO
     END DO
   END DO
@@ -5515,7 +5531,7 @@ ELSE
   DO K=1,N
     DO J=1,M
       DO I=1,L
-        F(I,J,K)=SCALE*FT(I,J,K)
+        F(I,J,K)=PW%SCALE*FT(I,J,K)
       END DO
     END DO
   END DO
@@ -6777,6 +6793,7 @@ END SUBROUTINE H2CZIS
 
 SUBROUTINE H2CZSS(BDXS,BDXF,BDYS,BDYF,LDIMF,F,PERTRB,SAVE,W,H)
 
+TYPE(POIS_WORK) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -6950,7 +6967,7 @@ PRTSAV = PERT
 
 !                               SOLVE THE EQUATION
 
-CALL S2CFSS(LDIMF,F,SAVE(IS),W)
+CALL S2CFSS(PW,LDIMF,F,SAVE(IS),W)
 
 !                               IF A SINGULAR PROBLEM,
 !                               RE-NORMALIZE SOLUTION (ISING=2)
@@ -7055,8 +7072,9 @@ RETURN
 END SUBROUTINE S2CFIS
 
 
-SUBROUTINE S2CFSS(LDIMF,F,SAVE,W)
+SUBROUTINE S2CFSS(PW,LDIMF,F,SAVE,W)
 
+TYPE(POIS_WORK), INTENT(INOUT) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -7084,7 +7102,7 @@ IF (ABS(SAVE(1))>=TWENTY_EPSILON_EB) RETURN
 
 M = NINT(SAVE(4))
 
-CALL FSH02S(LDIMF,M,F,SAVE,W)
+CALL FSH02S(PW,LDIMF,M,F,SAVE,W)
 
 RETURN
 END SUBROUTINE S2CFSS
@@ -7277,6 +7295,7 @@ END SUBROUTINE H2CYIS
 
 SUBROUTINE H2CYSS(BDRS,BDRF,BDZS,BDZF,LDIMF,F,PERTRB,SAVE,W)
 
+TYPE(POIS_WORK) :: PW
 ! +--------------------------------------------------------------------+
 ! |                                                                    |
 ! |                       COPYRIGHT (C) 1989 BY                        |
@@ -7457,7 +7476,7 @@ PRTSAV = PERT
 
 !                               SOLVE SYSTEM USING S2CFSS
 
-CALL S2CFSS(LDIMF,F,SAVE(ISVPS+1),W)
+CALL S2CFSS(PW,LDIMF,F,SAVE(ISVPS+1),W)
 
 !                               IF A SINGULAR PROBLEM,
 !                               RE-NORMALIZE SOLUTION (ISING=2)
