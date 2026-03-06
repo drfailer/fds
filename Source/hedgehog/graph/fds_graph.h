@@ -14,6 +14,7 @@
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
 #include "../state/velocity_corrector_state.h"
+#include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -91,10 +92,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
         std::make_shared<CollectorState>(nmeshes), "PredPressureCollector");
     auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
 
-    // Predictor: CHANGE_TIME_STEP_LOOP
+    // Predictor: CHANGE_TIME_STEP_LOOP (now a sub-graph)
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
-    auto changeTimeStepTask = std::make_shared<ChangeTimeStepTask>();
+    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph();
 
     // Predictor: MESH_EXCHANGE(3) after CFL check
     auto collector3SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
@@ -192,8 +193,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(predPressureCollectorSM, predPressureTask);  // Do PRESSURE_ITERATION
     graph->edges(predPressureTask, velPredictor);
     graph->edges(velPredictor, changeTimeStepCollectorSM);    // Collect for CFL check
-    graph->edges(changeTimeStepCollectorSM, changeTimeStepTask); // Do CHANGE_TIME_STEP_LOOP
-    graph->edges(changeTimeStepTask, collector3SM);            // Collect for MESH_EXCHANGE(3)
+    graph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph); // Do CHANGE_TIME_STEP_LOOP (sub-graph)
+    graph->edges(changeTimeStepSubgraph, collector3SM);      // Collect for MESH_EXCHANGE(3)
     graph->edges(collector3SM, meshExchange3);                 // Do MESH_EXCHANGE(3)
     graph->edges(meshExchange3, predFinal);
     graph->edges(predFinal, phaseTransCollectorSM);           // Collect for phase transition
