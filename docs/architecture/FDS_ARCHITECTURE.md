@@ -617,7 +617,7 @@ Where NIC = number of interface cells between two meshes.
 
 ---
 
-## Appendix: Graph Files
+## Appendix A: Graph Files
 
 The following DOT graph files are provided in `graphs/`:
 
@@ -625,6 +625,12 @@ The following DOT graph files are provided in `graphs/`:
 |------|-------------|
 | `module_dependencies.dot` | Full module dependency graph |
 | `execution_flow.dot` | Time-stepping loop execution order |
+| `pressure_iteration.dot` | Pressure solver inner loop detail |
 | `data_flow.dot` | Data transformation through one time step |
 | `mpi_communication.dot` | Inter-process communication timeline |
 | `thread_safety.dot` | Thread safety status of all computation routines |
+
+## Appendix B: POINT_TO_MESH Removal Plan
+
+See [POINT_TO_MESH_REMOVAL.md](POINT_TO_MESH_REMOVAL.md) for a detailed
+per-module difficulty assessment and phased removal plan.
