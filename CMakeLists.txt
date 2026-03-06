@@ -40,6 +40,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/gsmv.f90
     ${CMAKE_SOURCE_DIR}/Source/smvv.f90
     ${CMAKE_SOURCE_DIR}/Source/rcal.f90
+    ${CMAKE_SOURCE_DIR}/Source/turb_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/turb.f90
     ${CMAKE_SOURCE_DIR}/Source/soot.f90
     ${CMAKE_SOURCE_DIR}/Source/pois.f90
