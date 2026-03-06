@@ -48,6 +48,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_data.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_divergence.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib.f90
+    ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_density.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_exchange.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_init.f90
     ${CMAKE_SOURCE_DIR}/Source/radi.f90
