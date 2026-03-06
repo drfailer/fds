@@ -3669,9 +3669,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
    ELSEIF (N_RADCAL_ARRAY_SIZE>0) THEN
 
-      !$OMP PARALLEL PRIVATE(ZZ_GET)
       ALLOCATE(ZZ_GET(1:N_TRACKED_SPECIES))
-      !$OMP DO SCHEDULE(STATIC)
       DO K=1,KBAR
          DO J=1,JBAR
             DO I=1,IBAR
@@ -3684,9 +3682,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
       DEALLOCATE(ZZ_GET)
-      !$OMP END PARALLEL
    ENDIF
 
    ! Compute source term KAPPA*4*SIGMA*TMP**4
@@ -3766,13 +3762,11 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
          ! Only apply the correction to KFST4_GAS for gray gas model
 
-         !$OMP PARALLEL PRIVATE(RAD_Q_SUM_PARTIAL,KFST4_SUM_PARTIAL,ALPHA_CC) SHARED(RAD_Q_SUM,KFST4_SUM)
 
          RAD_Q_SUM_PARTIAL = 0._EB
          KFST4_SUM_PARTIAL = 0._EB
          ALPHA_CC = 1._EB
 
-         !$OMP DO PRIVATE(VOL,IC)
          DO K=1,KBAR
             DO J=1,JBAR
                DO I=1,IBAR
@@ -3792,16 +3786,12 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                ENDDO
             ENDDO
          ENDDO
-         !$OMP END DO
 
-         !$OMP CRITICAL
          RAD_Q_SUM = RAD_Q_SUM + RAD_Q_SUM_PARTIAL
          KFST4_SUM = KFST4_SUM + KFST4_SUM_PARTIAL
-         !$OMP END CRITICAL
 
          ! Correct the source term in the RTE based on user-specified RADIATIVE_FRACTION on REAC
 
-         !$OMP DO
          DO K=1,KBAR
             DO J=1,JBAR
                DO I=1,IBAR
@@ -3813,9 +3803,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                ENDDO
             ENDDO
          ENDDO
-         !$OMP END DO
 
-         !$OMP END PARALLEL
 
       ELSE RTE_SOURCE_CORRECTION_IF  ! OPTICALLY_THIN
 
@@ -3991,7 +3979,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
             ! Boundary conditions: Intensities leaving the boundaries.
 
-            !$OMP PARALLEL DO PRIVATE(WC,BC,BR,B1,IOR,II,JJ,KK,LL,NOM,VT,TSI,TMP_EXTERIOR,IC) SCHEDULE(GUIDED)
             WALL_LOOP1: DO IW=1,N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS
                WC => WALL(IW)
                IF (WC%BOUNDARY_TYPE==NULL_BOUNDARY) CYCLE WALL_LOOP1
@@ -4036,7 +4023,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                   IL(II,JJ,KK) = BR%BAND(IBND)%ILW(N)
                ENDIF
             ENDDO WALL_LOOP1
-            !$OMP END PARALLEL DO
 
             DLA = (/DLX(N),DLY(N),DLZ(N)/)
             CFACE_LOOP1: DO ICF=INTERNAL_CFACE_CELLS_LB+1,INTERNAL_CFACE_CELLS_LB+N_INTERNAL_CFACE_CELLS
@@ -4177,11 +4163,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                      ENDDO
                   ENDDO
 
-                  !$OMP PARALLEL DO SCHEDULE(GUIDED) &
-                  !$OMP& PRIVATE(I, J, K, AY1, AX, VC1, AZ1, IC, ILXU, ILYU, AILFU, &
-                  !$OMP& ILZU, VC, AY, AZ, AXU, AYU, AZU, AXD, AYD, AZD, AFD, &
-                  !$OMP& IW, WC, BR, CF, CFA, BC, DLF, A_SUM, AIU_SUM, RAP, &
-                  !$OMP& ICF, INDCF, IADD, IFACE )
 
                   SLICE_LOOP: DO IJK = 1, M_IJK
                      I = IJK_SLICE(1,IJK)
@@ -4277,7 +4258,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                                      (SCAEFF(I,J,K)+SCAEFF_G(I,J,K))*UIIOLD(I,J,K) ) ) )
 
                   ENDDO SLICE_LOOP
-                  !$OMP END PARALLEL DO
 
                ENDDO IPROP_LOOP
 
@@ -4308,8 +4288,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
             ! Boundary values: Incoming radiation
 
-            !$OMP PARALLEL PRIVATE(IOR, IIG, JJG, KKG, WC, BC, BR)
-            !$OMP DO SCHEDULE(GUIDED)
             WALL_LOOP2: DO IW=1,N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS
                WC => WALL(IW)
                IF (WC%BOUNDARY_TYPE==NULL_BOUNDARY) CYCLE WALL_LOOP2
@@ -4326,9 +4304,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                BR%BAND(IBND)%ILW(N) = IL(IIG,JJG,KKG)
                INRAD_W(IW) = INRAD_W(IW) - DLN(IOR,N) * BR%BAND(IBND)%ILW(N) ! update incoming rad, step 2
             ENDDO WALL_LOOP2
-            !$OMP END DO
 
-            !$OMP DO SCHEDULE(GUIDED)
             WALL_LOOP3: DO IW=1,N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS
                WC => WALL(IW)
                IF (WC%BOUNDARY_TYPE/=OPEN_BOUNDARY)   CYCLE WALL_LOOP3
@@ -4337,8 +4313,6 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                BR => BOUNDARY_RADIA(WC%BR_INDEX)
                BR%BAND(IBND)%ILW(ANGLE_INC_COUNTER) = BR%BAND(IBND)%ILW(ANGLE_INC_COUNTER) - DLN(BC%IOR,N)*IL(BC%IIG,BC%JJG,BC%KKG)
             ENDDO WALL_LOOP3
-            !$OMP END DO
-            !$OMP END PARALLEL
 
             CFACE_LOOP2: DO ICF=INTERNAL_CFACE_CELLS_LB+1,INTERNAL_CFACE_CELLS_LB+N_INTERNAL_CFACE_CELLS
                CFA => CFACE(ICF)

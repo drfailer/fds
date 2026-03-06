@@ -44,11 +44,10 @@ int main(int argc, char *argv[]) {
               << " t=" << t << " dt=" << dt << " tEnd=" << tEnd << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
-    // Phase 1: numThreads=1 (sequential for correctness verification)
-    // Phase 2: change to numThreads=local_nmeshes for parallel mesh processing
-    // IMPORTANT: Use local_nmeshes, not total nmeshes, for barrier configuration
-    size_t numThreads = 1;  // Phase 1: sequential
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, numThreads);
+    // Only the velocity corrector kernel is parallelized; all other tasks are sequential
+    // IMPORTANT: Use local_nmeshes for both barrier configuration and parallel threads
+    size_t velCorrKernelThreads = local_nmeshes;  // Parallel velocity kernel
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, velCorrKernelThreads);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();

@@ -293,6 +293,28 @@ SUBROUTINE C_FDS_CHECK_DIVERGENCE(NM) BIND(C, NAME="fds_check_divergence")
 END SUBROUTINE C_FDS_CHECK_DIVERGENCE
 
 !==============================================================================
+! Thread-safe kernel wrappers (bypass orchestration, call kernels directly)
+! RECURSIVE keyword ensures thread-safety (does not propagate to callees)
+!==============================================================================
+
+RECURSIVE SUBROUTINE C_FDS_VELOCITY_CORRECTOR_KERNEL(NM, T, DT) BIND(C, NAME="fds_velocity_corrector_kernel")
+    USE VELO_KERNELS, ONLY: VELOCITY_CORRECTOR_KERNEL
+    USE MESH_VARIABLES, ONLY: MESHES
+    INTEGER(C_INT), VALUE :: NM
+    REAL(C_DOUBLE), VALUE :: T, DT
+    ! Call kernel directly without POINT_TO_MESH - thread-safe
+    CALL VELOCITY_CORRECTOR_KERNEL(MESHES(NM), DT)
+END SUBROUTINE C_FDS_VELOCITY_CORRECTOR_KERNEL
+
+RECURSIVE SUBROUTINE C_FDS_CHECK_DIVERGENCE_KERNEL(NM) BIND(C, NAME="fds_check_divergence_kernel")
+    USE DIVG_KERNELS, ONLY: CHECK_DIVERGENCE_KERNEL
+    USE MESH_VARIABLES, ONLY: MESHES
+    INTEGER(C_INT), VALUE :: NM
+    ! Call kernel directly without POINT_TO_MESH - thread-safe
+    CALL CHECK_DIVERGENCE_KERNEL(MESHES(NM))
+END SUBROUTINE C_FDS_CHECK_DIVERGENCE_KERNEL
+
+!==============================================================================
 ! Output subroutines
 !==============================================================================
 

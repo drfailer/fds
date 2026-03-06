@@ -273,7 +273,6 @@ ELSE CHEM_LOAD_BALANCE_IF
          
          ! Call chemistry on chemically active cut-cells
          IF (CC_IBM) THEN
-            !$OMP DO SCHEDULE(DYNAMIC)
             DO NC=1,NCHEM_ACTIVE_CC
                ICC= CHEM_ACTIVE_CC(NC,1); JCC= CHEM_ACTIVE_CC(NC,2)
                IGN_ZN=CHEM_ACTIVE_CC(NC,3)

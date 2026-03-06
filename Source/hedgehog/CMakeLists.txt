@@ -59,11 +59,6 @@ if(MKL_FOUND)
     target_link_libraries(fds_hh PRIVATE MKL::MKL)
 endif()
 
-# Link OpenMP if enabled
-if(USE_OPENMP)
-    target_link_libraries(fds_hh PUBLIC OpenMP::OpenMP_Fortran)
-endif()
-
 # Link hypre if available
 if(USE_HYPRE AND HYPRE_FOUND)
     target_link_libraries(fds_hh PRIVATE HYPRE)
@@ -87,7 +82,7 @@ target_compile_definitions(fds_hh PRIVATE GITDATE_PP="${GIT_DATE}")
 # Fortran compiler flags (same as the main fds target)
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_compile_options(fds_hh PRIVATE
-        $<$<COMPILE_LANGUAGE:Fortran>:-cpp -std=f2018 -frecursive -ffpe-summary=none -fall-intrinsics>)
+        $<$<COMPILE_LANGUAGE:Fortran>:-cpp -std=f2018 -ffpe-summary=none -fall-intrinsics>)
 elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "Intel" OR CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
     target_compile_options(fds_hh PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:-fpp>)
     if(LINUX)

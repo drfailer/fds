@@ -50,12 +50,9 @@ ELSE
    RHOP => M%RHOS
 ENDIF
 
-!$OMP PARALLEL
 
 ! Apply pressure boundary conditions at external cells.
 
-!$OMP DO PRIVATE(IW,WC,EWC,BC,B1,I,J,K,IOR,NOM,DX_OTHER,DY_OTHER,DZ_OTHER,VT,TSI) &
-!$OMP&   PRIVATE(TIME_RAMP_FACTOR,P_EXTERNAL,VEL_EDDY,H0)
 WALL_CELL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
 
    WC => M%WALL(IW)
@@ -227,7 +224,6 @@ WALL_CELL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
    ENDIF IF_DIRICHLET
 
 ENDDO WALL_CELL_LOOP
-!$OMP END DO
 
 ! Compute the RHS of the Poisson equation
 
@@ -235,7 +231,6 @@ SELECT CASE(M%IPS)
 
    CASE(:1,4,7)
       IF (CYLINDRICAL) THEN
-         !$OMP DO PRIVATE(TRM1,TRM3,TRM4)
          DO K=1,M%KBAR
             DO I=1,M%IBAR
                TRM1 = (M%R(I-1)*M%FVX(I-1,1,K)-M%R(I)*M%FVX(I,1,K))*M%RDX(I)*M%RRN(I)
@@ -244,10 +239,8 @@ SELECT CASE(M%IPS)
                M%PRHS(I,1,K) = TRM1 + TRM3 + TRM4
             ENDDO
          ENDDO
-         !$OMP END DO
       ENDIF
       IF (.NOT.CYLINDRICAL) THEN
-         !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
          DO K=1,M%KBAR
             DO J=1,M%JBAR
                DO I=1,M%IBAR
@@ -259,12 +252,10 @@ SELECT CASE(M%IPS)
                ENDDO
             ENDDO
          ENDDO
-         !$OMP END DO
 
       ENDIF
 
    CASE(2)  ! Switch x and y
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -276,10 +267,8 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
 
    CASE(3,6)  ! Switch x and z
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -291,10 +280,8 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
 
    CASE(5)  ! Switch y and z
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -306,11 +293,9 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
 
 END SELECT
 
-!$OMP END PARALLEL
 
 END SUBROUTINE PRESSURE_SOLVER_COMPUTE_RHS
 
@@ -394,11 +379,9 @@ SELECT CASE(M%IPS)
                    M%ITRN,M%PRHS,M%POIS_PTB,M%SAVE1,M%WORK,M%HX)
 END SELECT
 
-!$OMP PARALLEL
 
 SELECT CASE(M%IPS)
    CASE(:1,4,7)
-      !$OMP DO
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -406,9 +389,7 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
    CASE(2)
-      !$OMP DO
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -416,9 +397,7 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
    CASE(3,6)
-      !$OMP DO
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -426,9 +405,7 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
    CASE(5)
-      !$OMP DO
       DO K=1,M%KBAR
          DO J=1,M%JBAR
             DO I=1,M%IBAR
@@ -436,25 +413,20 @@ SELECT CASE(M%IPS)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
 END SELECT
 
 ! For the special case of tunnels, add back 1-D global pressure solution
 
 IF (TUNNEL_PRECONDITIONER) THEN
-   !$OMP MASTER
    DO I=1,M%IBAR
       HP(I,1:M%JBAR,1:M%KBAR) = HP(I,1:M%JBAR,1:M%KBAR) + H_BAR(I_OFFSET(NM)+I)
    ENDDO
    M%BXS = M%BXS + M%BXS_BAR
    M%BXF = M%BXF + M%BXF_BAR
-   !$OMP END MASTER
-   !$OMP BARRIER
 ENDIF
 
 ! Apply boundary conditions to H
 
-!$OMP DO
 DO K=1,M%KBAR
    DO J=1,M%JBAR
       IF (M%LBC==3 .OR. M%LBC==4)              HP(0,J,K)       = HP(1,J,K)       - M%DXI*M%BXS(J,K)
@@ -468,9 +440,7 @@ DO K=1,M%KBAR
       ENDIF
    ENDDO
 ENDDO
-!$OMP END DO
 
-!$OMP DO
 DO K=1,M%KBAR
    DO I=1,M%IBAR
       IF (M%MBC==3 .OR. M%MBC==4) HP(I,0,K)       = HP(I,1,K)       - M%DETA*M%BYS(I,K)
@@ -483,9 +453,7 @@ DO K=1,M%KBAR
       ENDIF
    ENDDO
 ENDDO
-!$OMP END DO
 
-!$OMP DO
 DO J=1,M%JBAR
    DO I=1,M%IBAR
       IF (M%NBC==3 .OR. M%NBC==4)  HP(I,J,0)       = HP(I,J,1)       - M%DZETA*M%BZS(I,J)
@@ -498,9 +466,7 @@ DO J=1,M%JBAR
       ENDIF
    ENDDO
 ENDDO
-!$OMP END DO
 
-!$OMP END PARALLEL
 
 END SUBROUTINE PRESSURE_SOLVER_FFT
 
@@ -528,7 +494,6 @@ ENDIF
 
 IF (CHECK_POISSON) THEN
    RESIDUAL => M%WORK8(1:M%IBAR,1:M%JBAR,1:M%KBAR)
-   !$OMP PARALLEL DO PRIVATE(I,J,K,RHSS,LHSS) SCHEDULE(STATIC)
    DO K=1,M%KBAR
       DO J=1,M%JBAR
          DO I=1,M%IBAR
@@ -546,7 +511,6 @@ IF (CHECK_POISSON) THEN
          ENDDO
       ENDDO
    ENDDO
-   !$OMP END PARALLEL DO
    M%POIS_ERR = MAXVAL(RESIDUAL)
 ENDIF
 
@@ -557,9 +521,7 @@ IF (ITERATE_BAROCLINIC_TERM) THEN
    P => M%WORK7
    RESIDUAL => M%WORK8(1:M%IBAR,1:M%JBAR,1:M%KBAR)
 
-   !$OMP PARALLEL
 
-   !$OMP DO SCHEDULE(STATIC)
    DO K=0,M%KBP1
       DO J=0,M%JBP1
          DO I=0,M%IBP1
@@ -567,9 +529,7 @@ IF (ITERATE_BAROCLINIC_TERM) THEN
          ENDDO
       ENDDO
    ENDDO
-   !$OMP END DO
 
-   !$OMP DO COLLAPSE(3) SCHEDULE(STATIC) PRIVATE(I,J,K,RHSS,LHSS)
    DO K=1,M%KBAR
       DO J=1,M%JBAR
          DO I=1,M%IBAR
@@ -605,9 +565,7 @@ IF (ITERATE_BAROCLINIC_TERM) THEN
          ENDDO
       ENDDO
    ENDDO
-   !$OMP END DO
 
-   !$OMP END PARALLEL
 
    PRESSURE_ERROR_MAX(NM) = MAXVAL(RESIDUAL)
    PRESSURE_ERROR_MAX_LOC(:,NM) = MAXLOC(RESIDUAL)

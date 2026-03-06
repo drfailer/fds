@@ -45,6 +45,10 @@ void fds_velocity_corrector(double t, double dt, int nm);
 void fds_match_velocity(int nm);
 void fds_velocity_bc(double t, int nm, int estimated);
 
+// Thread-safe kernel wrappers (bypass orchestration, call kernels directly)
+void fds_velocity_corrector_kernel(int nm, double t, double dt);
+void fds_check_divergence_kernel(int nm);
+
 // Corrector phase per-mesh subroutines
 void fds_combustion_bc(int nm);
 void fds_combustion(double t, double dt);

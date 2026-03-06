@@ -18,7 +18,6 @@ option(USE_SYSTEM_HYPRE    "Use the hypre library from the system"    OFF)
 option(USE_SUNDIALS        "Use the sundials library"                 ON)
 option(USE_SYSTEM_SUNDIALS "Use the sundials library from the system" OFF)
 
-option(USE_OPENMP          "Use OpenMP"                               ON)
 option(USE_HEDGEHOG        "Build fds_hh target with Hedgehog dataflow" OFF)
 
 # The existing FDS makefile links MKL statically, but this is optional and can
@@ -146,15 +145,10 @@ if (MKL_FOUND)
     target_link_libraries(fds PRIVATE MKL::MKL)
 endif()
 
-if (USE_OPENMP)
-    # Use OpenMP
-    find_package(OpenMP REQUIRED)
-    target_link_libraries(fds PUBLIC OpenMP::OpenMP_Fortran)
-endif()
-
 # Set compiler flags for various compilers
 if (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(fds PRIVATE -cpp -std=f2018 -frecursive -ffpe-summary=none -fall-intrinsics)
+    # Note: Using RECURSIVE keyword in subroutines instead of -frecursive flag for thread-safety
+    target_compile_options(fds PRIVATE -cpp -std=f2018 -ffpe-summary=none -fall-intrinsics)
 elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "Intel" OR CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
     target_compile_options(fds PRIVATE -fpp )
     # When compiling with Intel on Linux, enable the IFPORT library
@@ -236,7 +230,6 @@ if(USE_SUNDIALS)
         set(EXAMPLES_ENABLE_CXX OFF CACHE BOOL "" FORCE)
         set(EXAMPLES_ENABLE_F2003 OFF CACHE BOOL "" FORCE)
         set(EXAMPLES_INSTALL OFF CACHE BOOL "" FORCE)
-        set(ENABLE_OPENMP ON CACHE BOOL "" FORCE)
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
         set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
         # if(HYPRE_FOUND)

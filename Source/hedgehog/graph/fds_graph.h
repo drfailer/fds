@@ -5,12 +5,15 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/velocity_corrector_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
+#include "../task/velocity_corrector_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
+#include "../state/velocity_corrector_state.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -25,33 +28,41 @@
 /// @param t Initial simulation time
 /// @param dt Initial time step
 /// @param tEnd End time
-/// @param numThreads Number of threads per task (1 for Phase 1)
+/// @param velCorrKernelThreads Number of threads for velocity corrector kernel (1 for sequential)
 /// @return Shared pointer to the constructed graph
-inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t numThreads) {
+inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t velCorrKernelThreads) {
 
     using GraphType = hh::Graph<1, MeshData, MeshData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
-    // --- Create predictor tasks ---
-    auto predStep1       = std::make_shared<PredStep1Task>(numThreads);
-    auto densityPred     = std::make_shared<DensityPredTask>(numThreads);
-    auto predDivSetup    = std::make_shared<PredDivSetupTask>(numThreads);
-    auto predWallDiv     = std::make_shared<PredWallDivTask>(numThreads);
-    auto divPart2Pred    = std::make_shared<DivPart2PredTask>(numThreads);
-    auto velPredictor    = std::make_shared<VelPredictorTask>(numThreads);
-    auto predFinal       = std::make_shared<PredFinalTask>(numThreads);
+    // --- Create predictor tasks (all sequential) ---
+    auto predStep1       = std::make_shared<PredStep1Task>(1);
+    auto densityPred     = std::make_shared<DensityPredTask>(1);
+    auto predDivSetup    = std::make_shared<PredDivSetupTask>(1);
+    auto predWallDiv     = std::make_shared<PredWallDivTask>(1);
+    auto divPart2Pred    = std::make_shared<DivPart2PredTask>(1);
+    auto velPredictor    = std::make_shared<VelPredictorTask>(1);
+    auto predFinal       = std::make_shared<PredFinalTask>(1);
 
-    // --- Create corrector tasks ---
-    auto corrStep1       = std::make_shared<CorrStep1Task>(numThreads);
-    auto corrDivSetup    = std::make_shared<CorrDivSetupTask>(numThreads);
-    auto corrCondens     = std::make_shared<CorrCondensTask>(numThreads);
-    auto corrParticle    = std::make_shared<CorrParticleTask>(numThreads);
-    auto corrWallBC      = std::make_shared<CorrWallBCTask>(numThreads);
-    auto corrRadiation   = std::make_shared<CorrRadiationTask>(numThreads);
-    auto corrDivPart1    = std::make_shared<CorrDivPart1Task>(numThreads);
-    auto corrDivPart2    = std::make_shared<CorrDivPart2Task>(numThreads);
-    auto corrVelocity    = std::make_shared<CorrVelocityTask>(numThreads);
-    auto corrFinal       = std::make_shared<CorrFinalTask>(numThreads);
+    // --- Create corrector tasks (all sequential) ---
+    auto corrStep1       = std::make_shared<CorrStep1Task>(1);
+    auto corrDivSetup    = std::make_shared<CorrDivSetupTask>(1);
+    auto corrCondens     = std::make_shared<CorrCondensTask>(1);
+    auto corrParticle    = std::make_shared<CorrParticleTask>(1);
+    auto corrWallBC      = std::make_shared<CorrWallBCTask>(1);
+    auto corrRadiation   = std::make_shared<CorrRadiationTask>(1);
+    auto corrDivPart1    = std::make_shared<CorrDivPart1Task>(1);
+    auto corrDivPart2    = std::make_shared<CorrDivPart2Task>(1);
+    // NOTE: corrVelocity replaced by velocity corrector sub-graph (see below)
+    auto corrFinal       = std::make_shared<CorrFinalTask>(1);
+
+    // --- Create velocity corrector sub-graph components ---
+    // Only the kernel task is parallelized; orchestrator and collector are always sequential
+    auto velCorrOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityCorrectorWork>>(
+        std::make_shared<VelocityCorrectorOrchestrator>(nmeshes), "VelCorrOrch");
+    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(velCorrKernelThreads);
+    auto velCorrCollectorSM = std::make_shared<hh::StateManager<1, VelocityCorrectorWork, MeshData>>(
+        std::make_shared<VelocityCorrectorCollector>(nmeshes), "VelCorrCollector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -216,8 +227,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(corrDivExchangeTask, corrDivPart2);
     graph->edges(corrDivPart2, corrPressureCollectorSM);      // Collect for PRESSURE
     graph->edges(corrPressureCollectorSM, corrPressureTask);  // Do PRESSURE_ITERATION
-    graph->edges(corrPressureTask, corrVelocity);
-    graph->edges(corrVelocity, collector6bSM);                // Collect for MESH_EXCHANGE(6)
+    // Velocity corrector sub-graph (parallel multi-mesh execution)
+    graph->edges(corrPressureTask, velCorrOrchSM);            // Pressure → VelCorrOrchestrator
+    graph->edges(velCorrOrchSM, velCorrKernelTask);           // Orchestrator → Kernel (parallel)
+    graph->edges(velCorrKernelTask, velCorrCollectorSM);      // Kernel → Collector
+    graph->edges(velCorrCollectorSM, collector6bSM);          // Collector → MESH_EXCHANGE(6)
     graph->edges(collector6bSM, meshExchange6b);              // Do MESH_EXCHANGE(6)
     graph->edges(meshExchange6b, corrFinal);
 

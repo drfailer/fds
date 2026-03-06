@@ -444,8 +444,6 @@ QUADRATURE_SELECT: SELECT CASE(TEST_FILTER_QUADRATURE)
 
    CASE(TRAPEZOID_QUADRATURE) ! default
 
-      !$OMP PARALLEL
-      !$OMP DO SCHEDULE(static)
       DO K = 1,KBP1-1
          DO J = 1,JBP1-1
             DO I = 1,IBP1-1
@@ -463,13 +461,9 @@ QUADRATURE_SELECT: SELECT CASE(TEST_FILTER_QUADRATURE)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
-      !$OMP END PARALLEL
 
    CASE(SIMPSON_QUADRATURE)
 
-      !$OMP PARALLEL
-      !$OMP DO SCHEDULE(static)
       DO K = 1,KBP1-1
          DO J = 1,JBP1-1
             DO I = 1,IBP1-1
@@ -487,13 +481,9 @@ QUADRATURE_SELECT: SELECT CASE(TEST_FILTER_QUADRATURE)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
-      !$OMP END PARALLEL
 
    CASE(MIDPOINT_QUADRATURE)
 
-      !$OMP PARALLEL
-      !$OMP DO SCHEDULE(static)
       DO K = 1,KBP1-1
          DO J = 1,JBP1-1
             DO I = 1,IBP1-1
@@ -511,42 +501,32 @@ QUADRATURE_SELECT: SELECT CASE(TEST_FILTER_QUADRATURE)
             ENDDO
          ENDDO
       ENDDO
-      !$OMP END DO
-      !$OMP END PARALLEL
 
 END SELECT QUADRATURE_SELECT
 
 ! Traverse shell of mesh rather crudely.
 ! Edges and corners are calculated several times.
 
-!$OMP PARALLEL
-!$OMP DO SCHEDULE(static)
 DO K = 0,KBP1
    DO J = 0,JBP1
       HAT(0,J,K) = 2._EB * HAT(0+1,J,K) - HAT(0+2,J,K)
       HAT(IBP1,J,K) = 2._EB * HAT(IBP1-1,J,K) - HAT(IBP1-2,J,K)
    END DO
 END DO
-!$OMP END DO
 
-!$OMP DO SCHEDULE(static)
 DO K = 0,KBP1
    DO I = 0,IBP1
       HAT(I,0,K) = 2._EB * HAT(I,0+1,K) - HAT(I,0+2,K)
       HAT(I,JBP1,K) = 2._EB * HAT(I,JBP1-1,K) - HAT(I,JBP1-2,K)
    END DO
 END DO
-!$OMP END DO
 
-!$OMP DO SCHEDULE(static)
 DO J = 0,JBP1
    DO I = 0,IBP1
       HAT(I,J,0) = 2._EB * HAT(I,J,0+1) - HAT(I,J,0+2)
       HAT(I,J,KBP1) = 2._EB * HAT(I,J,KBP1-1) - HAT(I,J,KBP1-2)
    END DO
 END DO
-!$OMP END DO
-!$OMP END PARALLEL
 
 END SUBROUTINE TEST_FILTER_KERNEL
 
