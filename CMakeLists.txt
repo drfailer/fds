@@ -46,6 +46,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/pois.f90
     ${CMAKE_SOURCE_DIR}/Source/geom.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_data.f90
+    ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_divergence_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_divergence.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_density.f90
