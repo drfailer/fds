@@ -1,0 +1,1130 @@
+!> \brief Pure computation kernels extracted from FIRE module.
+!> These routines have no dependency on MESH_POINTERS / POINT_TO_MESH.
+
+MODULE FIRE_KERNELS
+
+USE PRECISION_PARAMETERS
+USE TYPES
+USE GLOBAL_CONSTANTS
+#ifdef WITH_SUNDIALS
+USE CVODE_INTERFACE, ONLY: CUR_CFD_TIME, CVODE_SERIAL
+#endif
+
+IMPLICIT NONE (TYPE,EXTERNAL)
+PRIVATE
+
+! Module variables moved from FIRE
+REAL(EB), ALLOCATABLE, DIMENSION(:), PUBLIC :: DZ_F0
+REAL(EB), PUBLIC :: RRTMP0, MOLPCM3
+
+PUBLIC COMBUSTION_MODEL, CHECK_REACTION, GET_FLAME_TEMPERATURE, CALC_FCENT
+
+CONTAINS
+
+
+SUBROUTINE CHECK_REACTION (ZZ_GET, DO_REACTION)
+REAL(EB), INTENT(IN) :: ZZ_GET(1:N_TRACKED_SPECIES)
+! Check whether any reactions are possible.
+LOGICAL, INTENT(INOUT) :: DO_REACTION
+TYPE (REACTION_TYPE), POINTER :: RN
+INTEGER :: NS, NR
+LOGICAL :: REACTANTS_PRESENT
+DO_REACTION = .FALSE.
+REACTION_LOOP: DO NR=1,N_REACTIONS
+   RN=>REACTION(NR)
+   REACTANTS_PRESENT = .TRUE.
+   DO NS=1,RN%N_SMIX_R
+      IF (ZZ_GET(RN%REACTANT_INDEX(NS)) < ZZ_MIN_GLOBAL ) THEN
+         REACTANTS_PRESENT = .FALSE.
+         EXIT
+      ENDIF
+   ENDDO
+   DO_REACTION = REACTANTS_PRESENT
+   IF (DO_REACTION) EXIT REACTION_LOOP
+ENDDO REACTION_LOOP
+
+END SUBROUTINE CHECK_REACTION
+
+
+SUBROUTINE CHECK_AUTO_IGNITION(EXTINCT,TMP_IN,AIT,XC_I,YC_J,ZC_K,REAC_INDEX)
+
+! For combustion to proceed the local gas temperature must be greater than AIT unless the cell has been excluded.
+
+USE DEVICE_VARIABLES, ONLY: DEVICE
+LOGICAL, INTENT(INOUT) :: EXTINCT
+REAL(EB), INTENT(IN) :: TMP_IN,AIT,XC_I,YC_J,ZC_K
+INTEGER, INTENT(IN) :: REAC_INDEX
+INTEGER :: IZ
+TYPE(REACTION_TYPE), POINTER :: RN
+
+RN => REACTION(REAC_INDEX)
+
+DO IZ=1,RN%N_AIT_EXCLUSION_ZONES
+
+   IF (RN%AIT_EXCLUSION_ZONE(IZ)%DEVC_INDEX>0) THEN
+      IF (.NOT.DEVICE(RN%AIT_EXCLUSION_ZONE(IZ)%DEVC_INDEX)%CURRENT_STATE) CYCLE
+   ENDIF
+
+   IF (XC_I>=RN%AIT_EXCLUSION_ZONE(IZ)%X1 .AND. XC_I<=RN%AIT_EXCLUSION_ZONE(IZ)%X2 .AND. &
+       YC_J>=RN%AIT_EXCLUSION_ZONE(IZ)%Y1 .AND. YC_J<=RN%AIT_EXCLUSION_ZONE(IZ)%Y2 .AND. &
+       ZC_K>=RN%AIT_EXCLUSION_ZONE(IZ)%Z1 .AND. ZC_K<=RN%AIT_EXCLUSION_ZONE(IZ)%Z2) THEN
+      IF (TMP_IN < RN%AIT_EXCLUSION_ZONE(IZ)%AIT) EXTINCT = .TRUE.
+      RETURN
+   ENDIF
+
+ENDDO
+
+EXTINCT = .TRUE.
+
+IF (TMP_IN > AIT) EXTINCT = .FALSE.
+
+END SUBROUTINE CHECK_AUTO_IGNITION
+
+
+!> \brief Determine if the reaction can occur using the less detailed extinction model (FDS Tech Guide, Section 5.3.2)
+!> \param EXTINCT Logical parameter indicating if extinction has occurred in the cell
+!> \param ZZ_0 Array of lumped species mass fractions in the mixed part of the grid cell at the start of the time step
+!> \param TMP_IN Initial temperature of the grid cell
+
+SUBROUTINE EXTINCT_1(EXTINCT,ZZ_0,TMP_IN)
+
+USE PHYSICAL_FUNCTIONS, ONLY: GET_MASS_FRACTION
+REAL(EB), INTENT(IN) :: TMP_IN,ZZ_0(1:N_TRACKED_SPECIES)
+LOGICAL, INTENT(INOUT) :: EXTINCT
+REAL(EB) :: Y_O2,Y_O2_LIM,TMP_FACTOR,CFT
+TYPE(REACTION_TYPE), POINTER :: R1
+
+! Use a single critical flame temperature from reaction 1
+
+R1 => REACTION(1)
+CFT = R1%CRITICAL_FLAME_TEMPERATURE
+
+! Evaluate extinction criterion using cell oxygen mass fraction based on Tech Guide Fig. 5.2 and Eq. 5.53
+
+CALL GET_MASS_FRACTION(ZZ_0,O2_INDEX,Y_O2)
+IF (TMP_IN < FREE_BURN_TEMPERATURE) THEN
+   TMP_FACTOR = (CFT-TMP_IN)/(CFT-TMPA)
+ELSE
+   TMP_FACTOR = 0._EB
+ENDIF
+Y_O2_LIM = R1%Y_O2_MIN*TMP_FACTOR
+IF (Y_O2 < Y_O2_LIM) EXTINCT = .TRUE.
+
+END SUBROUTINE EXTINCT_1
+
+
+!> \brief Determine if the reaction can occur using the more detailed extinction model (FDS Tech Guide, Section 5.3.3)
+!> \param EXTINCT Logical parameter indicating if extinction has occurred in the cell
+!> \param ZZ_0 Array of lumped species mass fractions in the mixed part of the grid cell at the start of the time step
+!> \param ZZ_IN Array of lumped species mass fractions in the mixed part of the grid cell at the end of the time step
+!> \param TMP_IN Initial temperature of the grid cell
+
+SUBROUTINE EXTINCT_2(EXTINCT,ZZ_0,ZZ_IN,TMP_IN)
+
+USE PHYSICAL_FUNCTIONS, ONLY: GET_ENTHALPY
+REAL(EB),INTENT(IN) :: TMP_IN,ZZ_IN(1:N_TRACKED_SPECIES),ZZ_0(1:N_TRACKED_SPECIES)
+LOGICAL, INTENT(INOUT) :: EXTINCT
+REAL(EB) :: ZZ_HAT_0(1:N_TRACKED_SPECIES),ZZ_HAT(1:N_TRACKED_SPECIES),H_0,H_CRIT,PHI_TILDE,CFT
+INTEGER :: NS,NR
+REAL(EB) :: SUM_ZZ,SUM_CFT
+TYPE(REACTION_TYPE), POINTER :: RN,R1
+
+! Get the weighted average of the critical flame temperature (CFT) based on the relative amounts of fuels of the primary reactions
+
+SUM_CFT = 0._EB
+SUM_ZZ  = 0._EB
+DO NR=1,N_REACTIONS
+   RN => REACTION(NR)
+   IF (RN%PRIORITY/=1) CYCLE
+   SUM_CFT = SUM_CFT + ZZ_0(RN%FUEL_SMIX_INDEX)*RN%CRITICAL_FLAME_TEMPERATURE
+   SUM_ZZ  = SUM_ZZ  + ZZ_0(RN%FUEL_SMIX_INDEX)
+ENDDO
+
+IF (SUM_ZZ < TWENTY_EPSILON_EB) THEN
+   EXTINCT = .TRUE.
+   RETURN
+ENDIF
+
+CFT = SUM_CFT/SUM_ZZ
+
+! Compute the modified cell equivalence ratio
+
+R1 => REACTION(1)
+PHI_TILDE = (ZZ_0(R1%AIR_SMIX_INDEX) - ZZ_IN(R1%AIR_SMIX_INDEX)) / ZZ_0(R1%AIR_SMIX_INDEX)  ! FDS Tech Guide (5.54)
+
+IF ( PHI_TILDE < TWENTY_EPSILON_EB ) THEN
+   EXTINCT = .TRUE.
+   RETURN
+ENDIF
+
+! Define the modified pre and post-reaction mixtures (ZZ_HAT_0 and ZZ_HAT) in which excess air and products are excluded.
+
+DO NR=1,N_REACTIONS
+   RN => REACTION(NR)
+   DO NS=1,N_TRACKED_SPECIES
+      IF (NS==RN%FUEL_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = ZZ_0(NS)
+         ZZ_HAT(NS)   = ZZ_IN(NS)
+      ELSEIF (NS==RN%AIR_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = 0._EB
+      ELSE  ! Products
+         ZZ_HAT_0(NS) = PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = (PHI_TILDE-1._EB)*ZZ_0(NS) + ZZ_IN(NS)
+      ENDIF
+   ENDDO
+ENDDO
+
+! Normalize the modified pre and post-reaction mixtures
+
+ZZ_HAT_0 = ZZ_HAT_0/SUM(ZZ_HAT_0)
+ZZ_HAT   = ZZ_HAT/SUM(ZZ_HAT)
+
+! Determine if enough energy is released to raise the fuel and required "air" temperatures above the critical flame temp.
+
+CALL GET_ENTHALPY(ZZ_HAT_0,H_0,TMP_IN) ! H of reactants participating in reaction (includes chemical enthalpy)
+CALL GET_ENTHALPY(ZZ_HAT,H_CRIT,CFT)   ! H of products at the critical flame temperature
+IF (H_0 < H_CRIT) EXTINCT = .TRUE. ! FDS Tech Guide (5.55)
+
+END SUBROUTINE EXTINCT_2
+
+
+SUBROUTINE FIRE_FORWARD_EULER(ZZ_OUT,ZZ_IN,ZZ_0,ZETA_OUT,ZETA_IN,DT_LOC,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                              Q_REAC_LOC,TOTAL_MIXED_MASS,NO_REACTIONS)
+USE PHYSICAL_FUNCTIONS, ONLY: GET_REALIZABLE_MF,GET_AVERAGE_SPECIFIC_HEAT
+REAL(EB), INTENT(IN) :: ZZ_0(1:N_TRACKED_SPECIES),ZZ_IN(1:N_TRACKED_SPECIES),ZETA_IN,DT_LOC,RHO_HAT,CELL_MASS,TAU_MIX
+REAL(EB), INTENT(OUT) :: ZZ_OUT(1:N_TRACKED_SPECIES),ZETA_OUT,Q_REAC_LOC(1:N_REACTIONS),TOTAL_MIXED_MASS
+REAL(EB), INTENT(INOUT) :: TMP_IN
+LOGICAL , INTENT(OUT) :: NO_REACTIONS
+REAL(EB) :: ZZ_HAT(1:N_TRACKED_SPECIES),DZZ(1:N_TRACKED_SPECIES),&
+            MIXED_MASS(1:N_TRACKED_SPECIES),MIXED_MASS_0(1:N_TRACKED_SPECIES),&
+            Q_REAC_OUT(1:N_REACTIONS),TOTAL_MIXED_MASS_0
+INTEGER, PARAMETER :: INFINITELY_FAST=1,FINITE_RATE=2
+INTEGER :: PTY
+
+! Determine initial state of mixed reactor zone
+TOTAL_MIXED_MASS_0  = (1._EB-ZETA_IN)*CELL_MASS
+MIXED_MASS_0  = ZZ_IN*TOTAL_MIXED_MASS_0
+
+! Mixing step
+
+ZETA_OUT = MAX(0._EB,ZETA_IN*EXP(-DT_LOC/TAU_MIX)) ! FDS Tech Guide (5.18)
+TOTAL_MIXED_MASS = (1._EB-ZETA_OUT)*CELL_MASS      ! FDS Tech Guide (5.23)
+MIXED_MASS = MAX(0._EB,MIXED_MASS_0 - (ZETA_OUT - ZETA_IN)*ZZ_0*CELL_MASS) ! FDS Tech Guide (5.26)
+ZZ_HAT = MIXED_MASS/MAX(TOTAL_MIXED_MASS,TWENTY_EPSILON_EB) ! FDS Tech Guide (5.27)
+
+! Enforce realizability on mass fractions
+
+CALL GET_REALIZABLE_MF(ZZ_HAT)
+
+! Do the infinite rate (fast chemistry) reactions either in parallel (PRIORITY=1 for all) or serially (PRIORITY>1 for some)
+
+Q_REAC_LOC(:) = 0._EB
+IF (ANY(REACTION%FAST_CHEMISTRY)) THEN
+   DO PTY = 1,MAX_PRIORITY
+      CALL REACTION_RATE(DZZ,ZZ_HAT,DT_LOC,RHO_HAT,TMP_IN,INFINITELY_FAST,Q_REAC_OUT,NO_REACTIONS,PRIORITY=PTY)
+      ZZ_HAT = ZZ_HAT + DZZ
+      Q_REAC_LOC = Q_REAC_LOC + Q_REAC_OUT*TOTAL_MIXED_MASS
+   ENDDO
+ENDIF
+
+! Do all finite rate reactions in parallel
+
+IF (.NOT.ALL(REACTION%FAST_CHEMISTRY)) THEN
+   CALL REACTION_RATE(DZZ,ZZ_HAT,DT_LOC,RHO_HAT,TMP_IN,FINITE_RATE,Q_REAC_OUT,NO_REACTIONS)
+   ZZ_HAT = ZZ_HAT + DZZ
+   Q_REAC_LOC = Q_REAC_LOC + Q_REAC_OUT*TOTAL_MIXED_MASS
+ENDIF
+
+! Enforce realizability on mass fractions
+
+CALL GET_REALIZABLE_MF(ZZ_HAT)
+
+ZZ_OUT = ZZ_HAT
+
+END SUBROUTINE FIRE_FORWARD_EULER
+
+
+SUBROUTINE FIRE_RK2(ZZ_OUT,ZZ_IN,ZZ_0,ZETA_OUT,ZETA_IN,DT_SUB,N_INC,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                    Q_REAC_OUT,TOTAL_MIXED_MASS_OUT,NO_REACTIONS)
+
+! This function uses RK2 to integrate ZZ_O from t=0 to t=DT_SUB in increments of DT_LOC=DT_SUB/N_INC
+
+REAL(EB), INTENT(IN) :: ZZ_0(1:N_TRACKED_SPECIES),ZZ_IN(1:N_TRACKED_SPECIES),DT_SUB,ZETA_IN,RHO_HAT,CELL_MASS,&
+                        TAU_MIX
+REAL(EB), INTENT(OUT) :: ZZ_OUT(1:N_TRACKED_SPECIES),ZETA_OUT,Q_REAC_OUT(1:N_REACTIONS),TOTAL_MIXED_MASS_OUT
+INTEGER, INTENT(IN) :: N_INC
+LOGICAL, INTENT(OUT) :: NO_REACTIONS
+REAL(EB) :: DT_LOC,ZZ_TMP_0(1:N_TRACKED_SPECIES),ZZ_TMP_1(1:N_TRACKED_SPECIES),ZZ_TMP_2(1:N_TRACKED_SPECIES),&
+            ZETA_TMP_0,ZETA_TMP_1,ZETA_TMP_2,&
+            Q_REAC_1(1:N_REACTIONS),Q_REAC_2(1:N_REACTIONS),TOTAL_MIXED_MASS_0,TOTAL_MIXED_MASS_1,TOTAL_MIXED_MASS_2,TMP_IN
+INTEGER :: N
+
+DT_LOC = DT_SUB/REAL(N_INC,EB)
+ZZ_TMP_0 = ZZ_IN
+ZETA_TMP_0 = ZETA_IN
+Q_REAC_OUT(:) = 0._EB
+TOTAL_MIXED_MASS_0 = (1._EB-ZETA_TMP_0)*CELL_MASS
+
+DO N=1,N_INC
+   CALL FIRE_FORWARD_EULER(ZZ_TMP_1,ZZ_TMP_0,ZZ_0,ZETA_TMP_1,ZETA_TMP_0,DT_LOC,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                           Q_REAC_1,TOTAL_MIXED_MASS_1,NO_REACTIONS)
+
+   CALL FIRE_FORWARD_EULER(ZZ_TMP_2,ZZ_TMP_1,ZZ_0,ZETA_TMP_2,ZETA_TMP_1,DT_LOC,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                           Q_REAC_2,TOTAL_MIXED_MASS_2,NO_REACTIONS)
+
+   IF (TOTAL_MIXED_MASS_2>TWENTY_EPSILON_EB) THEN
+      ZZ_OUT = 0.5_EB*(ZZ_TMP_0*TOTAL_MIXED_MASS_0 + ZZ_TMP_2*TOTAL_MIXED_MASS_2)
+      TOTAL_MIXED_MASS_OUT = SUM(ZZ_OUT)
+      ZZ_OUT = ZZ_OUT/TOTAL_MIXED_MASS_OUT
+   ELSE
+      ZZ_OUT = ZZ_TMP_0
+   ENDIF
+
+   ZETA_OUT = MAX(0._EB,1._EB-TOTAL_MIXED_MASS_OUT/CELL_MASS)
+
+   Q_REAC_OUT = Q_REAC_OUT + 0.5_EB*(Q_REAC_1+Q_REAC_2)
+
+   ZZ_TMP_0 = ZZ_OUT
+   ZETA_TMP_0 = ZETA_OUT
+   TOTAL_MIXED_MASS_0 = TOTAL_MIXED_MASS_OUT
+   IF (NO_REACTIONS) RETURN
+
+ENDDO
+
+END SUBROUTINE FIRE_RK2
+
+
+SUBROUTINE REACTION_RATE(DZZ,ZZ_OLD,DT_SUB,RHO_0,TMP_0,KINETICS,Q_REAC_OUT,NO_REACTIONS,PRIORITY)
+
+USE PHYSICAL_FUNCTIONS, ONLY : GET_MASS_FRACTION_ALL,GET_SPECIFIC_GAS_CONSTANT,GET_MOLECULAR_WEIGHT
+REAL(EB), INTENT(OUT) :: DZZ(1:N_TRACKED_SPECIES),Q_REAC_OUT(1:N_REACTIONS)
+REAL(EB), INTENT(IN) :: ZZ_OLD(1:N_TRACKED_SPECIES),DT_SUB,RHO_0,TMP_0
+LOGICAL, INTENT(OUT) :: NO_REACTIONS
+INTEGER, INTENT(IN) :: KINETICS
+INTEGER, INTENT(IN), OPTIONAL :: PRIORITY
+REAL(EB) :: DZ_F,YY_PRIMITIVE(1:N_SPECIES),MW,DT_TMP(1:N_TRACKED_SPECIES),DT_MIN,DT_LOC,&
+            ZZ_TMP(1:N_TRACKED_SPECIES),ZZ_NEW(1:N_TRACKED_SPECIES),Q_REAC_TMP(1:N_REACTIONS),AA,X_Y(1:N_SPECIES),X_Y_SUM,&
+            K_INF,K_0,P_RI,FCENT,C_I
+INTEGER :: I,NS,OUTER_IT
+LOGICAL :: REACTANTS_PRESENT
+INTEGER, PARAMETER :: INFINITELY_FAST=1,FINITE_RATE=2
+TYPE(REACTION_TYPE), POINTER :: RN
+
+ZZ_NEW = ZZ_OLD
+Q_REAC_OUT = 0._EB
+Q_REAC_TMP = 0._EB
+RRTMP0 = 1._EB/(R0*TMP_0)
+
+KINETICS_SELECT: SELECT CASE(KINETICS)
+
+   CASE(INFINITELY_FAST)
+
+      NO_REACTIONS = .FALSE.
+      FAST_REAC_LOOP: DO OUTER_IT=1,N_REACTIONS
+         ZZ_TMP = ZZ_NEW
+         DZZ = 0._EB
+         REACTANTS_PRESENT = .FALSE.
+         REACTION_LOOP_1: DO I=1,N_REACTIONS
+            RN => REACTION(I)
+            IF (.NOT.RN%FAST_CHEMISTRY .OR. RN%PRIORITY/=PRIORITY) CYCLE REACTION_LOOP_1
+            IF (RN%AIR_SMIX_INDEX > -1) THEN
+               DZ_F = ZZ_TMP(RN%FUEL_SMIX_INDEX)*ZZ_TMP(RN%AIR_SMIX_INDEX) ! 2nd-order reaction
+            ELSE
+               DZ_F = ZZ_TMP(RN%FUEL_SMIX_INDEX) ! 1st-order
+            ENDIF
+            IF (DZ_F > TWENTY_EPSILON_EB) REACTANTS_PRESENT = .TRUE.
+            AA = RN%A_PRIME * RHO_0**RN%RHO_EXPONENT
+            DZZ = DZZ + AA * RN%NU_MW_O_MW_F * DZ_F
+            Q_REAC_TMP(I) = RN%HEAT_OF_COMBUSTION * AA * DZ_F
+         ENDDO REACTION_LOOP_1
+         IF (REACTANTS_PRESENT) THEN
+            DT_TMP = HUGE_EB
+            DO NS = 1,N_TRACKED_SPECIES
+               IF (DZZ(NS) < 0._EB) DT_TMP(NS) = -ZZ_TMP(NS)/DZZ(NS)
+            ENDDO
+            DT_MIN = MINVAL(DT_TMP)
+            ZZ_NEW = ZZ_TMP + DZZ*DT_MIN
+            Q_REAC_OUT = Q_REAC_OUT + Q_REAC_TMP*DT_MIN
+         ELSE
+            EXIT FAST_REAC_LOOP
+         ENDIF
+      ENDDO FAST_REAC_LOOP
+      DZZ = ZZ_NEW - ZZ_OLD
+
+   CASE(FINITE_RATE)
+
+      DT_LOC = DT_SUB
+      NO_REACTIONS = .TRUE.
+      SLOW_REAC_LOOP: DO OUTER_IT=1,N_REACTIONS
+         ZZ_TMP = ZZ_NEW
+         CALL GET_MASS_FRACTION_ALL(ZZ_TMP,YY_PRIMITIVE)
+         DZZ = 0._EB
+         REACTANTS_PRESENT = .FALSE.
+         REACTION_LOOP_2: DO I=1,N_REACTIONS
+            RN => REACTION(I)
+            IF (RN%FAST_CHEMISTRY) CYCLE REACTION_LOOP_2
+            ! Check for consumed species
+            DO NS=1,RN%N_SMIX_FR
+               IF (RN%NU_MW_O_MW_F_FR(NS) < 0._EB .AND. ZZ_TMP(RN%NU_INDEX(NS)) < ZZ_MIN_GLOBAL) CYCLE REACTION_LOOP_2
+            ENDDO
+            ! Check for species with concentration exponents
+            DO NS=1,RN%N_SPEC
+               IF(YY_PRIMITIVE(RN%N_S_INDEX(NS)) < ZZ_MIN_GLOBAL) CYCLE REACTION_LOOP_2
+            ENDDO
+            NO_REACTIONS = .FALSE.
+            ! dZ/dt, FDS Tech Guide, Eq. (5.38)
+
+            ! T doesn't change, MOLPCM3 should not have a large absolute change, and third collision species with non-unity
+            ! efficiencies are generally species with high expected mass fractions which should not have large absolute changes.
+            ! We can make a constant term for each reaction to hold A T^N_T e^-(E/RT) * Gibbs * Third body
+            IF (DZ_F0(I) < 0._EB) THEN
+               K_INF = RN%A_PRIME*RHO_0**RN%RHO_EXPONENT*TMP_0**RN%N_T*EXP(-RN%E*RRTMP0)
+               DZ_F0(I) = K_INF
+               IF (RN%THIRD_BODY) THEN
+                  IF (RN%N_THIRD <=0) THEN
+                     IF (MOLPCM3 < 0._EB) THEN
+                        CALL GET_MOLECULAR_WEIGHT(ZZ_TMP,MW)
+                        MOLPCM3 = RHO_0/MW*0.001_EB ! mol/cm^3
+                     ENDIF
+                     DZ_F0(I) = DZ_F0(I)*MOLPCM3
+                  ENDIF
+                  IF (RN%REACTYPE==FALLOFF_LINDEMANN_TYPE .OR. RN%REACTYPE==FALLOFF_TROE_TYPE) THEN
+                     K_0 = RN%A_LOW_PR*TMP_0**(RN%N_T_LOW_PR)*EXP(-RN%E_LOW_PR*RRTMP0)
+                     P_RI = K_0/K_INF
+                     FCENT = CALC_FCENT(TMP_0,P_RI,I)
+                     C_I = P_RI/(1._EB+P_RI)*FCENT
+                     DZ_F0(I) = DZ_F0(I)*C_I
+                  ENDIF
+               ENDIF
+               IF (RN%REVERSE) THEN ! compute equilibrium constant
+                  IF (MOLPCM3 < 0._EB) THEN
+                     CALL GET_MOLECULAR_WEIGHT(ZZ_TMP,MW)
+                     MOLPCM3 = RHO_0/MW*0.001_EB ! mol/cm^3
+                  ENDIF
+                  DZ_F0(I) = DZ_F0(I)*EXP(RN%DELTA_G(MIN(I_MAX_TEMP,NINT(TMP_0)))/TMP_0)*MOLPCM3**RN%C0_EXP
+               ENDIF
+            ENDIF
+            DZ_F = DZ_F0(I)
+            IF (RN%THIRD_BODY) THEN
+               IF (RN%N_THIRD > 0) THEN
+                  X_Y_SUM = 0._EB
+                  DO NS=1,N_SPECIES
+                     X_Y(NS) = YY_PRIMITIVE(NS)/SPECIES(NS)%MW
+                     X_Y_SUM = X_Y_SUM + X_Y(NS)
+                     X_Y(NS) = X_Y(NS)*RN%THIRD_EFF(NS)
+                  ENDDO
+                  DZ_F = DZ_F * MOLPCM3 * SUM(X_Y)/X_Y_SUM
+               ENDIF
+            ENDIF
+            DO NS=1,RN%N_SPEC
+               IF (RN%N_S_FLAG(NS)) THEN
+                  DZ_F = YY_PRIMITIVE(RN%N_S_INDEX(NS))**RN%N_S_INT(NS)*DZ_F
+               ELSE
+                  DZ_F = DZ_F*YY_PRIMITIVE(RN%N_S_INDEX(NS))**RN%N_S(NS)
+               ENDIF
+            ENDDO
+            IF (DZ_F > TWENTY_EPSILON_EB) REACTANTS_PRESENT = .TRUE.
+            Q_REAC_TMP(I) = RN%HEAT_OF_COMBUSTION * DZ_F * DT_LOC ! Note: here DZ_F=dZ/dt, hence need DT_LOC
+            DZ_F = DZ_F*DT_LOC
+            DO NS=1,RN%N_SMIX_FR
+               DZZ(RN%NU_INDEX(NS)) = DZZ(RN%NU_INDEX(NS)) + RN%NU_MW_O_MW_F_FR(NS)*DZ_F
+            ENDDO
+         ENDDO REACTION_LOOP_2
+         IF (NO_REACTIONS) RETURN
+         IF (REACTANTS_PRESENT) THEN
+            DT_TMP = HUGE_EB
+            DO NS = 1,N_TRACKED_SPECIES
+               IF (DZZ(NS) < 0._EB) DT_TMP(NS) = -ZZ_TMP(NS)/DZZ(NS)
+            ENDDO
+            ! Think of DT_MIN as the fraction of DT_LOC we can take and remain bounded.
+            DT_MIN = MIN(1._EB,MINVAL(DT_TMP))
+            DT_LOC = DT_LOC*(1._EB-DT_MIN)
+            ZZ_NEW = ZZ_TMP + DZZ*DT_MIN
+            Q_REAC_OUT = Q_REAC_OUT + Q_REAC_TMP*DT_MIN
+            IF (DT_LOC<TWENTY_EPSILON_EB) EXIT SLOW_REAC_LOOP
+         ELSE
+            EXIT SLOW_REAC_LOOP
+         ENDIF
+      ENDDO SLOW_REAC_LOOP
+      DZZ = ZZ_NEW - ZZ_OLD
+
+END SELECT KINETICS_SELECT
+
+END SUBROUTINE REACTION_RATE
+
+
+SUBROUTINE COMBUSTION_MODEL(T,DT,ZZ_GET,Q_OUT,MIX_TIME_OUT,CHI_R_OUT,CHEM_SUBIT_OUT,REAC_SOURCE_TERM_OUT,Q_REAC_OUT,&
+                            TMP_IN,RHO_IN,PRES_IN,MU_IN,DELTA,CELL_VOLUME,ZETA_0_IN,IGN_ZN,XC_I,YC_J,ZC_K)
+USE MATH_FUNCTIONS, ONLY: EVALUATE_RAMP
+USE PHYSICAL_FUNCTIONS, ONLY: GET_REALIZABLE_MF
+USE COMP_FUNCTIONS, ONLY: SHUTDOWN
+USE CHEMCONS, ONLY: ODE_MIN_ATOL
+INTEGER, INTENT(IN) :: IGN_ZN
+REAL(EB), INTENT(IN), OPTIONAL :: XC_I,YC_J,ZC_K
+REAL(EB), INTENT(IN) :: T,DT,RHO_IN,PRES_IN,MU_IN,DELTA,CELL_VOLUME,ZETA_0_IN
+REAL(EB), INTENT(OUT) :: Q_OUT,MIX_TIME_OUT,CHI_R_OUT,REAC_SOURCE_TERM_OUT(N_TRACKED_SPECIES),Q_REAC_OUT(N_REACTIONS)
+INTEGER, INTENT(OUT) :: CHEM_SUBIT_OUT
+REAL(EB), INTENT(INOUT) :: ZZ_GET(1:N_TRACKED_SPECIES)
+REAL(EB) :: A1(1:N_TRACKED_SPECIES),A2(1:N_TRACKED_SPECIES),A4(1:N_TRACKED_SPECIES),ZETA,ZETA_0,&
+            DT_SUB,DT_SUB_NEW,DT_ITER,ZZ_STORE(1:N_TRACKED_SPECIES,1:4),TV(1:3,1:N_TRACKED_SPECIES),CELL_MASS,&
+            ZZ_0(1:N_TRACKED_SPECIES),ZZ_DIFF(1:3,1:N_TRACKED_SPECIES),ZZ_MIXED(1:N_TRACKED_SPECIES),&
+            ZZ_MIXED_NEW(1:N_TRACKED_SPECIES),TAU_D,TAU_G,TAU_U,TAU_MIX,DT_SUB_MIN,RHO_HAT,&
+            Q_REAC_SUB(1:N_REACTIONS),Q_REAC_1(1:N_REACTIONS),Q_REAC_2(1:N_REACTIONS),Q_REAC_4(1:N_REACTIONS),&
+            Q_REAC_SUM(1:N_REACTIONS),Q_SUM_CHI_R,CHI_R_SUM,TIME_RAMP_FACTOR,&
+            TOTAL_MIXED_MASS_1,TOTAL_MIXED_MASS_2,TOTAL_MIXED_MASS_4,TOTAL_MIXED_MASS,&
+            ZETA_1,ZETA_2,ZETA_4,D_F,TMP_IN,K_SGS,DT_SUB_OLD,ERR_EST(N_TRACKED_SPECIES),ERR_TOL(N_TRACKED_SPECIES),ERR_TINY,&
+            ZZ_TEMP(1:N_TRACKED_SPECIES),ATOL(1:N_TRACKED_SPECIES)
+INTEGER :: NR,NS,ITER,TVI,RICH_ITER,TIME_ITER,RICH_ITER_MAX
+REAL(EB), PARAMETER :: C_U=0.4_EB,TAU_EPS=1.E-10_EB
+INTEGER, PARAMETER :: TV_ITER_MIN=5
+LOGICAL :: TV_FLUCT(1:N_TRACKED_SPECIES),EXTINCT,NO_REACTIONS,NO_REAC_2,NO_REAC_4
+TYPE(REACTION_TYPE), POINTER :: RN !,R1
+
+ZZ_0 = ZZ_GET
+EXTINCT = .FALSE.
+NO_REACTIONS = .FALSE.
+
+! Determine the mixing time for this cell
+IF (FIXED_MIX_TIME>0._EB) THEN
+   MIX_TIME_OUT=FIXED_MIX_TIME
+ELSE
+   D_F=0._EB
+   DO NR =1,N_REACTIONS
+      RN => REACTION(NR)
+      D_F = MAX(D_F,D_Z(MIN(I_MAX_TEMP-1,NINT(TMP_IN)),RN%FUEL_SMIX_INDEX))
+   ENDDO
+   TAU_D = DELTA**2/MAX(D_F,TWENTY_EPSILON_EB)                            ! FDS Tech Guide (5.14)
+   SELECT CASE(SIM_MODE)
+      CASE DEFAULT
+         K_SGS = (MU_IN/(RHO_IN*C_DEARDORFF*DELTA))**2                 ! FDS Tech Guide (4.17)
+         TAU_U = C_U*DELTA/SQRT(TWTH*(K_SGS+TAU_EPS))                  ! FDS Tech Guide (5.15)
+         TAU_G = SQRT(2._EB*DELTA/(GRAV+TAU_EPS))                      ! FDS Tech Guide (5.16)
+         MIX_TIME_OUT= MAX(TAU_CHEM,MIN(TAU_D,TAU_U,TAU_G,TAU_FLAME))  ! FDS Tech Guide (5.13)
+      CASE (DNS_MODE)
+         MIX_TIME_OUT= MAX(TAU_CHEM,TAU_D)
+   END SELECT
+ENDIF
+
+ZETA_0 = ZETA_0_IN
+CELL_MASS = RHO_IN*CELL_VOLUME
+
+DT_SUB_MIN = DT/REAL(MAX_CHEMISTRY_SUBSTEPS,EB)
+
+ZZ_STORE(:,:) = 0._EB
+Q_OUT = 0._EB
+ITER= 0
+DT_ITER = 0._EB
+CHI_R_OUT = 0._EB
+CHEM_SUBIT_OUT = 0
+REAC_SOURCE_TERM_OUT(:) = 0._EB
+Q_REAC_OUT(:) = 0._EB
+Q_REAC_SUM(:) = 0._EB
+IF (N_FIXED_CHEMISTRY_SUBSTEPS>0) THEN
+   DT_SUB = DT/REAL(N_FIXED_CHEMISTRY_SUBSTEPS,EB)
+   DT_SUB_NEW = DT_SUB
+   RICH_ITER_MAX = 1
+ELSE
+   DT_SUB = DT
+   DT_SUB_NEW = DT
+   RICH_ITER_MAX = 5
+ENDIF
+ZZ_MIXED = ZZ_GET
+A1 = ZZ_GET
+A2 = ZZ_GET
+A4 = ZZ_GET
+
+ZETA = ZETA_0
+RHO_HAT = RHO_IN
+TAU_MIX = MIX_TIME_OUT
+
+ERR_TINY = TINY_EB / ODE_MIN_ATOL
+
+IF (ALLOCATED(DZ_F0)) THEN
+   DZ_F0 = -1._EB
+   MOLPCM3 = - 1._EB
+ENDIF
+
+INTEGRATION_LOOP: DO TIME_ITER = 1,MAX_CHEMISTRY_SUBSTEPS
+
+   IF (SUPPRESSION) THEN
+      DO NR=1,N_REACTIONS
+         RN=>REACTION(NR)
+         ! note: RN%AIR_SMIX_INDEX = -1 for a decomposition reaction, A => B+C
+         IF (RN%AIR_SMIX_INDEX > 0) THEN
+            IF (ZZ_0(RN%FUEL_SMIX_INDEX)>ZZ_MIN_GLOBAL .AND. ZZ_0(RN%AIR_SMIX_INDEX)>ZZ_MIN_GLOBAL) THEN
+               CALL CHECK_AUTO_IGNITION(EXTINCT,TMP_IN,RN%AUTO_IGNITION_TEMPERATURE,XC_I,YC_J,ZC_K,NR)
+               IF (.NOT.EXTINCT) EXIT
+            ENDIF
+         ENDIF
+      ENDDO
+   ENDIF
+
+   IF (EXTINCT) EXIT INTEGRATION_LOOP
+
+   INTEGRATOR_SELECT: SELECT CASE (COMBUSTION_ODE_SOLVER)
+
+      CASE (EXPLICIT_EULER) ! Simple chemistry
+
+         ! May be used with N_FIXED_CHEMISTRY_SUBSTEPS, but default mode is DT_SUB=DT for fast chemistry
+
+         CALL FIRE_FORWARD_EULER(ZZ_MIXED_NEW,ZZ_MIXED,ZZ_0,ZETA,ZETA_0,DT_SUB,TMP_IN,RHO_HAT,&
+                                 CELL_MASS,TAU_MIX,Q_REAC_SUB,TOTAL_MIXED_MASS,NO_REACTIONS)
+         ZETA_0 = ZETA
+         ZZ_MIXED = ZZ_MIXED_NEW
+
+      CASE (RK2_RICHARDSON) ! Finite-rate (or mixed finite-rate/fast) chemistry
+
+         ! May be used with N_FIXED_CHEMISTRY_SUBSTEPS, but default mode is to use error estimator and variable DT_SUB
+
+         RICH_EX_LOOP: DO RICH_ITER = 1,RICH_ITER_MAX
+            DT_SUB = MIN(DT_SUB_NEW,DT-DT_ITER)
+            ! FDS Tech Guide (E.3), (E.4), (E.5)
+            CALL FIRE_RK2(A1,ZZ_MIXED,ZZ_0,ZETA_1,ZETA_0,DT_SUB,1,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                        Q_REAC_1,TOTAL_MIXED_MASS_1,NO_REACTIONS)
+            IF (NO_REACTIONS) EXIT RICH_EX_LOOP
+            CALL FIRE_RK2(A2,ZZ_MIXED,ZZ_0,ZETA_2,ZETA_0,DT_SUB,2,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                        Q_REAC_2,TOTAL_MIXED_MASS_2,NO_REAC_2)
+            CALL FIRE_RK2(A4,ZZ_MIXED,ZZ_0,ZETA_4,ZETA_0,DT_SUB,4,TMP_IN,RHO_HAT,CELL_MASS,TAU_MIX,&
+                        Q_REAC_4,TOTAL_MIXED_MASS_4,NO_REAC_4)
+            ! Species Error Analysis
+            ERR_EST = ABS((4._EB*A4-5._EB*A2+A1))/45._EB ! FDS Tech Guide (E.8)
+            ZZ_TEMP = (4._EB*A4-A2)*ONTH ! FDS Tech Guide (E.7)
+            DO NS = 1,N_TRACKED_SPECIES
+               ERR_TOL(NS) = MAX(0.1_EB*ZZ_MIN_GLOBAL,SPECIES_MIXTURE(NS)%ODE_REL_ERROR*ZZ_TEMP(NS),ODE_MIN_ATOL)
+            ENDDO
+
+            IF (N_FIXED_CHEMISTRY_SUBSTEPS<0) THEN
+               DT_SUB_OLD = DT_SUB_NEW
+               DT_SUB_NEW = MIN(MAX(DT_SUB*MINVAL(ERR_TOL/(ERR_EST+ERR_TINY))**(0.25_EB),DT_SUB_MIN),DT-DT_ITER) ! (E.9)
+               IF (ALL(ERR_EST<=ERR_TOL) .OR. ABS(DT_SUB_OLD/DT_SUB_NEW-1._EB) <= 0.1_EB) EXIT RICH_EX_LOOP
+            ENDIF
+
+         ENDDO RICH_EX_LOOP
+
+         IF (NO_REACTIONS) THEN
+            ZZ_MIXED = A1
+            Q_REAC_SUB = Q_REAC_1
+            ZETA = ZETA_1
+         ELSE
+            IF (ANY(ZZ_TEMP < -TWENTY_EPSILON_EB))THEN
+               ZZ_TEMP=A4
+               ZZ_MIXED   = ZZ_TEMP
+               Q_REAC_SUB = Q_REAC_4
+               ZETA       = ZETA_4
+            ELSE
+               ZZ_MIXED   = ZZ_TEMP
+               Q_REAC_SUB = (4._EB*Q_REAC_4-Q_REAC_2)*ONTH
+               ZETA       = (4._EB*ZETA_4-ZETA_2)*ONTH
+            ENDIF
+         ENDIF
+         ZETA_0     = ZETA
+      CASE (CVODE_SOLVER)
+         DO NS =1,N_TRACKED_SPECIES
+            ATOL(NS) = DBLE(SPECIES_MIXTURE(NS)%ODE_ABS_ERROR)
+         ENDDO
+         IF (1==2) WRITE(LU_ERR,*) PRES_IN, IGN_ZN ! To avoid unused variable error.
+#ifdef WITH_SUNDIALS
+         CALL CVODE(ZZ_MIXED,TMP_IN,PRES_IN,ZETA_0, ZETA,TAU_MIX,CELL_MASS,IGN_ZN,T,DT_SUB,GLOBAL_ODE_REL_ERROR, ATOL)
+#endif
+         ZETA_0     = ZETA
+         Q_REAC_SUB = 0._EB
+   END SELECT INTEGRATOR_SELECT
+
+   CALL GET_REALIZABLE_MF(ZZ_MIXED)
+   ZZ_GET = ZETA*ZZ_0 + (1._EB-ZETA)*ZZ_MIXED ! FDS Tech Guide (5.19)
+   IF (NO_REACTIONS) DT_ITER = DT
+   DT_ITER = DT_ITER + DT_SUB
+   ITER = ITER + 1
+   IF (OUTPUT_CHEM_IT) CHEM_SUBIT_OUT = ITER
+
+   Q_REAC_SUM = Q_REAC_SUM + Q_REAC_SUB
+
+   ! Total Variation (TV) scheme (accelerates integration for finite-rate equilibrium calculations)
+   ! See FDS Tech Guide Appendix E
+
+   IF (COMBUSTION_ODE_SOLVER==RK2_RICHARDSON .AND. N_REACTIONS>1) THEN
+      DO NS = 1,N_TRACKED_SPECIES
+         DO TVI = 1,3
+            ZZ_STORE(NS,TVI)=ZZ_STORE(NS,TVI+1)
+         ENDDO
+         ZZ_STORE(NS,4) = ZZ_GET(NS)
+      ENDDO
+      TV_FLUCT(:) = .FALSE.
+      IF (ITER >= TV_ITER_MIN) THEN
+         SPECIES_LOOP_TV: DO NS = 1,N_TRACKED_SPECIES
+            DO TVI = 1,3
+               TV(TVI,NS) = ABS(ZZ_STORE(NS,TVI+1)-ZZ_STORE(NS,TVI))
+               ZZ_DIFF(TVI,NS) = ZZ_STORE(NS,TVI+1)-ZZ_STORE(NS,TVI)
+            ENDDO
+            IF (SUM(TV(:,NS)) < ERR_TOL(NS) .OR. SUM(TV(:,NS)) >= ABS(2.9_EB*SUM(ZZ_DIFF(:,NS)))) THEN ! FDS Tech Guide (E.10)
+               TV_FLUCT(NS) = .TRUE.
+            ENDIF
+            IF (ALL(TV_FLUCT)) EXIT INTEGRATION_LOOP
+         ENDDO SPECIES_LOOP_TV
+      ENDIF
+   ENDIF
+   IF ( DT_ITER > (DT-TWENTY_EPSILON_EB) ) EXIT INTEGRATION_LOOP
+
+ENDDO INTEGRATION_LOOP
+
+
+! Compute heat release rate
+
+Q_OUT = -RHO_IN*SUM(SPECIES_MIXTURE%H_F*(ZZ_GET-ZZ_0))/DT ! FDS Tech Guide (5.47)
+
+! Extinction model
+
+IF (SUPPRESSION .AND. .NOT.EXTINCT) THEN
+   SELECT CASE(EXTINCT_MOD)
+      CASE(EXTINCTION_1); CALL EXTINCT_1(EXTINCT,ZZ_0,TMP_IN)
+      CASE(EXTINCTION_2); CALL EXTINCT_2(EXTINCT,ZZ_0,ZZ_MIXED,TMP_IN)
+   END SELECT
+ENDIF
+
+IF (EXTINCT) THEN
+   ZZ_GET = ZZ_0
+   ZZ_STORE(:,:) = 0._EB
+   Q_OUT = 0._EB
+   CHI_R_OUT = 0._EB
+   CHEM_SUBIT_OUT = 0
+   REAC_SOURCE_TERM_OUT(:) = 0._EB
+   Q_REAC_OUT(:) = 0._EB
+   Q_REAC_SUM(:) = 0._EB
+ENDIF
+
+! Reaction rate-weighted radiative fraction
+
+IF (ANY(Q_REAC_SUM>TWENTY_EPSILON_EB)) THEN
+   Q_SUM_CHI_R = 0._EB
+   CHI_R_SUM=0._EB
+   DO NR=1,N_REACTIONS
+      RN=>REACTION(NR)
+      IF (Q_REAC_SUM(NR) > TWENTY_EPSILON_EB) THEN
+         TIME_RAMP_FACTOR = EVALUATE_RAMP(T,RN%RAMP_CHI_R_INDEX)
+         CHI_R_SUM = CHI_R_SUM + Q_REAC_SUM(NR)*RN%CHI_R*TIME_RAMP_FACTOR
+         Q_SUM_CHI_R = Q_SUM_CHI_R + Q_REAC_SUM(NR)
+      ENDIF
+   ENDDO
+   CHI_R_OUT = CHI_R_SUM/Q_SUM_CHI_R
+ELSE
+   CHI_R_OUT = REACTION(1)%CHI_R*EVALUATE_RAMP(T,REACTION(1)%RAMP_CHI_R_INDEX)
+ENDIF
+CHI_R_OUT = MAX(CHI_R_MIN,MIN(CHI_R_MAX,CHI_R_OUT))
+
+! Store special diagnostic quantities
+
+IF (REAC_SOURCE_CHECK) THEN
+   REAC_SOURCE_TERM_OUT = RHO_IN*(ZZ_GET-ZZ_0)/DT
+   Q_REAC_OUT = Q_REAC_SUM/CELL_VOLUME/DT
+ENDIF
+
+END SUBROUTINE COMBUSTION_MODEL
+
+
+!> \brief call cvode_interface after converting mass fraction to molar concentration.
+!> \param ZZ species mass fraction array
+!> \param TMP_IN is the temperature
+!> \param PRES_IN is the pressure
+!> \param ZETA_IN is the initial unmixed fraction
+!> \param ZETA_OUT is the final unmixed fraction
+!> \param TAU_MIX is Mixing timescale
+!> \param CELL_MASS total mass of the cell (mixed + unmixed)
+!> \param T_CFD is the current CFD time
+!> \param DT is the current CFD timestep
+!> \param GLOBAL_ODE_REL_ERROR is the relative error for all the species (REAL_EB)
+!> \param ATOL is the absolute error tolerance array for the species (REAL_EB)
+
+#ifdef WITH_SUNDIALS
+SUBROUTINE CVODE(ZZ, TMP_IN, PRES_IN,  ZETA_IN, ZETA_OUT, TAU_MIX, CELL_MASS, IGN_ZN, T_CFD, DT, GLOBAL_ODE_REL_ERROR, ATOL)
+USE PHYSICAL_FUNCTIONS, ONLY :  GET_MOLECULAR_WEIGHT
+USE CHEMCONS, ONLY: WRITE_CVODE_SUBSTEPS, ZETA_ARTIFICAL_MAX_LIMIT,ZETA_ARTIFICAL_MIN_LIMIT, ZETA_FIRST_STEP_DIV,&
+                    USE_MIXED_ZN_AFT_TMP
+REAL(EB), INTENT(INOUT) :: ZZ(N_TRACKED_SPECIES)
+REAL(EB), INTENT(IN) :: ATOL(N_TRACKED_SPECIES)
+REAL(EB), INTENT(IN) :: TMP_IN,PRES_IN,ZETA_IN,TAU_MIX,CELL_MASS,T_CFD,DT,GLOBAL_ODE_REL_ERROR
+REAL(EB), INTENT(OUT) ::ZETA_OUT
+INTEGER, INTENT(IN) :: IGN_ZN
+
+REAL(EB) :: CC(N_TRACKED_SPECIES), CC_CHEM_TIME(N_TRACKED_SPECIES), ZZ_IN(N_TRACKED_SPECIES)
+REAL(EB) :: MW, RHO_IN, RHO_OUT, T1, T2, ZETA0, ZETA_IN_MOD, TMP_IN_MOD, TMP_OUT, &
+            CHEM_TIME, DT_MOD, ZETA_ARTF, ZETA_FINAL, ZETA_MAX_LIMIT, ZETA_MIN_LIMIT,AFT
+INTEGER :: NS, CVODE_CALL_OPTION
+LOGICAL :: WRITE_SUBSTEPS, CALL_CHEM_AGAIN
+
+CVODE_CALL_OPTION = 1 ! CV_NORMAL
+WRITE_SUBSTEPS = .FALSE.
+DT_MOD = DT
+ZETA_IN_MOD = ZETA_IN
+TMP_IN_MOD = TMP_IN
+CALL_CHEM_AGAIN = .FALSE.
+
+IF(IGN_ZN > 0) THEN
+   CALL CALC_ADIABATIC_FLAME_TEMPERATURE(ZZ,TMP_IN,AFT)
+   TMP_IN_MOD = MAX(TMP_IN,AFT)
+   ZETA_IN_MOD = 0.0_EB
+ELSE
+   IF (SIM_MODE .NE. DNS_MODE .AND. USE_MIXED_ZN_AFT_TMP) THEN
+      CALL CALC_ADIABATIC_FLAME_TEMPERATURE(ZZ,TMP_IN,AFT)
+      IF (AFT < FINITE_RATE_MIN_TEMP) RETURN
+      TMP_IN_MOD = MAX(TMP_IN,AFT) ! TO DO: Ideal would be a equilibrium temperature based on ZZ(:) and TMP_IN
+   ENDIF
+ENDIF
+ZETA_OUT = ZETA_IN_MOD*EXP(-DT/TAU_MIX)
+IF(ZETA_OUT > ZETA_ARTIFICAL_MAX_LIMIT) RETURN ! The mixing can be ignored due to large mixing time.
+
+CC = 0._EB
+
+! Calculate RHO based on actual temperrature, such that RHO and Concentration comes out to be same as in the cell.
+CALL GET_MOLECULAR_WEIGHT(ZZ,MW)
+RHO_IN = PRES_IN*MW/R0/TMP_IN ! [PR]= Pa, [MW] = g/mol, [R0]= J/K/kmol, [TMP]=K, [RHO]= kg/m3
+DO NS =1,N_TRACKED_SPECIES
+  CC(NS) = RHO_IN*ZZ(NS)/SPECIES_MIXTURE(NS)%MW  ! [RHO]= kg/m3, [MW] = g/mol = kg/kmol, [CC] = kmol/m3
+ENDDO
+WHERE(CC<0._EB) CC=0._EB
+
+! Get the initial mass and concentration of mixed zone
+IF(ZETA_IN_MOD > ONE_M_EPS) THEN
+   !With ZETA_IN =1 the CVODE ODE become too stiff to solve. Hence, performing negligible
+   !artifical mixing based on a chemical time scale.
+   !1. Do cemistry and find a chemical time scale with a cvode call (one substep).
+   !2. Set the final zeta0 based on the chemical time
+   T1 = 0._EB
+   T2 = DT
+   ZETA0 = 0._EB ! Assume completely mixed.
+   CVODE_CALL_OPTION = 2 ! CV_ONE_STEP
+   CUR_CFD_TIME = T_CFD ! Set current cfd time in cvode, for logging purpose.
+   CC_CHEM_TIME(1:N_TRACKED_SPECIES)=CC(1:N_TRACKED_SPECIES)
+   CALL CVODE_SERIAL(CC_CHEM_TIME,ZZ, TMP_IN_MOD, TMP_IN, PRES_IN, ZETA0, TAU_MIX, CELL_MASS, T1,T2,  &
+                      GLOBAL_ODE_REL_ERROR, ATOL, TMP_OUT, CHEM_TIME, WRITE_SUBSTEPS, CVODE_CALL_OPTION) ! Find the chem time scale
+   ! Check 1) too much artificial mixing (low zeta after first step) or
+   ! 2) too little mixing (high zeta after first step) to avoid steep problem in cvode.
+   ZETA_ARTF = ZETA_IN_MOD*EXP(-CHEM_TIME/TAU_MIX) ! Zeta after CHEM_TIME
+   ZETA_FINAL = ZETA_IN_MOD*EXP(-DT/ZETA_FIRST_STEP_DIV/TAU_MIX) ! Allowed final zeta after artifical mixing substep
+   ZETA_MIN_LIMIT = MAX(ZETA_FINAL,ZETA_ARTIFICAL_MIN_LIMIT)
+   ZETA_MAX_LIMIT = MAX(ZETA_FINAL,ZETA_ARTIFICAL_MAX_LIMIT)
+   IF (ZETA_ARTF < ZETA_MIN_LIMIT) THEN ! Limit too much artifical mixing to ZETA_ARTIFICAL_MAX_LIMIT.
+      T2 = TAU_MIX*(LOG(ZETA_IN_MOD) - LOG(ZETA_MIN_LIMIT))
+      CALL_CHEM_AGAIN = .TRUE.
+   ELSEIF (ZETA_ARTF > ZETA_MAX_LIMIT) THEN ! Check too liitle mixing, then make little more mixing such
+                                            ! that cvode is not stiff in subsequent calls.
+      T2 = TAU_MIX*(LOG(ZETA_IN_MOD) - LOG(ZETA_MAX_LIMIT))
+      CALL_CHEM_AGAIN = .TRUE.
+   ENDIF
+
+   IF (CALL_CHEM_AGAIN) THEN
+      T1 = 0._EB
+      !T2 = T2 !Set above
+      ZETA0 = 0._EB ! Assume completely mixed.
+      CVODE_CALL_OPTION = 1 ! CV_NORMAL
+      CUR_CFD_TIME = T_CFD ! Set current cfd time in cvode, for logging purpose.
+      CALL CVODE_SERIAL(CC,ZZ, TMP_IN_MOD, TMP_IN, PRES_IN, ZETA0, TAU_MIX, CELL_MASS, T1,T2,  &
+                         GLOBAL_ODE_REL_ERROR, ATOL, TMP_OUT, CHEM_TIME, WRITE_SUBSTEPS, CVODE_CALL_OPTION)
+      CHEM_TIME = T2
+   ELSE
+      CC(1:N_TRACKED_SPECIES)=CC_CHEM_TIME(1:N_TRACKED_SPECIES)
+   ENDIF
+   TMP_IN_MOD = TMP_OUT
+   ZETA0 = ZETA_IN_MOD*EXP(-CHEM_TIME/TAU_MIX)
+   DT_MOD = DT_MOD - CHEM_TIME
+ELSE
+   ZETA0 = ZETA_IN_MOD
+ENDIF
+
+CVODE_CALL_OPTION = 1
+IF(WRITE_CVODE_SUBSTEPS) THEN
+   CVODE_CALL_OPTION = 2 ! CV_ONE_STEP
+   WRITE_SUBSTEPS = .TRUE.
+ENDIF
+
+! Call CVODE to solve chemistry + Mixing
+T1 = 0._EB
+T2 = DT_MOD
+CUR_CFD_TIME = T_CFD ! Set current cfd time in cvode, for logging purpose.
+ZZ_IN = ZZ
+CALL  CVODE_SERIAL(CC,ZZ, TMP_IN_MOD, TMP_IN, PRES_IN, ZETA0, TAU_MIX, CELL_MASS, T1,T2, GLOBAL_ODE_REL_ERROR, ATOL, &
+                   TMP_OUT, CHEM_TIME, WRITE_SUBSTEPS, CVODE_CALL_OPTION)
+
+
+
+! Convert back to mass fraction (Check for negative concentration)
+WHERE(CC<0._EB) CC=0._EB
+ZZ(1:N_TRACKED_SPECIES) = CC(1:N_TRACKED_SPECIES)*SPECIES_MIXTURE(1:N_TRACKED_SPECIES)%MW
+RHO_OUT = SUM(ZZ)
+ZZ = ZZ/(RHO_OUT+TWENTY_EPSILON_EB)
+
+END SUBROUTINE CVODE
+#endif
+
+
+!> \brief Constant pressure adiabatic flame temperature calculation
+!> \param ZZ species mass fraction array
+!> \param TMP_IN is the temperature
+!> \param AFT is the adiabatic flame temperature (output)
+SUBROUTINE CALC_ADIABATIC_FLAME_TEMPERATURE(ZZ,TMP_IN,AFT)
+USE PHYSICAL_FUNCTIONS, ONLY: CALC_EQUIV_RATIO,GET_ENTHALPY,GET_SPECIFIC_HEAT,GET_TEMPERATURE
+USE CHEMCONS, ONLY: I_FUEL
+REAL(EB), INTENT(INOUT) :: ZZ(N_TRACKED_SPECIES)
+REAL(EB), INTENT(IN) :: TMP_IN
+REAL(EB), INTENT(OUT) :: AFT
+REAL(EB) :: ZZ_REAC(N_TRACKED_SPECIES),ZZ_PROD(N_TRACKED_SPECIES)
+REAL(EB) :: HS_IN
+
+IF (I_FUEL <= 0) THEN ! No FUEL_ID_FOR_AFT specified.
+   AFT = TMP_IN
+   RETURN
+ENDIF
+CALL CALC_AFT_REAC_AND_PROD(ZZ,ZZ_REAC,ZZ_PROD)
+CALL GET_ENTHALPY(ZZ,HS_IN,TMP_IN)
+AFT = TMP_IN
+CALL GET_TEMPERATURE(AFT,HS_IN,ZZ_PROD)
+
+END SUBROUTINE CALC_ADIABATIC_FLAME_TEMPERATURE
+
+! Calculate Reactants and products
+SUBROUTINE CALC_AFT_REAC_AND_PROD(ZZ,ZZ_REAC,ZZ_PROD)
+USE PHYSICAL_FUNCTIONS, ONLY: CALC_EQUIV_RATIO
+USE CHEMCONS, ONLY: I_FUEL,I_CO2,I_H2O,I_O2,USE_MIXED_ZN_AFT_TMP
+
+REAL(EB), INTENT(IN) :: ZZ(N_TRACKED_SPECIES)
+REAL(EB), INTENT(OUT) :: ZZ_REAC(N_TRACKED_SPECIES),ZZ_PROD(N_TRACKED_SPECIES)
+REAL(EB) :: ZZ_EQUIV(N_TRACKED_SPECIES)
+REAL(EB) :: EQUIV, X,Y,Z,A,B,C,D,E, SUM_ZZ
+REAL(EB) :: ZZ_MASS, ZZ_FUEL_O2_MASS
+REAL(EB) :: REAC_MASS, PROD_MASS, FUEL_MASS, O2_MASS, CO2_MASS, H2O_MASS
+INTEGER :: NS
+REAL(EB), PARAMETER:: EQUIV_TOL=1.E-4_EB
+
+! Adjust for diluents
+ZZ_FUEL_O2_MASS = 0._EB
+ZZ_MASS = SUM(ZZ(1:N_TRACKED_SPECIES))
+ZZ_EQUIV = 0.0_EB
+ZZ_REAC(1:N_TRACKED_SPECIES) = ZZ(1:N_TRACKED_SPECIES)
+ZZ_PROD(1:N_TRACKED_SPECIES) = ZZ(1:N_TRACKED_SPECIES)
+DO NS=1, N_TRACKED_SPECIES
+   IF (SPECIES_MIXTURE(NS)%OXR > TWENTY_EPSILON_EB .AND. &
+          ABS(SPECIES_MIXTURE(NS)%EQUIV - 1.0_EB) > EQUIV_TOL) THEN ! FUEL
+      ZZ_REAC(NS) = 0._EB
+      ZZ_PROD(NS) = 0._EB
+      ZZ_FUEL_O2_MASS = ZZ_FUEL_O2_MASS + ZZ(NS)
+      ZZ_EQUIV(NS) = ZZ(NS)
+   ENDIF
+ENDDO
+ZZ_REAC(I_O2) = 0._EB
+ZZ_PROD(I_O2) = 0._EB
+ZZ_EQUIV(I_O2) = ZZ(I_O2)
+ZZ_FUEL_O2_MASS = ZZ_FUEL_O2_MASS + ZZ(I_O2)
+
+IF (ZZ_FUEL_O2_MASS > TWENTY_EPSILON_EB) THEN
+   SUM_ZZ=SUM(ZZ_EQUIV)
+   ZZ_EQUIV = ZZ_EQUIV/(SUM_ZZ + TWENTY_EPSILON_EB)
+   CALL CALC_EQUIV_RATIO(ZZ_EQUIV(1:N_TRACKED_SPECIES), EQUIV)
+   IF (SIM_MODE /= DNS_MODE .AND. USE_MIXED_ZN_AFT_TMP) THEN
+      EQUIV = MAX(1._EB,EQUIV)
+   ENDIF
+
+   ! Based on CxHyOz + aO2 = bCO2 + cH2O + dCxHyOz + eO2
+   X=SPECIES_MIXTURE(I_FUEL)%ATOMS(6) !C
+   Y=SPECIES_MIXTURE(I_FUEL)%ATOMS(1) !H
+   Z=SPECIES_MIXTURE(I_FUEL)%ATOMS(8) !O
+   A=0.5_EB*((2._EB*X+0.5_EB*Y)/EQUIV -Z) ! a is a function of equivalence ratio
+   IF (ABS(EQUIV - 1.0_EB) < EQUIV_TOL) THEN ! Stoich
+      B = X
+      C = 0.5_EB*Y
+      D = 0._EB ! No fuel
+      E = 0._EB ! No O2
+   ELSEIF (EQUIV > 1) THEN ! Rich
+      D = (2._EB*X+0.5_EB*Y-2._EB*A-Z)/(2._EB*X+0.5_EB*Y-Z)
+      B = (1._EB-D)*X
+      C = 0.5_EB*(1._EB-D)*Y
+      E = 0._EB ! No O2
+   ELSE !EQUIV < 1, Lean
+      B = X
+      C = 0.5_EB*Y
+      D = 0._EB ! No fuel
+      E = A + 0.5_EB*Z - B - 0.5_EB*C
+   ENDIF
+
+   ! Setup reactants
+   FUEL_MASS = 1._EB*SPECIES_MIXTURE(I_FUEL)%MW
+   O2_MASS = A*SPECIES_MIXTURE(I_O2)%MW
+   REAC_MASS = FUEL_MASS+O2_MASS
+   ZZ_REAC(I_FUEL)=FUEL_MASS/REAC_MASS*ZZ_FUEL_O2_MASS
+   ZZ_REAC(I_O2)=O2_MASS/REAC_MASS*ZZ_FUEL_O2_MASS
+   SUM_ZZ=SUM(ZZ_REAC)
+   ZZ_REAC = ZZ_REAC/SUM_ZZ
+
+   ! Setup products
+   CO2_MASS = B*SPECIES_MIXTURE(I_CO2)%MW
+   H2O_MASS = C*SPECIES_MIXTURE(I_H2O)%MW
+   FUEL_MASS = D*SPECIES_MIXTURE(I_FUEL)%MW
+   O2_MASS = E*SPECIES_MIXTURE(I_O2)%MW
+   PROD_MASS = CO2_MASS+H2O_MASS+FUEL_MASS+O2_MASS
+   ZZ_PROD(I_CO2)=ZZ_PROD(I_CO2)+CO2_MASS/PROD_MASS*ZZ_FUEL_O2_MASS
+   ZZ_PROD(I_H2O)=ZZ_PROD(I_H2O)+H2O_MASS/PROD_MASS*ZZ_FUEL_O2_MASS
+   ZZ_PROD(I_FUEL)=FUEL_MASS/PROD_MASS*ZZ_FUEL_O2_MASS
+   ZZ_PROD(I_O2)=O2_MASS/PROD_MASS*ZZ_FUEL_O2_MASS
+ENDIF
+SUM_ZZ=SUM(ZZ_PROD)
+ZZ_PROD = ZZ_PROD/SUM_ZZ
+
+END SUBROUTINE CALC_AFT_REAC_AND_PROD
+
+
+!> \brief Compute adiabatic flame tmperature for reaction mixture
+!>
+!> \param TMP_FLAME  Adiabatic flame temperature in stoichiometric reaction pocket (K)
+!> \param PHI_TILDE  Equivalence ratio in stoich reaction pocket
+!> \param ZZ_HAT     Post flame composition stoich reaction pocket
+!> \param ZZ_0       Pre flame cell mixture composition
+!> \param ZZ_IN      Post flame cell mixture composition
+!> \param TMP_IN     Cell temperature (K)
+!> \param REAC_INDEX Index of reaction
+
+SUBROUTINE GET_FLAME_TEMPERATURE(TMP_FLAME,PHI_TILDE,ZZ_HAT,ZZ_0,ZZ_IN,TMP_IN,REAC_INDEX)
+
+USE PHYSICAL_FUNCTIONS, ONLY: GET_ENTHALPY
+REAL(EB),INTENT(IN) :: TMP_IN,ZZ_0(1:N_TRACKED_SPECIES),ZZ_IN(1:N_TRACKED_SPECIES)
+INTEGER, INTENT(IN) :: REAC_INDEX
+REAL(EB),INTENT(OUT) :: TMP_FLAME,ZZ_HAT(1:N_TRACKED_SPECIES),PHI_TILDE
+REAL(EB) :: H_0,TMP_1,TMP_2,H_1,H_2,H_REL_ERROR,ZZ_HAT_0(1:N_TRACKED_SPECIES)
+INTEGER :: NS,ITER
+REAL(EB), PARAMETER :: ERROR_TOL=0.01_EB, TMPMAX_FLAME=5000._EB
+INTEGER, PARAMETER :: MAXIT=10
+TYPE(REACTION_TYPE), POINTER :: RN
+
+TMP_FLAME = TMP_IN
+ZZ_HAT = ZZ_IN
+PHI_TILDE = 0._EB
+
+IF (.NOT.REACTION(REAC_INDEX)%FAST_CHEMISTRY) RETURN
+RN => REACTION(REAC_INDEX)
+
+! This construct for the equivalence ratio does not rely on a single reaction
+
+IF (ZZ_IN(RN%AIR_SMIX_INDEX)>TWENTY_EPSILON_EB) THEN
+   ! Excess AIR
+   PHI_TILDE = (ZZ_0(RN%AIR_SMIX_INDEX) - ZZ_IN(RN%AIR_SMIX_INDEX)) / MAX( ZZ_0(RN%AIR_SMIX_INDEX), TWENTY_EPSILON_EB )
+ELSE
+   ! Excess FUEL
+   PHI_TILDE = ZZ_0(RN%FUEL_SMIX_INDEX) / MAX( (ZZ_0(RN%FUEL_SMIX_INDEX) - ZZ_IN(RN%FUEL_SMIX_INDEX)), TWENTY_EPSILON_EB )
+ENDIF
+
+IF ( PHI_TILDE < TWENTY_EPSILON_EB ) THEN
+   PHI_TILDE = 0._EB
+   RETURN
+ELSEIF ( (1._EB/PHI_TILDE) < TWENTY_EPSILON_EB ) THEN
+   PHI_TILDE = 0._EB
+   RETURN
+ENDIF
+
+! Define the stoichiometric pre and post mixtures (ZZ_HAT_0 and ZZ_HAT).
+
+IF (PHI_TILDE<1._EB) THEN
+   ! Excess AIR
+   DO NS=1,N_TRACKED_SPECIES
+      IF (NS==RN%FUEL_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = ZZ_0(NS)
+         ZZ_HAT(NS)   = 0._EB
+      ELSEIF (NS==RN%AIR_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = 0._EB
+      ELSE  ! Products
+         ZZ_HAT_0(NS) = PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = ZZ_IN(NS) - (1._EB - PHI_TILDE) * ZZ_0(NS)
+      ENDIF
+   ENDDO
+ELSE
+   ! Excess FUEL
+   DO NS=1,N_TRACKED_SPECIES
+      IF (NS==RN%FUEL_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = 1._EB/PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = 0._EB
+      ELSEIF (NS==RN%AIR_SMIX_INDEX) THEN
+         ZZ_HAT_0(NS) = ZZ_0(NS)
+         ZZ_HAT(NS)   = 0._EB
+      ELSE  ! Products
+         ZZ_HAT_0(NS) = 1._EB/PHI_TILDE * ZZ_0(NS)
+         ZZ_HAT(NS)   = ZZ_IN(NS) - (1._EB - 1._EB/PHI_TILDE) * ZZ_0(NS)
+      ENDIF
+   ENDDO
+ENDIF
+
+! Normalize the modified pre and post mixtures
+
+IF (SUM(ZZ_HAT_0)<TWENTY_EPSILON_EB) THEN
+   ZZ_HAT = ZZ_IN
+   PHI_TILDE = 0._EB
+   RETURN
+ELSE
+   ZZ_HAT_0 = ZZ_HAT_0/SUM(ZZ_HAT_0)
+ENDIF
+IF (SUM(ZZ_HAT)<TWENTY_EPSILON_EB) THEN
+   ZZ_HAT = ZZ_IN
+   PHI_TILDE = 0._EB
+   RETURN
+ELSE
+   ZZ_HAT = ZZ_HAT/SUM(ZZ_HAT)
+ENDIF
+
+! Iteratively guess (Newton method) flame temp until products enthalpy matches reactant enthalpy.
+
+CALL GET_ENTHALPY(ZZ_HAT_0,H_0,TMP_IN) ! H of reactants participating in reaction (includes chemical enthalpy)
+TMP_1 = 2000._EB ! converges faster with better initial guess (only takes 2 or 3 iterations)
+TMP_2 = 2100._EB
+TMP_FLAME = TMP_2
+ITER = 0
+H_REL_ERROR = 1._EB
+DO WHILE (ABS(H_REL_ERROR)>ERROR_TOL)
+   ITER = ITER + 1
+   IF (ITER>MAXIT) EXIT
+
+   CALL GET_ENTHALPY(ZZ_HAT,H_1,TMP_1)
+   CALL GET_ENTHALPY(ZZ_HAT,H_2,TMP_2)
+
+   IF (ABS(H_2-H_1)>TWENTY_EPSILON_EB) THEN
+      TMP_FLAME = TMP_1 + (TMP_2-TMP_1)/(H_2-H_1) * (H_0-H_1)
+      TMP_FLAME = MAX(TMPMIN,MIN(TMPMAX_FLAME,TMP_FLAME))
+   ENDIF
+   H_REL_ERROR = (H_2-H_0)/H_0 ! converged when enthalpy relative error less than 1%
+   TMP_1 = TMP_2
+   TMP_2 = TMP_FLAME
+ENDDO
+
+END SUBROUTINE GET_FLAME_TEMPERATURE
+
+
+!> \brief Calculate fall-off function
+!> \param TMP is the current temperature.
+!> \param P_RI is the reduced pressure
+!> \param I is the reaction
+
+REAL(EB) FUNCTION CALC_FCENT(TMP, P_RI, I)
+REAL(EB), INTENT(IN) :: TMP, P_RI
+INTEGER, INTENT(IN) :: I
+TYPE(REACTION_TYPE), POINTER :: RN
+REAL(EB) :: LOGFCENT, C, N, LOGPRC
+REAL(EB), PARAMETER :: D=0.14_EB
+
+RN=>REACTION(I)
+IF(RN%REACTYPE==FALLOFF_TROE_TYPE) THEN
+   IF (RN%T2_TROE <-1.E20_EB) THEN
+      LOGFCENT = LOG10(MAX((1 - RN%A_TROE)*EXP(-TMP*RN%RT3_TROE) + &
+                 RN%A_TROE*EXP(-TMP*RN%RT1_TROE),TWENTY_EPSILON_EB))
+   ELSE
+      LOGFCENT = LOG10(MAX((1 - RN%A_TROE)*EXP(-TMP*RN%RT3_TROE) + &
+                 RN%A_TROE*EXP(-TMP*RN%RT1_TROE) + EXP(-RN%T2_TROE/TMP),TWENTY_EPSILON_EB))
+   ENDIF
+   C = -0.4_EB - 0.67_EB*LOGFCENT
+   N = 0.75_EB - 1.27_EB*LOGFCENT
+   LOGPRC = LOG10(MAX(P_RI, TWENTY_EPSILON_EB)) + C
+   CALC_FCENT = 10._EB**(LOGFCENT/(1._EB + (LOGPRC/(N - D*LOGPRC))**2))
+ELSE
+   CALC_FCENT = 1._EB  !FALLOFF-LINDEMANNN
+ENDIF
+
+RETURN
+
+END FUNCTION CALC_FCENT
+
+END MODULE FIRE_KERNELS

@@ -55,6 +55,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/mass.f90
     ${CMAKE_SOURCE_DIR}/Source/imkl.f90
     ${CMAKE_SOURCE_DIR}/Source/wall.f90
+    ${CMAKE_SOURCE_DIR}/Source/fire_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/fire.f90
     ${CMAKE_SOURCE_DIR}/Source/velo_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/velo.f90
