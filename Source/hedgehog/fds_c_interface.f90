@@ -358,6 +358,12 @@ SUBROUTINE C_FDS_WRITE_DIAGNOSTICS(T, DT) BIND(C, NAME="fds_write_diagnostics")
     CALL WRITE_DIAGNOSTICS_DRIVER(T, DT)
 END SUBROUTINE C_FDS_WRITE_DIAGNOSTICS
 
+SUBROUTINE C_FDS_FLUSH_OUTPUT_FILES() BIND(C, NAME="fds_flush_output_files")
+    ! Flush all open Fortran I/O units to ensure outputs are written to disk
+    ! This is needed before timeout kills the process in case of graph termination hang
+    CALL FLUSH()
+END SUBROUTINE C_FDS_FLUSH_OUTPUT_FILES
+
 SUBROUTINE C_FDS_SET_DIAGNOSTICS(ICYC_IN, T_IN, DT_IN) BIND(C, NAME="fds_set_diagnostics")
     REAL(C_DOUBLE), VALUE :: T_IN, DT_IN
     INTEGER(C_INT), VALUE :: ICYC_IN

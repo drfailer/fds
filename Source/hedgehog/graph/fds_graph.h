@@ -33,7 +33,7 @@
 /// @return Shared pointer to the constructed graph
 inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t velCorrKernelThreads) {
 
-    using GraphType = hh::Graph<1, MeshData, MeshData>;
+    using GraphType = hh::Graph<1, MeshData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
     // --- Create predictor tasks (all sequential) ---
@@ -167,8 +167,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto timestepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "TimestepCollector");
     auto timestepTask = std::make_shared<TimestepTask>(tEnd);
-    auto timestepLoopState = std::make_shared<TimestepLoopState>();
-    auto timestepLoopSM = std::make_shared<TimestepLoopStateManager>(timestepLoopState);
+    auto timestepLoopSM = std::make_shared<TimestepLoopStateManager>(
+        std::make_shared<TimestepLoopState>(), "TimestepLoop");
+
+    // Termination sink: receives final BarrierData and outputs to graph
+    auto terminationSinkSM = std::make_shared<hh::StateManager<1, BarrierData, BarrierData>>(
+        std::make_shared<TerminationSinkState>(), "TerminationSink");
 
     // --- Wire the graph ---
 
@@ -241,11 +245,14 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(timestepCollectorSM, timestepTask);
     graph->edges(timestepTask, timestepLoopSM);
 
-    // Cycle: timestep loop state -> back to predictor
+    // Cycle: timestep loop state -> back to predictor (MeshData output)
     graph->edges(timestepLoopSM, predStep1);
 
-    // Graph output (for termination detection)
-    graph->outputs(timestepLoopSM);
+    // Termination path: timestep loop state -> termination sink (BarrierData output when done)
+    graph->edges(timestepLoopSM, terminationSinkSM);
+
+    // Graph output: termination sink emits final BarrierData for clean shutdown
+    graph->outputs(terminationSinkSM);
 
     return graph;
 }

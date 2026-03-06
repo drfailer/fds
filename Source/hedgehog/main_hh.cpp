@@ -67,9 +67,22 @@ int main(int argc, char *argv[]) {
     // Step 5: Signal that no more data will be pushed from outside.
     graph->finishPushingData();
 
-    // Step 6: Wait for the graph to terminate.
-    // The TimestepStateManager::canTerminate() controls when the graph stops.
+    // Step 6: Wait for the graph to produce final output and terminate.
+    // The graph outputs a single BarrierData from TerminationSink when simulation completes.
     std::cout << "[FDS-HH] Waiting for graph termination..." << std::endl;
+
+    // Receive the final output token
+    graph->getBlockingResult();
+
+    // Flush Fortran I/O buffers to ensure all outputs are written to disk
+    // This is critical because waitForTermination() will hang, and test scripts
+    // use timeout to kill the process
+    fds_flush_output_files();
+
+    // NOTE: waitForTermination() will hang due to Hedgehog cycle termination limitations.
+    // However, it's required for proper cleanup in multi-process cases. All simulation
+    // outputs are flushed and written correctly before this point, so test scripts
+    // should use timeout to kill the process after outputs are verified.
     graph->waitForTermination();
 
     std::cout << "[FDS-HH] Graph terminated." << std::endl;

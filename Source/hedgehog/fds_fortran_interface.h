@@ -71,6 +71,7 @@ void fds_dump_global_outputs(double t, double dt);
 void fds_write_strings(double t, double dt);
 void fds_write_diagnostics(double t, double dt);
 void fds_set_diagnostics(int icyc, double t, double dt);
+void fds_flush_output_files();
 
 // Barrier / exchange subroutines
 void fds_mesh_exchange(int code);

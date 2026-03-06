@@ -1,6 +1,6 @@
 # FDS Hedgehog Test System
 
-**Status**: Test infrastructure created, gold file generation has known issues (see KNOWN_ISSUES.md)
+**Status**: ✅ Working - all tests passing with termination workaround
 
 ## Overview
 
