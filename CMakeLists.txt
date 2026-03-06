@@ -60,6 +60,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/fire.f90
     ${CMAKE_SOURCE_DIR}/Source/velo_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/velo.f90
+    ${CMAKE_SOURCE_DIR}/Source/pres_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/pres.f90
     ${CMAKE_SOURCE_DIR}/Source/init.f90
     ${CMAKE_SOURCE_DIR}/Source/dump.f90

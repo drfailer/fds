@@ -4,6 +4,9 @@ MODULE PRES
 
 USE PRECISION_PARAMETERS
 USE MESH_VARIABLES
+USE PRES_KERNELS, ONLY: PK_COMPUTE_RHS=>PRESSURE_SOLVER_COMPUTE_RHS, &
+                         PK_FFT=>PRESSURE_SOLVER_FFT, &
+                         PK_CHECK_RESIDUALS=>PRESSURE_SOLVER_CHECK_RESIDUALS
 
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
@@ -15,487 +18,35 @@ CONTAINS
 
 SUBROUTINE PRESSURE_SOLVER_COMPUTE_RHS(T,DT,NM)
 
-USE MESH_POINTERS
 USE COMP_FUNCTIONS, ONLY: CURRENT_TIME
-USE MATH_FUNCTIONS, ONLY: EVALUATE_RAMP
-USE GLOBAL_CONSTANTS
+USE GLOBAL_CONSTANTS, ONLY: SOLID_PHASE_ONLY,FREEZE_VELOCITY,T_USED
 
 INTEGER, INTENT(IN) :: NM
 REAL(EB), INTENT(IN) :: T,DT
-REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW,HP,RHOP
-INTEGER :: I,J,K,IW,IOR,NOM
-REAL(EB) :: TRM1,TRM2,TRM3,TRM4,TNOW, &
-            TSI,TIME_RAMP_FACTOR,DX_OTHER,DY_OTHER,DZ_OTHER,P_EXTERNAL,VEL_EDDY,H0
-TYPE (VENTS_TYPE), POINTER :: VT
-TYPE (WALL_TYPE), POINTER :: WC
-TYPE (BOUNDARY_COORD_TYPE), POINTER :: BC
-TYPE (BOUNDARY_PROP1_TYPE), POINTER :: B1
-TYPE (EXTERNAL_WALL_TYPE), POINTER :: EWC
-
-IF (SOLID_PHASE_ONLY) RETURN
-IF (FREEZE_VELOCITY)  RETURN
-
-TNOW=CURRENT_TIME()
-CALL POINT_TO_MESH(NM)
-
-IF (PREDICTOR) THEN
-   UU => U
-   VV => V
-   WW => W
-   HP => H
-   RHOP => RHO
-ELSE
-   UU => US
-   VV => VS
-   WW => WS
-   HP => HS
-   RHOP => RHOS
-ENDIF
-
-!$OMP PARALLEL
-
-! Apply pressure boundary conditions at external cells.
-! If Neumann, BXS, BXF, etc., contain dH/dx(x=XS), dH/dx(x=XF), etc.
-! If Dirichlet, BXS, BXF, etc., contain H(x=XS), H(x=XF), etc.
-! LBC, MBC and NBC are codes used be Poisson solver to denote type
-! of boundary condition at x, y and z boundaries. See Crayfishpak
-! manual for details.
-
-!$OMP DO PRIVATE(IW,WC,EWC,BC,B1,I,J,K,IOR,NOM,DX_OTHER,DY_OTHER,DZ_OTHER,VT,TSI) &
-!$OMP&   PRIVATE(TIME_RAMP_FACTOR,P_EXTERNAL,VEL_EDDY,H0)
-WALL_CELL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
-
-   WC => WALL(IW)
-   EWC => EXTERNAL_WALL(IW)
-   BC => BOUNDARY_COORD(WC%BC_INDEX)
-   I   = BC%II
-   J   = BC%JJ
-   K   = BC%KK
-   IOR = BC%IOR
-
-   ! Apply pressure gradients at NEUMANN boundaries: dH/dn = -F_n - d(u_n)/dt
-
-   IF_NEUMANN: IF (EWC%PRESSURE_BC_TYPE==NEUMANN) THEN
-
-      SELECT CASE(IOR)
-         CASE( 1)
-            BXS(J,K) = HX(0)   *(-FVX(0,J,K)    + EWC%DUNDT)
-         CASE(-1)
-            BXF(J,K) = HX(IBP1)*(-FVX(IBAR,J,K) - EWC%DUNDT)
-         CASE( 2)
-            BYS(I,K) = HY(0)   *(-FVY(I,0,K)    + EWC%DUNDT)
-         CASE(-2)
-            BYF(I,K) = HY(JBP1)*(-FVY(I,JBAR,K) - EWC%DUNDT)
-         CASE( 3)
-            BZS(I,J) = HZ(0)   *(-FVZ(I,J,0)    + EWC%DUNDT)
-         CASE(-3)
-            BZF(I,J) = HZ(KBP1)*(-FVZ(I,J,KBAR) - EWC%DUNDT)
-      END SELECT
-   ENDIF IF_NEUMANN
-
-   ! Apply pressures at DIRICHLET boundaries, depending on the specific type
-
-   IF_DIRICHLET: IF (EWC%PRESSURE_BC_TYPE==DIRICHLET) THEN
-
-      NOT_OPEN: IF (WC%BOUNDARY_TYPE/=OPEN_BOUNDARY .AND. WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) THEN
-
-         ! Solid boundary that uses a Dirichlet BC. Assume that the pressure at the boundary (BXS, etc) is the average of the
-         ! last computed pressures in the ghost and adjacent gas cells.
-
-         SELECT CASE(IOR)
-            CASE( 1) ; BXS(J,K) = 0.5_EB*(HP(0,J,K)   +HP(1,J,K))    + WALL_WORK1(IW)
-            CASE(-1) ; BXF(J,K) = 0.5_EB*(HP(IBAR,J,K)+HP(IBP1,J,K)) + WALL_WORK1(IW)
-            CASE( 2) ; BYS(I,K) = 0.5_EB*(HP(I,0,K)   +HP(I,1,K))    + WALL_WORK1(IW)
-            CASE(-2) ; BYF(I,K) = 0.5_EB*(HP(I,JBAR,K)+HP(I,JBP1,K)) + WALL_WORK1(IW)
-            CASE( 3) ; BZS(I,J) = 0.5_EB*(HP(I,J,0)   +HP(I,J,1))    + WALL_WORK1(IW)
-            CASE(-3) ; BZF(I,J) = 0.5_EB*(HP(I,J,KBAR)+HP(I,J,KBP1)) + WALL_WORK1(IW)
-         END SELECT
-
-      ENDIF NOT_OPEN
-
-      ! Interpolated boundary -- set boundary value of H to be average of neighboring cells from previous time step
-      ! HP from the neighboring mesh NOM has already been copied to the external cells of mesh NM in NO_FLUX.
-
-      INTERPOLATED_ONLY: IF (WC%BOUNDARY_TYPE==INTERPOLATED_BOUNDARY) THEN
-
-         NOM = EWC%NOM
-
-         SELECT CASE(IOR)
-            CASE( 1)
-               DX_OTHER = MESHES(NOM)%DX(EWC%IIO_MIN)
-               BXS(J,K) = (DX_OTHER*HP(1,J,K) + DX(1)*HP(0,J,K))/(DX(1)+DX_OTHER) + WALL_WORK1(IW)
-            CASE(-1)
-               DX_OTHER = MESHES(NOM)%DX(EWC%IIO_MIN)
-               BXF(J,K) = (DX_OTHER*HP(IBAR,J,K) + DX(IBAR)*HP(IBP1,J,K))/(DX(IBAR)+DX_OTHER) + WALL_WORK1(IW)
-            CASE( 2)
-               DY_OTHER = MESHES(NOM)%DY(EWC%JJO_MIN)
-               BYS(I,K) = (DY_OTHER*HP(I,1,K) + DY(1)*HP(I,0,K))/(DY(1)+DY_OTHER) + WALL_WORK1(IW)
-            CASE(-2)
-               DY_OTHER = MESHES(NOM)%DY(EWC%JJO_MIN)
-               BYF(I,K) = (DY_OTHER*HP(I,JBAR,K) + DY(JBAR)*HP(I,JBP1,K))/(DY(JBAR)+DY_OTHER) + WALL_WORK1(IW)
-            CASE( 3)
-               DZ_OTHER = MESHES(NOM)%DZ(EWC%KKO_MIN)
-               BZS(I,J) = (DZ_OTHER*HP(I,J,1) + DZ(1)*HP(I,J,0))/(DZ(1)+DZ_OTHER) + WALL_WORK1(IW)
-            CASE(-3)
-               DZ_OTHER = MESHES(NOM)%DZ(EWC%KKO_MIN)
-               BZF(I,J) = (DZ_OTHER*HP(I,J,KBAR) + DZ(KBAR)*HP(I,J,KBP1))/(DZ(KBAR)+DZ_OTHER) + WALL_WORK1(IW)
-         END SELECT
-
-      ENDIF INTERPOLATED_ONLY
-
-      ! OPEN (passive opening to exterior of domain) boundary. Apply inflow/outflow BC.
-
-      OPEN_IF: IF (WC%BOUNDARY_TYPE==OPEN_BOUNDARY) THEN
-
-         B1 => BOUNDARY_PROP1(WC%B1_INDEX)
-         VT => VENTS(WC%VENT_INDEX)
-         IF (ABS(B1%T_IGN-T_BEGIN)<=TWENTY_EPSILON_EB .AND. VT%PRESSURE_RAMP_INDEX >=1) THEN
-            TSI = T
-         ELSE
-            TSI = T - T_BEGIN
-         ENDIF
-         TIME_RAMP_FACTOR = EVALUATE_RAMP(TSI,VT%PRESSURE_RAMP_INDEX)
-         P_EXTERNAL = TIME_RAMP_FACTOR*VT%DYNAMIC_PRESSURE
-
-         ! Synthetic eddy method for OPEN inflow boundaries
-
-         VEL_EDDY = 0._EB
-         IF (VT%N_EDDY>0) THEN
-            SELECT CASE(ABS(VT%IOR))
-               CASE(1); VEL_EDDY = VT%U_EDDY(J,K)
-               CASE(2); VEL_EDDY = VT%V_EDDY(I,K)
-               CASE(3); VEL_EDDY = VT%W_EDDY(I,J)
-            END SELECT
-         ENDIF
-
-         ! Wind inflow boundary conditions
-
-         H0 = 0.5_EB*(U0**2+V0**2+W0**2)
-
-         IF (OPEN_WIND_BOUNDARY) THEN
-            SELECT CASE(IOR)
-               CASE( 1); H0 = HP(1,J,K)    + 0.5_EB/(DT*RDXN(0)   )*(U_WIND(K) + VEL_EDDY - UU(0,   J,K))
-               CASE(-1); H0 = HP(IBAR,J,K) - 0.5_EB/(DT*RDXN(IBAR))*(U_WIND(K) + VEL_EDDY - UU(IBAR,J,K))
-               CASE( 2); H0 = HP(I,1,K)    + 0.5_EB/(DT*RDYN(0)   )*(V_WIND(K) + VEL_EDDY - VV(I,0,   K))
-               CASE(-2); H0 = HP(I,JBAR,K) - 0.5_EB/(DT*RDYN(JBAR))*(V_WIND(K) + VEL_EDDY - VV(I,JBAR,K))
-               CASE( 3); H0 = HP(I,J,1)    + 0.5_EB/(DT*RDZN(0)   )*(W_WIND(K) + VEL_EDDY - WW(I,J,0   ))
-               CASE(-3); H0 = HP(I,J,KBAR) - 0.5_EB/(DT*RDZN(KBAR))*(W_WIND(K) + VEL_EDDY - WW(I,J,KBAR))
-            END SELECT
-         ENDIF
-
-         SELECT CASE(IOR)
-            CASE( 1)
-               IF (UU(0,J,K)<0._EB) THEN
-                  BXS(J,K) = P_EXTERNAL/B1%RHO_F + KRES(1,J,K)
-               ELSE
-                  BXS(J,K) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-            CASE(-1)
-               IF (UU(IBAR,J,K)>0._EB) THEN
-                  BXF(J,K) = P_EXTERNAL/B1%RHO_F + KRES(IBAR,J,K)
-               ELSE
-                  BXF(J,K) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-            CASE( 2)
-               IF (VV(I,0,K)<0._EB) THEN
-                  BYS(I,K) = P_EXTERNAL/B1%RHO_F + KRES(I,1,K)
-               ELSE
-                  BYS(I,K) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-            CASE(-2)
-               IF (VV(I,JBAR,K)>0._EB) THEN
-                  BYF(I,K) = P_EXTERNAL/B1%RHO_F + KRES(I,JBAR,K)
-               ELSE
-                  BYF(I,K) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-            CASE( 3)
-               IF (WW(I,J,0)<0._EB) THEN
-                  BZS(I,J) = P_EXTERNAL/B1%RHO_F + KRES(I,J,1)
-               ELSE
-                  BZS(I,J) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-            CASE(-3)
-               IF (WW(I,J,KBAR)>0._EB) THEN
-                  BZF(I,J) = P_EXTERNAL/B1%RHO_F + KRES(I,J,KBAR)
-               ELSE
-                  BZF(I,J) = P_EXTERNAL/B1%RHO_F + H0
-               ENDIF
-         END SELECT
-
-      ENDIF OPEN_IF
-
-   ENDIF IF_DIRICHLET
-
-ENDDO WALL_CELL_LOOP
-!$OMP END DO
-
-! Compute the RHS of the Poisson equation
-
-SELECT CASE(IPS)
-
-   CASE(:1,4,7)
-      IF (CYLINDRICAL) THEN
-         !$OMP DO PRIVATE(TRM1,TRM3,TRM4)
-         DO K=1,KBAR
-            DO I=1,IBAR
-               TRM1 = (R(I-1)*FVX(I-1,1,K)-R(I)*FVX(I,1,K))*RDX(I)*RRN(I)
-               TRM3 = (FVZ(I,1,K-1)-FVZ(I,1,K))*RDZ(K)
-               TRM4 = -DDDT(I,1,K)
-               PRHS(I,1,K) = TRM1 + TRM3 + TRM4
-            ENDDO
-         ENDDO
-         !$OMP END DO
-      ENDIF
-      IF (.NOT.CYLINDRICAL) THEN
-         !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
-         DO K=1,KBAR
-            DO J=1,JBAR
-               DO I=1,IBAR
-                  TRM1 = (FVX(I-1,J,K)-FVX(I,J,K))*RDX(I)
-                  TRM2 = (FVY(I,J-1,K)-FVY(I,J,K))*RDY(J)
-                  TRM3 = (FVZ(I,J,K-1)-FVZ(I,J,K))*RDZ(K)
-                  TRM4 = -DDDT(I,J,K)
-                  PRHS(I,J,K) = TRM1 + TRM2 + TRM3 + TRM4
-               ENDDO
-            ENDDO
-         ENDDO
-         !$OMP END DO
-
-      ENDIF
-
-   CASE(2)  ! Switch x and y
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               TRM1 = (FVX(I-1,J,K)-FVX(I,J,K))*RDX(I)
-               TRM2 = (FVY(I,J-1,K)-FVY(I,J,K))*RDY(J)
-               TRM3 = (FVZ(I,J,K-1)-FVZ(I,J,K))*RDZ(K)
-               TRM4 = -DDDT(I,J,K)
-               PRHS(J,I,K) = TRM1 + TRM2 + TRM3 + TRM4
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-
-   CASE(3,6)  ! Switch x and z
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               TRM1 = (FVX(I-1,J,K)-FVX(I,J,K))*RDX(I)
-               TRM2 = (FVY(I,J-1,K)-FVY(I,J,K))*RDY(J)
-               TRM3 = (FVZ(I,J,K-1)-FVZ(I,J,K))*RDZ(K)
-               TRM4 = -DDDT(I,J,K)
-               PRHS(K,J,I) = TRM1 + TRM2 + TRM3 + TRM4
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-
-   CASE(5)  ! Switch y and z
-      !$OMP DO PRIVATE(TRM1,TRM2,TRM3,TRM4)
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               TRM1 = (FVX(I-1,J,K)-FVX(I,J,K))*RDX(I)
-               TRM2 = (FVY(I,J-1,K)-FVY(I,J,K))*RDY(J)
-               TRM3 = (FVZ(I,J,K-1)-FVZ(I,J,K))*RDZ(K)
-               TRM4 = -DDDT(I,J,K)
-               PRHS(I,K,J) = TRM1 + TRM2 + TRM3 + TRM4
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-
-END SELECT
-
-!$OMP END PARALLEL
-
-T_USED(5)=T_USED(5)+CURRENT_TIME()-TNOW
-END SUBROUTINE PRESSURE_SOLVER_COMPUTE_RHS
-
-
-SUBROUTINE PRESSURE_SOLVER_FFT(NM)
-
-USE MESH_POINTERS
-USE POIS, ONLY: H3CZSS,H2CZSS,H2CYSS,H3CSSS
-USE COMP_FUNCTIONS, ONLY: CURRENT_TIME
-USE GLOBAL_CONSTANTS
-
-INTEGER, INTENT(IN) :: NM
-REAL(EB), POINTER, DIMENSION(:,:,:) :: HP
-INTEGER :: I,J,K
 REAL(EB) :: TNOW
 
 IF (SOLID_PHASE_ONLY) RETURN
 IF (FREEZE_VELOCITY)  RETURN
 
 TNOW=CURRENT_TIME()
-CALL POINT_TO_MESH(NM)
+CALL PK_COMPUTE_RHS(MESHES(NM),T,DT,NM)
+T_USED(5)=T_USED(5)+CURRENT_TIME()-TNOW
+END SUBROUTINE PRESSURE_SOLVER_COMPUTE_RHS
 
-IF (PREDICTOR) THEN
-   HP => H
-ELSE
-   HP => HS
-ENDIF
 
-! Call the Poisson solver
+SUBROUTINE PRESSURE_SOLVER_FFT(NM)
 
-SELECT CASE(IPS)
-   CASE(:1)
-      IF (.NOT.TWO_D) THEN
-         CALL H3CZSS(BXS,BXF,BYS,BYF,BZS,BZF,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HX)
-      ELSE
-         IF (.NOT.CYLINDRICAL) CALL H2CZSS(BXS,BXF,BZS,BZF,ITRN,PRHS,POIS_PTB,SAVE1,WORK,HX)
-         IF (     CYLINDRICAL) CALL H2CYSS(BXS,BXF,BZS,BZF,ITRN,PRHS,POIS_PTB,SAVE1,WORK)
-      ENDIF
-   CASE(2)
-      BZST = TRANSPOSE(BZS)
-      BZFT = TRANSPOSE(BZF)
-      CALL H3CZSS(BYS,BYF,BXS,BXF,BZST,BZFT,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HY)
-   CASE(3)
-      IF (.NOT.TWO_D) THEN
-         BXST = TRANSPOSE(BXS)
-         BXFT = TRANSPOSE(BXF)
-         BYST = TRANSPOSE(BYS)
-         BYFT = TRANSPOSE(BYF)
-         BZST = TRANSPOSE(BZS)
-         BZFT = TRANSPOSE(BZF)
-         CALL H3CZSS(BZST,BZFT,BYST,BYFT,BXST,BXFT,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HZ)
-      ELSE
-         CALL H2CZSS(BZS,BZF,BXS,BXF,ITRN,PRHS,POIS_PTB,SAVE1,WORK,HZ)
-      ENDIF
-   CASE(4)
-      CALL H3CSSS(BXS,BXF,BYS,BYF,BZS,BZF,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HX,HY)
-   CASE(5)
-      IF (.NOT.TWO_D) THEN
-         BXST = TRANSPOSE(BXS)
-         BXFT = TRANSPOSE(BXF)
-         CALL H3CSSS(BXST,BXFT,BZS,BZF,BYS,BYF,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HX,HZ)
-      ELSE
-         CALL H2CZSS(BZS,BZF,BXS,BXF,ITRN,PRHS,POIS_PTB,SAVE1,WORK,HZ)
-      ENDIF
-   CASE(6)
-      BXST = TRANSPOSE(BXS)
-      BXFT = TRANSPOSE(BXF)
-      BYST = TRANSPOSE(BYS)
-      BYFT = TRANSPOSE(BYF)
-      BZST = TRANSPOSE(BZS)
-      BZFT = TRANSPOSE(BZF)
-      CALL H3CSSS(BZST,BZFT,BYST,BYFT,BXST,BXFT,ITRN,JTRN,PRHS,POIS_PTB,SAVE1,WORK,HZ,HY)
-   CASE(7)
-      CALL H2CZSS(BXS,BXF,BYS,BYF,ITRN,PRHS,POIS_PTB,SAVE1,WORK,HX)
-END SELECT
+USE COMP_FUNCTIONS, ONLY: CURRENT_TIME
+USE GLOBAL_CONSTANTS, ONLY: SOLID_PHASE_ONLY,FREEZE_VELOCITY,T_USED
 
-!$OMP PARALLEL
+INTEGER, INTENT(IN) :: NM
+REAL(EB) :: TNOW
 
-SELECT CASE(IPS)
-   CASE(:1,4,7)
-      !$OMP DO
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               HP(I,J,K) = PRHS(I,J,K)
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-   CASE(2)
-      !$OMP DO
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               HP(I,J,K) = PRHS(J,I,K)
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-   CASE(3,6)
-      !$OMP DO
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               HP(I,J,K) = PRHS(K,J,I)
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-   CASE(5)
-      !$OMP DO
-      DO K=1,KBAR
-         DO J=1,JBAR
-            DO I=1,IBAR
-               HP(I,J,K) = PRHS(I,K,J)
-            ENDDO
-         ENDDO
-      ENDDO
-      !$OMP END DO
-END SELECT
+IF (SOLID_PHASE_ONLY) RETURN
+IF (FREEZE_VELOCITY)  RETURN
 
-! For the special case of tunnels, add back 1-D global pressure solution to 3-D local pressure solution
-
-IF (TUNNEL_PRECONDITIONER) THEN
-   !$OMP MASTER
-   DO I=1,IBAR
-      HP(I,1:JBAR,1:KBAR) = HP(I,1:JBAR,1:KBAR) + H_BAR(I_OFFSET(NM)+I)  ! H = H' + H_bar
-   ENDDO
-   BXS = BXS + BXS_BAR  ! b = b' + b_bar
-   BXF = BXF + BXF_BAR  ! b = b' + b_bar
-   !$OMP END MASTER
-   !$OMP BARRIER
-ENDIF
-
-! Apply boundary conditions to H
-
-!$OMP DO
-DO K=1,KBAR
-   DO J=1,JBAR
-      IF (LBC==3 .OR. LBC==4)             HP(0,J,K)    = HP(1,J,K)    - DXI*BXS(J,K)
-      IF (LBC==3 .OR. LBC==2 .OR. LBC==6) HP(IBP1,J,K) = HP(IBAR,J,K) + DXI*BXF(J,K)
-      IF (LBC==1 .OR. LBC==2)             HP(0,J,K)    =-HP(1,J,K)    + 2._EB*BXS(J,K)
-      IF (LBC==1 .OR. LBC==4 .OR. LBC==5) HP(IBP1,J,K) =-HP(IBAR,J,K) + 2._EB*BXF(J,K)
-      IF (LBC==5 .OR. LBC==6)             HP(0,J,K)    = HP(1,J,K)
-      IF (LBC==0) THEN
-         HP(0,J,K) = HP(IBAR,J,K)
-         HP(IBP1,J,K) = HP(1,J,K)
-      ENDIF
-   ENDDO
-ENDDO
-!$OMP END DO
-
-!$OMP DO
-DO K=1,KBAR
-   DO I=1,IBAR
-      IF (MBC==3 .OR. MBC==4) HP(I,0,K)    = HP(I,1,K)    - DETA*BYS(I,K)
-      IF (MBC==3 .OR. MBC==2) HP(I,JBP1,K) = HP(I,JBAR,K) + DETA*BYF(I,K)
-      IF (MBC==1 .OR. MBC==2) HP(I,0,K)    =-HP(I,1,K)    + 2._EB*BYS(I,K)
-      IF (MBC==1 .OR. MBC==4) HP(I,JBP1,K) =-HP(I,JBAR,K) + 2._EB*BYF(I,K)
-      IF (MBC==0) THEN
-         HP(I,0,K) = HP(I,JBAR,K)
-         HP(I,JBP1,K) = HP(I,1,K)
-      ENDIF
-   ENDDO
-ENDDO
-!$OMP END DO
-
-!$OMP DO
-DO J=1,JBAR
-   DO I=1,IBAR
-      IF (NBC==3 .OR. NBC==4)  HP(I,J,0)    = HP(I,J,1)    - DZETA*BZS(I,J)
-      IF (NBC==3 .OR. NBC==2)  HP(I,J,KBP1) = HP(I,J,KBAR) + DZETA*BZF(I,J)
-      IF (NBC==1 .OR. NBC==2)  HP(I,J,0)    =-HP(I,J,1)    + 2._EB*BZS(I,J)
-      IF (NBC==1 .OR. NBC==4)  HP(I,J,KBP1) =-HP(I,J,KBAR) + 2._EB*BZF(I,J)
-      IF (NBC==0) THEN
-         HP(I,J,0) = HP(I,J,KBAR)
-         HP(I,J,KBP1) = HP(I,J,1)
-      ENDIF
-   ENDDO
-ENDDO
-!$OMP END DO
-
-!$OMP END PARALLEL
-
+TNOW=CURRENT_TIME()
+CALL PK_FFT(MESHES(NM),NM)
 T_USED(5)=T_USED(5)+CURRENT_TIME()-TNOW
 END SUBROUTINE PRESSURE_SOLVER_FFT
 
@@ -695,103 +246,17 @@ END SUBROUTINE TUNNEL_POISSON_SOLVER
 
 SUBROUTINE PRESSURE_SOLVER_CHECK_RESIDUALS(NM)
 
-USE MESH_POINTERS
 USE COMP_FUNCTIONS, ONLY: CURRENT_TIME
-USE GLOBAL_CONSTANTS
+USE GLOBAL_CONSTANTS, ONLY: SOLID_PHASE_ONLY,FREEZE_VELOCITY,T_USED
 
 INTEGER, INTENT(IN) :: NM
-REAL(EB), POINTER, DIMENSION(:,:,:) :: HP,RHOP,P,RESIDUAL
-INTEGER :: I,J,K
-REAL(EB) :: LHSS,RHSS,TNOW
+REAL(EB) :: TNOW
 
 IF (SOLID_PHASE_ONLY) RETURN
 IF (FREEZE_VELOCITY)  RETURN
 
 TNOW=CURRENT_TIME()
-CALL POINT_TO_MESH(NM)
-
-IF (PREDICTOR) THEN
-   HP => H
-   RHOP => RHO
-ELSE
-   HP => HS
-   RHOP => RHOS
-ENDIF
-
-! Optional check of the accuracy of the separable pressure solution, del^2 H = -del dot F - dD/dt
-
-IF (CHECK_POISSON) THEN
-   RESIDUAL => WORK8(1:IBAR,1:JBAR,1:KBAR)
-   !$OMP PARALLEL DO PRIVATE(I,J,K,RHSS,LHSS) SCHEDULE(STATIC)
-   DO K=1,KBAR
-      DO J=1,JBAR
-         DO I=1,IBAR
-            RHSS = ( R(I-1)*FVX(I-1,J,K) - R(I)*FVX(I,J,K) )*RDX(I)*RRN(I) &
-                 + (        FVY(I,J-1,K) -      FVY(I,J,K) )*RDY(J)        &
-                 + (        FVZ(I,J,K-1) -      FVZ(I,J,K) )*RDZ(K)        &
-                 - DDDT(I,J,K)
-            LHSS = ((HP(I+1,J,K)-HP(I,J,K))*RDXN(I)*R(I) - (HP(I,J,K)-HP(I-1,J,K))*RDXN(I-1)*R(I-1) )*RDX(I)*RRN(I) &
-                 + ((HP(I,J+1,K)-HP(I,J,K))*RDYN(J)      - (HP(I,J,K)-HP(I,J-1,K))*RDYN(J-1)        )*RDY(J)        &
-                 + ((HP(I,J,K+1)-HP(I,J,K))*RDZN(K)      - (HP(I,J,K)-HP(I,J,K-1))*RDZN(K-1)        )*RDZ(K)
-            RESIDUAL(I,J,K) = ABS(RHSS-LHSS)
-         ENDDO
-      ENDDO
-   ENDDO
-   !$OMP END PARALLEL DO
-   POIS_ERR = MAXVAL(RESIDUAL)
-ENDIF
-
-! Mandatory check of how well the computed pressure satisfies the inseparable Poisson equation:
-! LHSS = del dot ((1/rho) del p + del K) = -del dot F - dD/dt = RHSS
-
-IF (ITERATE_BAROCLINIC_TERM) THEN
-
-   P => WORK7
-   RESIDUAL => WORK8(1:IBAR,1:JBAR,1:KBAR)
-
-   !$OMP PARALLEL
-
-   !$OMP DO SCHEDULE(STATIC)
-   DO K=0,KBP1
-      DO J=0,JBP1
-         DO I=0,IBP1
-            P(I,J,K) = RHOP(I,J,K)*(HP(I,J,K)-KRES(I,J,K))
-         ENDDO
-      ENDDO
-   ENDDO
-   !$OMP END DO
-
-   !$OMP DO COLLAPSE(3) SCHEDULE(STATIC) PRIVATE(I,J,K,RHSS,LHSS)
-   DO K=1,KBAR
-      DO J=1,JBAR
-         DO I=1,IBAR
-            RHSS = ( R(I-1)*(FVX(I-1,J,K)-FVX_B(I-1,J,K)) - R(I)*(FVX(I,J,K)-FVX_B(I,J,K)) )*RDX(I)*RRN(I) &
-                 + (        (FVY(I,J-1,K)-FVY_B(I,J-1,K)) -      (FVY(I,J,K)-FVY_B(I,J,K)) )*RDY(J)        &
-                 + (        (FVZ(I,J,K-1)-FVZ_B(I,J,K-1)) -      (FVZ(I,J,K)-FVZ_B(I,J,K)) )*RDZ(K)        &
-                 - DDDT(I,J,K)
-            LHSS = ((P(I+1,J,K)-P(I,J,K))*RDXN(I)*R(I)    *2._EB/(RHOP(I+1,J,K)+RHOP(I,J,K)) - &
-                    (P(I,J,K)-P(I-1,J,K))*RDXN(I-1)*R(I-1)*2._EB/(RHOP(I-1,J,K)+RHOP(I,J,K)))*RDX(I)*RRN(I) &
-                 + ((P(I,J+1,K)-P(I,J,K))*RDYN(J)         *2._EB/(RHOP(I,J+1,K)+RHOP(I,J,K)) - &
-                    (P(I,J,K)-P(I,J-1,K))*RDYN(J-1)       *2._EB/(RHOP(I,J-1,K)+RHOP(I,J,K)))*RDY(J)        &
-                 + ((P(I,J,K+1)-P(I,J,K))*RDZN(K)         *2._EB/(RHOP(I,J,K+1)+RHOP(I,J,K)) - &
-                    (P(I,J,K)-P(I,J,K-1))*RDZN(K-1)       *2._EB/(RHOP(I,J,K-1)+RHOP(I,J,K)))*RDZ(K)        &
-                 + ((KRES(I+1,J,K)-KRES(I,J,K))*RDXN(I)*R(I) - (KRES(I,J,K)-KRES(I-1,J,K))*RDXN(I-1)*R(I-1) )*RDX(I)*RRN(I) &
-                 + ((KRES(I,J+1,K)-KRES(I,J,K))*RDYN(J)      - (KRES(I,J,K)-KRES(I,J-1,K))*RDYN(J-1)        )*RDY(J)        &
-                 + ((KRES(I,J,K+1)-KRES(I,J,K))*RDZN(K)      - (KRES(I,J,K)-KRES(I,J,K-1))*RDZN(K-1)        )*RDZ(K)
-            RESIDUAL(I,J,K) = ABS(RHSS-LHSS)
-         ENDDO
-      ENDDO
-   ENDDO
-   !$OMP END DO
-
-   !$OMP END PARALLEL
-
-   PRESSURE_ERROR_MAX(NM) = MAXVAL(RESIDUAL)
-   PRESSURE_ERROR_MAX_LOC(:,NM) = MAXLOC(RESIDUAL)
-   IF (STORE_PRESSURE_POISSON_RESIDUAL) PP_RESIDUAL(1:IBAR,1:JBAR,1:KBAR)=RESIDUAL(1:IBAR,1:JBAR,1:KBAR)
-
-ENDIF
-
+CALL PK_CHECK_RESIDUALS(MESHES(NM),NM)
 T_USED(5)=T_USED(5)+CURRENT_TIME()-TNOW
 END SUBROUTINE PRESSURE_SOLVER_CHECK_RESIDUALS
 
