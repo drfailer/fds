@@ -1,0 +1,18 @@
+# Test run artifacts
+run/
+*.sf
+*.sf.bnd
+*.smv
+*.out
+*_git.txt
+*.png
+
+# Archive directory
+archive/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# But DO track gold CSV files (reference outputs)
+!gold/**/*.csv
