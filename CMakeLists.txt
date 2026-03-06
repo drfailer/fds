@@ -50,8 +50,10 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_divergence.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_density.f90
+    ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_pressure_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_pressure.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_verification.f90
+    ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_velocity_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_velocity.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_exchange.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_init.f90
