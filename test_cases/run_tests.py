@@ -28,33 +28,40 @@ FDS_ORIG = REPO_ROOT / "Build" / "ompi_gnu_linux_db" / "fds_ompi_gnu_linux_db"
 COMPARE_SCRIPT = TEST_DIR / "compare_csv.py"
 
 # Test cases configuration
+# Note: 'chid' is the CHID specified in the FDS input file (&HEAD CHID='...')
+#       which determines output filenames. If not specified, defaults to input filename stem.
 TEST_CASES = {
     'dancing_eddies_1mesh': {
         'input': 'dancing_eddies_1mesh_short.fds',
+        'chid': 'dancing_eddies_1mesh_short',
         'meshes': 1,
         'description': '1-mesh Dancing Eddies',
         'compare_files': ['_devc.csv', '_hrr.csv']
     },
     'dancing_eddies_2mesh': {
         'input': 'dancing_eddies_2mesh.fds',
+        'chid': 'dancing_eddies_embed',  # CHID differs from filename!
         'meshes': 2,
         'description': '2-mesh Dancing Eddies (embedded)',
-        'compare_files': ['_devc.csv']
+        'compare_files': ['_devc.csv', '_hrr.csv']
     },
     'multiple_reac_3mesh': {
         'input': 'multiple_reac_3mesh.fds',
+        'chid': 'multiple_reac_n_simple',  # CHID differs from filename!
         'meshes': 3,
         'description': '3-mesh Multiple Reactions',
         'compare_files': ['_devc.csv']
     },
     'dancing_eddies_4mesh': {
         'input': 'dancing_eddies_4mesh_short.fds',
+        'chid': 'dancing_eddies_4mesh_short',
         'meshes': 4,
         'description': '4-mesh Dancing Eddies',
         'compare_files': ['_devc.csv', '_hrr.csv']
     },
     'species_props_5mesh': {
         'input': 'species_props_5mesh.fds',
+        'chid': 'species_props',  # CHID differs from filename!
         'meshes': 5,
         'description': '5-mesh Species Properties',
         'compare_files': ['_devc.csv']
@@ -95,17 +102,23 @@ class TestRunner:
             return False
         return True
 
-    def run_fds(self, input_file: Path, exe: Path, work_dir: Path, timeout: int = 60) -> Tuple[bool, float]:
+    def run_fds(self, input_file: Path, chid: str, exe: Path, work_dir: Path, timeout: int = 60) -> Tuple[bool, float]:
         """
         Run FDS simulation.
 
         For fds_hh: Monitors output and terminates process as soon as dot file is written
         (which happens right before the waitForTermination() hang).
 
+        Args:
+            input_file: Input .fds filename
+            chid: Case ID (CHID from &HEAD namelist, determines output filenames)
+            exe: Path to FDS executable
+            work_dir: Working directory for execution
+            timeout: Safety timeout in seconds
+
         Returns:
             (success, elapsed_time)
         """
-        chid = input_file.stem
         input_path = INPUTS_DIR / input_file
 
         if not input_path.exists():
@@ -257,7 +270,7 @@ class TestRunner:
         self.log(f"{'='*60}")
 
         input_file = Path(test_config['input'])
-        chid = input_file.stem
+        chid = test_config.get('chid', input_file.stem)  # Use explicit CHID or derive from filename
         work_dir = RUN_DIR / test_name
         work_dir.mkdir(exist_ok=True)
 
@@ -272,7 +285,7 @@ class TestRunner:
 
         # Run FDS
         self.log(f"Running FDS...", "RUN")
-        success, elapsed = self.run_fds(input_file, FDS_HH, work_dir)
+        success, elapsed = self.run_fds(input_file, chid, FDS_HH, work_dir)
         result['run_time'] = elapsed
 
         if not success:
@@ -302,7 +315,7 @@ class TestRunner:
         self.log(f"{'='*60}")
 
         input_file = Path(test_config['input'])
-        chid = input_file.stem
+        chid = test_config.get('chid', input_file.stem)  # Use explicit CHID or derive from filename
         gold_subdir = GOLD_DIR / test_name
         gold_subdir.mkdir(exist_ok=True)
 
@@ -320,7 +333,7 @@ class TestRunner:
 
         # Run FDS in gold directory
         self.log(f"Running FDS...", "RUN")
-        success, elapsed = self.run_fds(input_file, exe, gold_subdir)
+        success, elapsed = self.run_fds(input_file, chid, exe, gold_subdir)
 
         if not success:
             self.log(f"Failed to generate gold files", "FAIL")
