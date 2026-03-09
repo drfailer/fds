@@ -1,6 +1,7 @@
 #ifndef MESH_BARRIER_STATE_H
 #define MESH_BARRIER_STATE_H
 
+#include <algorithm>
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
@@ -23,6 +24,8 @@ public:
     void execute(std::shared_ptr<MeshData> data) override {
         collected_.push_back(data);
         if (static_cast<int>(collected_.size()) == nmeshes_) {
+            std::sort(collected_.begin(), collected_.end(),
+                      [](const auto &a, const auto &b) { return a->nm < b->nm; });
             for (auto &md : collected_) {
                 this->addResult(md);
             }

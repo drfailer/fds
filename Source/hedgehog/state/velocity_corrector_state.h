@@ -1,6 +1,7 @@
 #ifndef VELOCITY_CORRECTOR_STATE_H
 #define VELOCITY_CORRECTOR_STATE_H
 
+#include <algorithm>
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
@@ -69,10 +70,9 @@ public:
         results_.push_back(work);
 
         if (static_cast<int>(results_.size()) == nmeshes_) {
-            // All kernel results collected
-
-            // Sequential post-processing would go here
-            // (Currently none needed for velocity corrector)
+            // Sort by mesh index to guarantee deterministic ordering
+            std::sort(results_.begin(), results_.end(),
+                      [](const auto &a, const auto &b) { return a->nm < b->nm; });
 
             // Emit original MeshData tokens to continue graph flow
             for (auto &w : results_) {
