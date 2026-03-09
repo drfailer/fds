@@ -10,6 +10,8 @@
 #include "../data/divergence_part2_data.h"
 #include "../data/corr_step1_data.h"
 #include "../data/density_pred_data.h"
+#include "../data/corr_div_part1_data.h"
+#include "../data/div_setup_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
@@ -18,6 +20,8 @@
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/density_pred_kernel_task.h"
+#include "../task/corr_div_part1_kernel_task.h"
+#include "../task/div_setup_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
@@ -26,6 +30,8 @@
 #include "../state/divergence_part2_state.h"
 #include "../state/corr_step1_state.h"
 #include "../state/density_pred_state.h"
+#include "../state/corr_div_part1_state.h"
+#include "../state/div_setup_state.h"
 #include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -51,7 +57,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // --- Create predictor tasks (all sequential) ---
     auto predStep1       = std::make_shared<PredStep1Task>(1);
     // NOTE: densityPred replaced by density predictor sub-graph (see below)
-    auto predDivSetup    = std::make_shared<PredDivSetupTask>(1);
+    // NOTE: predDivSetup replaced by div setup sub-graph (see below)
     auto predWallDiv     = std::make_shared<PredWallDivTask>(1);
     // NOTE: divPart2Pred replaced by divergence part 2 sub-graph (see below)
     // NOTE: velPredictor replaced by velocity predictor sub-graph (see below)
@@ -59,12 +65,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
 
     // --- Create corrector tasks (all sequential) ---
     // NOTE: corrStep1 replaced by corrector step 1 sub-graph (see below)
-    auto corrDivSetup    = std::make_shared<CorrDivSetupTask>(1);
+    // NOTE: corrDivSetup replaced by div setup sub-graph (see below)
     auto corrCondens     = std::make_shared<CorrCondensTask>(1);
     auto corrParticle    = std::make_shared<CorrParticleTask>(1);
     auto corrWallBC      = std::make_shared<CorrWallBCTask>(1);
     auto corrRadiation   = std::make_shared<CorrRadiationTask>(1);
-    auto corrDivPart1    = std::make_shared<CorrDivPart1Task>(1);
+    // NOTE: corrDivPart1 replaced by corr div part 1 sub-graph (see below)
     // NOTE: corrDivPart2 replaced by divergence part 2 sub-graph (see below)
     // NOTE: corrVelocity replaced by velocity corrector sub-graph (see below)
     auto corrFinal       = std::make_shared<CorrFinalTask>(1);
@@ -113,6 +119,30 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
     auto densPredCollectorSM = std::make_shared<hh::StateManager<1, DensityPredWork, MeshData>>(
         std::make_shared<DensityPredCollector>(nmeshes), "DensPredCollector");
+
+    // --- Create corrector divergence part 1 sub-graph components ---
+    // Sequential COMBUSTION_BC (cross-mesh) in orchestrator, parallel DIVERGENCE_PART_1_KERNEL
+    auto corrDivP1OrchSM = std::make_shared<hh::StateManager<1, MeshData, CorrDivPart1Work>>(
+        std::make_shared<CorrDivPart1Orchestrator>(nmeshes), "CorrDivP1Orch");
+    auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(kernelThreads);
+    auto corrDivP1CollectorSM = std::make_shared<hh::StateManager<1, CorrDivPart1Work, MeshData>>(
+        std::make_shared<CorrDivPart1Collector>(nmeshes), "CorrDivP1Collector");
+
+    // --- Create predictor div setup sub-graph components ---
+    // Sequential VISCOSITY_BC (cross-mesh) in orchestrator, parallel VELOCITY_FLUX_KERNEL
+    auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, DivSetupWork>>(
+        std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
+    auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
+    auto predDivSetupCollectorSM = std::make_shared<hh::StateManager<1, DivSetupWork, MeshData>>(
+        std::make_shared<DivSetupCollector>(nmeshes), "PredDivSetupCollector");
+
+    // --- Create corrector div setup sub-graph components ---
+    // Sequential VISCOSITY_BC + AGGLOMERATION in orchestrator, parallel VELOCITY_FLUX_KERNEL
+    auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, DivSetupWork>>(
+        std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
+    auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
+    auto corrDivSetupCollectorSM = std::make_shared<hh::StateManager<1, DivSetupWork, MeshData>>(
+        std::make_shared<DivSetupCollector>(nmeshes), "CorrDivSetupCollector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -236,8 +266,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(densPredKernelTask, densPredCollectorSM);     // Kernel -> Collector
     graph->edges(densPredCollectorSM, collector1SM);           // Collector -> MESH_EXCHANGE(1)
     graph->edges(collector1SM, meshExchange1);                // Do MESH_EXCHANGE(1)
-    graph->edges(meshExchange1, predDivSetup);
-    graph->edges(predDivSetup, predHvacCollectorSM);          // Collect for HVAC
+    // Predictor div setup sub-graph (sequential VISCOSITY_BC + parallel VELOCITY_FLUX_KERNEL)
+    graph->edges(meshExchange1, predDivSetupOrchSM);           // MeshExch -> DivSetup Orchestrator
+    graph->edges(predDivSetupOrchSM, predDivSetupKernelTask);  // Orchestrator -> Kernel (parallel)
+    graph->edges(predDivSetupKernelTask, predDivSetupCollectorSM); // Kernel -> Collector
+    graph->edges(predDivSetupCollectorSM, predHvacCollectorSM); // Collector -> HVAC
     graph->edges(predHvacCollectorSM, predHvacTask);          // Do HVAC_CALC
     graph->edges(predHvacTask, predInitDivCollectorSM);       // Collect for INIT_DIV
     graph->edges(predInitDivCollectorSM, predInitDivTask);    // Do INIT_DIV_INTEGRALS
@@ -269,8 +302,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // Corrector pipeline
     graph->edges(corrStep1CollectorSM, collector4SM);         // Collect for MESH_EXCHANGE(4)
     graph->edges(collector4SM, meshExchange4);                // Do MESH_EXCHANGE(4)
-    graph->edges(meshExchange4, corrDivSetup);
-    graph->edges(corrDivSetup, combustionCollectorSM);        // Collect for COMBUSTION
+    // Corrector div setup sub-graph (sequential VISCOSITY_BC + AGGLOMERATION + parallel VELOCITY_FLUX_KERNEL)
+    graph->edges(meshExchange4, corrDivSetupOrchSM);           // MeshExch -> DivSetup Orchestrator
+    graph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);  // Orchestrator -> Kernel (parallel)
+    graph->edges(corrDivSetupKernelTask, corrDivSetupCollectorSM); // Kernel -> Collector
+    graph->edges(corrDivSetupCollectorSM, combustionCollectorSM); // Collector -> COMBUSTION
     graph->edges(combustionCollectorSM, combustionTask);      // Do COMBUSTION
     graph->edges(combustionTask, corrHvacCollectorSM);        // Collect for HVAC
     graph->edges(corrHvacCollectorSM, corrHvacTask);          // Do HVAC_CALC
@@ -287,8 +323,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(collector2SM, meshExchange2);                // Do MESH_EXCHANGE(2)
     graph->edges(meshExchange2, corrInitDivCollectorSM);      // Collect for INIT_DIV
     graph->edges(corrInitDivCollectorSM, corrInitDivTask);    // Do INIT_DIV_INTEGRALS
-    graph->edges(corrInitDivTask, corrDivPart1);
-    graph->edges(corrDivPart1, corrDivCollectorSM);           // Collect for DIV_EXCHANGE + RTE
+    // Corrector divergence part 1 sub-graph (sequential COMBUSTION_BC + parallel kernel)
+    graph->edges(corrInitDivTask, corrDivP1OrchSM);            // InitDiv -> CorrDivP1 Orchestrator
+    graph->edges(corrDivP1OrchSM, corrDivP1KernelTask);        // Orchestrator -> Kernel (parallel)
+    graph->edges(corrDivP1KernelTask, corrDivP1CollectorSM);   // Kernel -> Collector
+    graph->edges(corrDivP1CollectorSM, corrDivCollectorSM);    // Collector -> DIV_EXCHANGE + RTE
     graph->edges(corrDivCollectorSM, corrDivExchangeTask);    // Do EXCHANGE_DIV_INFO + RTE
     // Divergence part 2 sub-graph (corrector, parallel multi-mesh execution)
     graph->edges(corrDivExchangeTask, corrDivP2OrchSM);       // DivExchange -> DivP2 Orchestrator

@@ -33,8 +33,6 @@ Each sub-graph replaces a sequential task with:
 - **Files**: data/divergence_part2_data.h, state/divergence_part2_state.h, task/divergence_part2_kernel_task.h
 - **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
-## Planned Sub-Graphs
-
 ### 4. Corrector Step 1 (viscosity + mass FD + density)
 - **Task replaced**: CorrStep1Task
 - **Kernels**: COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL, DENSITY_KERNEL
@@ -48,18 +46,19 @@ Each sub-graph replaces a sequential task with:
 - **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ### 6. Corrector Divergence Part 1
-- **Task to replace**: CorrDivPart1Task
+- **Task replaced**: CorrDivPart1Task
 - **Kernel**: DIVERGENCE_PART_1_KERNEL(M, T, DT, NM)
 - **Pattern**: Pre-processing — sequential COMBUSTION_BC (OMESH access) in orchestrator, parallel kernel
-- **Difficulty**: Medium — COMBUSTION_BC reads OMESH(NOM)%Q for ghost cells
-- **Status**: NOT STARTED
+- **Files**: data/corr_div_part1_data.h, state/corr_div_part1_state.h, task/corr_div_part1_kernel_task.h
+- **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ### 7. Predictor/Corrector Div Setup (velocity flux)
-- **Tasks to replace**: PredDivSetupTask, CorrDivSetupTask
-- **Kernel**: VELOCITY_FLUX_KERNEL(M, T, DT, NM, ...)
+- **Tasks replaced**: PredDivSetupTask, CorrDivSetupTask
+- **Kernel**: VELOCITY_FLUX_KERNEL(M, T, DT, NM, ESTIMATED, GX, GY, GZ)
 - **Pattern**: Pre-processing — sequential VISCOSITY_BC (OMESH access), parallel VELOCITY_FLUX_KERNEL
-- **Difficulty**: Medium — VISCOSITY_BC reads OMESH; CC_IBM has pre/post kernel paths
-- **Status**: NOT STARTED
+- **Files**: data/div_setup_data.h, state/div_setup_state.h, task/div_setup_kernel_task.h
+- **Note**: Corrector orchestrator also runs AGGLOMERATION sequentially; CC_IBM pre/post kernel paths skipped (handled by full fds_velocity_flux fallback if needed)
+- **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ## Not Parallelizable (no kernel or cross-mesh dependency)
 
@@ -78,11 +77,6 @@ Each sub-graph replaces a sequential task with:
 | Kernel | File | Used By |
 |--------|------|---------|
 | BAROCLINIC_CORRECTION_KERNEL | velo_kernels.f90 | (internal to other kernels) |
-| COMPUTE_VISCOSITY_KERNEL | velo_kernels.f90 | Planned: CorrStep1 |
-| VELOCITY_FLUX_KERNEL | velo_kernels.f90 | Planned: DivSetup |
-| MASS_FINITE_DIFFERENCES_NEW_KERNEL | mass_kernels.f90 | Planned: CorrStep1 |
-| DENSITY_KERNEL | mass_kernels.f90 | Planned: CorrStep1, DensityPred |
-| DIVERGENCE_PART_1_KERNEL | divg_kernels.f90 | Planned: CorrDivPart1 |
 | Turb kernels (EX2G3D, FILL_EDGES, etc.) | turb_kernels.f90 | (called from COMPUTE_VISCOSITY_KERNEL) |
 | Wall kernels (PYROLYSIS, etc.) | wall_kernels.f90 | (called from WALL_BC orchestration) |
 | CCIB kernels | ccib_*_kernels.f90 | (called from CC_IBM paths) |
