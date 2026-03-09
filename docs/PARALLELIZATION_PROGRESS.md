@@ -42,11 +42,10 @@ Each sub-graph replaces a sequential task with:
 - **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ### 5. Density Predictor
-- **Task to replace**: DensityPredTask
+- **Task replaced**: DensityPredTask
 - **Kernel**: DENSITY_KERNEL(M, T, DT, NM)
-- **Pattern**: Simple (Pattern A)
-- **Difficulty**: Trivial — same kernel as CorrStep1
-- **Status**: NOT STARTED
+- **Files**: data/density_pred_data.h, state/density_pred_state.h, task/density_pred_kernel_task.h
+- **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ### 6. Corrector Divergence Part 1
 - **Task to replace**: CorrDivPart1Task

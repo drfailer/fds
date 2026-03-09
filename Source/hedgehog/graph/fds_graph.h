@@ -9,6 +9,7 @@
 #include "../data/velocity_predictor_data.h"
 #include "../data/divergence_part2_data.h"
 #include "../data/corr_step1_data.h"
+#include "../data/density_pred_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
@@ -16,6 +17,7 @@
 #include "../task/velocity_corrector_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/corr_step1_kernel_task.h"
+#include "../task/density_pred_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
@@ -23,6 +25,7 @@
 #include "../state/velocity_corrector_state.h"
 #include "../state/divergence_part2_state.h"
 #include "../state/corr_step1_state.h"
+#include "../state/density_pred_state.h"
 #include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -47,7 +50,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
 
     // --- Create predictor tasks (all sequential) ---
     auto predStep1       = std::make_shared<PredStep1Task>(1);
-    auto densityPred     = std::make_shared<DensityPredTask>(1);
+    // NOTE: densityPred replaced by density predictor sub-graph (see below)
     auto predDivSetup    = std::make_shared<PredDivSetupTask>(1);
     auto predWallDiv     = std::make_shared<PredWallDivTask>(1);
     // NOTE: divPart2Pred replaced by divergence part 2 sub-graph (see below)
@@ -103,6 +106,13 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(kernelThreads);
     auto corrStep1CollectorSM = std::make_shared<hh::StateManager<1, CorrStep1Work, MeshData>>(
         std::make_shared<CorrStep1Collector>(nmeshes), "CorrStep1Collector");
+
+    // --- Create density predictor sub-graph components ---
+    auto densPredOrchSM = std::make_shared<hh::StateManager<1, MeshData, DensityPredWork>>(
+        std::make_shared<DensityPredOrchestrator>(nmeshes), "DensPredOrch");
+    auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
+    auto densPredCollectorSM = std::make_shared<hh::StateManager<1, DensityPredWork, MeshData>>(
+        std::make_shared<DensityPredCollector>(nmeshes), "DensPredCollector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -220,8 +230,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
 
     // Predictor pipeline
     graph->edges(predStep1, predStep1BarrierSM);             // Passthrough barrier
-    graph->edges(predStep1BarrierSM, densityPred);
-    graph->edges(densityPred, collector1SM);                  // Collect for MESH_EXCHANGE(1)
+    // Density predictor sub-graph (parallel multi-mesh execution)
+    graph->edges(predStep1BarrierSM, densPredOrchSM);         // Barrier -> DensPred Orchestrator
+    graph->edges(densPredOrchSM, densPredKernelTask);          // Orchestrator -> Kernel (parallel)
+    graph->edges(densPredKernelTask, densPredCollectorSM);     // Kernel -> Collector
+    graph->edges(densPredCollectorSM, collector1SM);           // Collector -> MESH_EXCHANGE(1)
     graph->edges(collector1SM, meshExchange1);                // Do MESH_EXCHANGE(1)
     graph->edges(meshExchange1, predDivSetup);
     graph->edges(predDivSetup, predHvacCollectorSM);          // Collect for HVAC
