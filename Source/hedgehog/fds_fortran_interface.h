@@ -46,6 +46,7 @@ void fds_match_velocity(int nm);
 void fds_velocity_bc(double t, int nm, int estimated);
 
 // Thread-safe kernel wrappers (bypass orchestration, call kernels directly)
+void fds_velocity_predictor_kernel(int nm, double t, double dt);
 void fds_velocity_corrector_kernel(int nm, double t, double dt);
 void fds_check_divergence_kernel(int nm);
 

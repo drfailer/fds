@@ -6,13 +6,16 @@
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
 #include "../data/velocity_corrector_data.h"
+#include "../data/velocity_predictor_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
+#include "../task/velocity_predictor_kernel_task.h"
 #include "../task/velocity_corrector_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
+#include "../state/velocity_predictor_state.h"
 #include "../state/velocity_corrector_state.h"
 #include "change_timestep_subgraph.h"
 
@@ -29,9 +32,9 @@
 /// @param t Initial simulation time
 /// @param dt Initial time step
 /// @param tEnd End time
-/// @param velCorrKernelThreads Number of threads for velocity corrector kernel (1 for sequential)
+/// @param kernelThreads Number of threads for parallel kernel tasks (1 for sequential)
 /// @return Shared pointer to the constructed graph
-inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t velCorrKernelThreads) {
+inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t kernelThreads) {
 
     using GraphType = hh::Graph<1, MeshData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
@@ -42,7 +45,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto predDivSetup    = std::make_shared<PredDivSetupTask>(1);
     auto predWallDiv     = std::make_shared<PredWallDivTask>(1);
     auto divPart2Pred    = std::make_shared<DivPart2PredTask>(1);
-    auto velPredictor    = std::make_shared<VelPredictorTask>(1);
+    // NOTE: velPredictor replaced by velocity predictor sub-graph (see below)
     auto predFinal       = std::make_shared<PredFinalTask>(1);
 
     // --- Create corrector tasks (all sequential) ---
@@ -57,11 +60,19 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // NOTE: corrVelocity replaced by velocity corrector sub-graph (see below)
     auto corrFinal       = std::make_shared<CorrFinalTask>(1);
 
+    // --- Create velocity predictor sub-graph components ---
+    // Only the kernel task is parallelized; orchestrator and collector are always sequential
+    auto velPredOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityPredictorWork>>(
+        std::make_shared<VelocityPredictorOrchestrator>(nmeshes), "VelPredOrch");
+    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(kernelThreads);
+    auto velPredCollectorSM = std::make_shared<hh::StateManager<1, VelocityPredictorWork, MeshData>>(
+        std::make_shared<VelocityPredictorCollector>(nmeshes), "VelPredCollector");
+
     // --- Create velocity corrector sub-graph components ---
     // Only the kernel task is parallelized; orchestrator and collector are always sequential
     auto velCorrOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityCorrectorWork>>(
         std::make_shared<VelocityCorrectorOrchestrator>(nmeshes), "VelCorrOrch");
-    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(velCorrKernelThreads);
+    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
     auto velCorrCollectorSM = std::make_shared<hh::StateManager<1, VelocityCorrectorWork, MeshData>>(
         std::make_shared<VelocityCorrectorCollector>(nmeshes), "VelCorrCollector");
 
@@ -195,8 +206,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(predDivExchangeTask, divPart2Pred);
     graph->edges(divPart2Pred, predPressureCollectorSM);      // Collect for PRESSURE
     graph->edges(predPressureCollectorSM, predPressureTask);  // Do PRESSURE_ITERATION
-    graph->edges(predPressureTask, velPredictor);
-    graph->edges(velPredictor, changeTimeStepCollectorSM);    // Collect for CFL check
+    // Velocity predictor sub-graph (parallel multi-mesh execution)
+    graph->edges(predPressureTask, velPredOrchSM);            // Pressure → VelPredOrchestrator
+    graph->edges(velPredOrchSM, velPredKernelTask);           // Orchestrator → Kernel (parallel)
+    graph->edges(velPredKernelTask, velPredCollectorSM);      // Kernel → Collector
+    graph->edges(velPredCollectorSM, changeTimeStepCollectorSM); // Collector → CFL check
     graph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph); // Do CHANGE_TIME_STEP_LOOP (sub-graph)
     graph->edges(changeTimeStepSubgraph, collector3SM);      // Collect for MESH_EXCHANGE(3)
     graph->edges(collector3SM, meshExchange3);                 // Do MESH_EXCHANGE(3)
