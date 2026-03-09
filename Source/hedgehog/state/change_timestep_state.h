@@ -6,37 +6,39 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// State that manages the retry loop.
-/// After each retry sequence completion, checks if another retry is needed.
-/// Either cycles back (done=false) or marks as complete (done=true).
+/// State that manages the retry loop cycle.
 ///
-/// done_ starts as true because the cycle has not been entered yet.
-/// When the cycle is entered (retry needed), done_ is set to false.
-/// When the cycle completes (no more retries), done_ is set back to true.
-/// This allows canTerminate() to return true in both the "no retry" case
-/// (cycle never entered) and the "retry completed" case.
-class RetryLoopState : public hh::AbstractState<1, RetrySequenceData, RetrySequenceData> {
+/// Receives RetrySequenceData after each retry sequence pass.
+/// Two output types enable Hedgehog type-based routing:
+///   - RetrySequenceData → cycles back to retryDensity for another retry
+///   - MeshData → exits the subgraph (retry complete or no retry needed)
+///
+/// Termination is data-driven: the state records the latest (t, dt) from
+/// processed tokens and checks t + dt >= tEnd in canTerminate(). This is
+/// monotonic — once the simulation time reaches tEnd, the condition stays true.
+class RetryLoopState : public hh::AbstractState<1, RetrySequenceData, RetrySequenceData, MeshData> {
 public:
-    RetryLoopState() = default;
+    explicit RetryLoopState(double tEnd) : tEnd_(tEnd) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
-        // If already marked done (bypass from CheckRetryTask), pass through
+        // Record latest time values from flowing data
+        lastT_ = data->t;
+        lastDt_ = data->dt;
+
         if (data->done) {
-            done_ = true;
-            this->addResult(data);
+            // No retry needed (or retries complete): emit MeshData to exit
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
             return;
         }
 
-        // Cycle is active
-        done_ = false;
-
-        // Check stop status
+        // Check if we should stop due to instability
         int stopStatus = fds_get_stop_status();
         if (stopStatus != 0) {
-            // Stop condition met: mark as done and emit
-            data->done = true;
-            done_ = true;
-            this->addResult(data);
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
             return;
         }
 
@@ -46,10 +48,10 @@ public:
         fds_check_change_time_step(&needRetry, &newDt);
 
         if (!needRetry) {
-            // No more retries needed: mark as done and emit
-            data->done = true;
-            done_ = true;
-            this->addResult(data);
+            // Retries complete: emit MeshData to exit
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
         } else {
             // Another retry needed: cycle back with new dt
             auto retryData = std::make_shared<RetrySequenceData>(
@@ -58,28 +60,33 @@ public:
         }
     }
 
-    [[nodiscard]] bool isDone() const { return done_; }
+    [[nodiscard]] bool reachedEnd() const {
+        return lastT_ + lastDt_ >= tEnd_;
+    }
 
 private:
-    bool done_ = true;  // Start true: cycle not yet entered
+    double tEnd_;
+    double lastT_ = 0.0;
+    double lastDt_ = 0.0;
 };
 
 /// Custom state manager for the retry loop cycle.
-/// Overrides canTerminate() to break the cycle when retries are complete
-/// (or when the cycle was never entered).
+/// canTerminate() is data-driven: it checks whether the last processed token's
+/// t + dt has reached tEnd. This keeps the cycle alive across all time steps
+/// and only allows termination when the simulation time reaches the end.
 class RetryLoopStateManager
-    : public hh::StateManager<1, RetrySequenceData, RetrySequenceData> {
+    : public hh::StateManager<1, RetrySequenceData, RetrySequenceData, MeshData> {
 public:
     RetryLoopStateManager(
         std::shared_ptr<RetryLoopState> const &state,
         std::string const &name)
-        : hh::StateManager<1, RetrySequenceData, RetrySequenceData>(
+        : hh::StateManager<1, RetrySequenceData, RetrySequenceData, MeshData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
         auto ret = std::dynamic_pointer_cast<RetryLoopState>(
-            this->state())->isDone();
+            this->state())->reachedEnd();
         this->state()->unlock();
         return ret;
     }

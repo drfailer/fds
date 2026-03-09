@@ -7,7 +7,9 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Initial check: determines if retry is needed
+/// Initial check: determines if retry is needed.
+/// Always emits RetrySequenceData into the pipeline. If no retry is needed,
+/// sets done=true so all downstream tasks pass it through without processing.
 class CheckRetryTask : public hh::AbstractTask<1, BarrierData, RetrySequenceData> {
 public:
     CheckRetryTask()
@@ -21,7 +23,7 @@ public:
         fds_check_change_time_step(&needRetry, &newDt);
 
         if (!needRetry) {
-            // No retry needed: mark as done and bypass retry sequence
+            // No retry needed: mark as done, pass through pipeline to exit
             auto retryData = std::make_shared<RetrySequenceData>(
                 barrier->meshes, barrier->t(), barrier->dt(), -1, true);
             this->addResult(retryData);
@@ -34,23 +36,6 @@ public:
     }
 };
 
-/// Exit task: converts RetrySequenceData (done=true) to MeshData tokens
-class RetryExitTask : public hh::AbstractTask<1, RetrySequenceData, MeshData> {
-public:
-    RetryExitTask()
-        : hh::AbstractTask<1, RetrySequenceData, MeshData>("RetryExit", 1) {}
-
-    void execute(std::shared_ptr<RetrySequenceData> data) override {
-        // Only process if done flag is set
-        if (data->done) {
-            for (auto &md : data->meshes) {
-                this->addResult(md);
-            }
-        }
-        // If not done, drop the token (shouldn't happen with correct wiring)
-    }
-};
-
 /// Restore UVW and compute density for all meshes (per-mesh operations)
 class RetryDensityTask : public hh::AbstractTask<1, RetrySequenceData, RetrySequenceData> {
 public:
@@ -58,20 +43,15 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryDensity", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
-        // Drop if done (bypass: checkRetry sent directly to retryExit)
-        if (data->done) {
-            return;  // Drop - checkRetry already sent this to retryExit
-        }
+        if (data->done) { this->addResult(data); return; }
 
         fds_set_first_pass(0);
 
-        // Update mesh data tokens
         for (auto &md : data->meshes) {
             md->dt = data->dt;
             md->firstPass = false;
         }
 
-        // Restore and compute density for each mesh
         for (auto &md : data->meshes) {
             fds_cc_restore_uvw_unlinked(md->nm);
             fds_density(data->t, data->dt, md->nm);
@@ -88,6 +68,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryCCDensity", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         fds_cc_density(data->t, data->dt);
         fds_mesh_exchange(1);
         this->addResult(data);
@@ -101,6 +82,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryVelocityFlux", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         for (auto &md : data->meshes) {
             fds_set_baroclinic_false(md->nm);
             fds_viscosity_bc(md->nm, 0);
@@ -117,6 +99,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryHvac", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         fds_hvac_calc(data->t, data->dt, 0);
         this->addResult(data);
     }
@@ -129,6 +112,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryInitDiv", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         fds_initialize_divergence_integrals();
         this->addResult(data);
     }
@@ -141,6 +125,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryDivPart1", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         for (auto &md : data->meshes) {
             fds_wall_bc(data->t, data->dt, md->nm);
             fds_particle_momentum(data->dt, md->nm);
@@ -157,6 +142,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryDivExchange", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         fds_exchange_divergence_info();
         this->addResult(data);
     }
@@ -169,6 +155,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryDivPart2", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         for (auto &md : data->meshes) {
             fds_divergence_part_2(data->dt, md->nm);
         }
@@ -183,6 +170,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryPressure", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         fds_pressure_iteration(data->t, data->dt);
         fds_init_change_time_step(data->dt);
         this->addResult(data);
@@ -196,6 +184,7 @@ public:
         : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>("RetryVelocityPredictor", 1) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
+        if (data->done) { this->addResult(data); return; }
         for (auto &md : data->meshes) {
             fds_velocity_predictor(data->t + data->dt, data->dt, md->nm);
         }

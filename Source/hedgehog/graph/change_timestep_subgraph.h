@@ -10,17 +10,24 @@
 
 /// Build the time step retry sub-graph.
 ///
-/// This sub-graph replaces the monolithic ChangeTimeStepTask with a clean
-/// dataflow architecture:
-///   1. CheckRetryTask: determines if retry is needed
-///   2. Retry sequence: small focused tasks for each operation
-///   3. RetryLoopState: manages the loop (cycle or exit)
+/// Dataflow:
+///   CheckRetryTask → RetryDensity → ... → RetryVelocityPredictor → RetryLoopSM
 ///
-/// The retry loop re-runs the predictor sequence with reduced time step
-/// until CFL compliance is achieved.
+/// RetryLoopSM uses type-based routing for two output types:
+///   - RetrySequenceData → cycles back to RetryDensity for another retry
+///   - MeshData → exits the sub-graph (retry complete or no retry needed)
 ///
+/// When no retry is needed, CheckRetryTask sets done=true and all pipeline
+/// tasks pass the data through without processing. RetryLoopState then emits
+/// MeshData tokens to exit.
+///
+/// Termination is data-driven: RetryLoopState records (t, dt) from each token
+/// it processes. canTerminate() returns true when t + dt >= tEnd, which keeps
+/// the cycle alive across all time steps until the simulation ends.
+///
+/// @param tEnd Simulation end time (used for data-driven cycle termination)
 /// @return Shared pointer to the constructed sub-graph
-inline auto buildChangeTimeStepSubgraph() {
+inline auto buildChangeTimeStepSubgraph(double tEnd) {
     using SubGraphType = hh::Graph<1, BarrierData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("ChangeTimeStepSubgraph");
 
@@ -36,22 +43,18 @@ inline auto buildChangeTimeStepSubgraph() {
     auto retryDivPart2 = std::make_shared<RetryDivergencePart2Task>();
     auto retryPressure = std::make_shared<RetryPressureTask>();
     auto retryVelocityPredictor = std::make_shared<RetryVelocityPredictorTask>();
-    auto retryExit = std::make_shared<RetryExitTask>();
 
-    // --- Create retry loop state manager (custom canTerminate to break cycle) ---
+    // --- Create retry loop state manager (data-driven canTerminate) ---
     auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
-        std::make_shared<RetryLoopState>(), "RetryLoop");
+        std::make_shared<RetryLoopState>(tEnd), "RetryLoop");
 
     // --- Wire the sub-graph ---
 
     // Entry point: CheckRetryTask receives BarrierData
     subgraph->inputs(checkRetry);
 
-    // CheckRetryTask outputs RetrySequenceData with two paths:
-    // 1. done=false → retry sequence (retryDensity will process)
-    // 2. done=true → direct to exit (retryExit will process)
-    subgraph->edges(checkRetry, retryDensity);  // Main path
-    subgraph->edges(checkRetry, retryExit);     // Bypass path for done=true
+    // CheckRetryTask always sends into the pipeline (done=true data passes through)
+    subgraph->edges(checkRetry, retryDensity);
 
     // Retry sequence (linear pipeline)
     subgraph->edges(retryDensity, retryCCDensity);
@@ -64,18 +67,14 @@ inline auto buildChangeTimeStepSubgraph() {
     subgraph->edges(retryDivPart2, retryPressure);
     subgraph->edges(retryPressure, retryVelocityPredictor);
 
-    // End of retry sequence → RetryLoopState (check if another retry needed)
+    // End of retry sequence → RetryLoopState
     subgraph->edges(retryVelocityPredictor, retryLoopSM);
 
-    // RetryLoopState → cycle back to retry sequence OR exit
-    // Both edges exist, but only one path will be taken based on done flag:
-    // - done=false: cycle to retryDensity (which processes and loops back)
-    // - done=true: passthrough to retryExit (which emits MeshData)
-    subgraph->edges(retryLoopSM, retryDensity);  // Cycle back for another retry
-    subgraph->edges(retryLoopSM, retryExit);     // Exit path
+    // Cycle: RetryLoopState emits RetrySequenceData → back to retryDensity
+    subgraph->edges(retryLoopSM, retryDensity);
 
-    // Graph output: RetryExitTask converts RetrySequenceData to MeshData
-    subgraph->outputs(retryExit);
+    // Exit: RetryLoopState emits MeshData → subgraph output
+    subgraph->outputs(retryLoopSM);
 
     return subgraph;
 }
