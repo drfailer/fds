@@ -67,34 +67,24 @@ int main(int argc, char *argv[]) {
     // Step 5: Signal that no more data will be pushed from outside.
     graph->finishPushingData();
 
-    // Step 6: Wait for the graph to produce final output and terminate.
-    // The graph outputs a single BarrierData from TerminationSink when simulation completes.
+    // Step 6: Wait for the graph to complete.
+    // TimestepLoopStateManager::canTerminate() breaks the main cycle when done.
     std::cout << "[FDS-HH] Waiting for graph termination..." << std::endl;
 
-    // Receive the final output token
-    graph->getBlockingResult();
+    graph->waitForTermination();
+
+    std::cout << "[FDS-HH] Graph terminated." << std::endl;
 
     // Flush Fortran I/O buffers to ensure all outputs are written to disk
-    // This is critical because waitForTermination() will hang, and test scripts
-    // use timeout to kill the process
     fds_flush_output_files();
 
-    // Step 7: Generate dot file for visualization BEFORE waitForTermination()
-    // (which will hang, so anything after it won't execute before timeout)
+    // Step 7: Generate dot file for visualization
     graph->createDotFile(
         "fds_hh_graph.dot",
         hh::ColorScheme::EXECUTION,
         hh::StructureOptions::QUEUE);
 
     std::cout << "[FDS-HH] Graph dot file written to fds_hh_graph.dot" << std::endl;
-
-    // NOTE: waitForTermination() will hang due to Hedgehog cycle termination limitations.
-    // However, it's required for proper cleanup in multi-process cases. All simulation
-    // outputs are flushed and written correctly before this point, so test scripts
-    // should use timeout to kill the process after outputs are verified.
-    graph->waitForTermination();
-
-    std::cout << "[FDS-HH] Graph terminated." << std::endl;
 
     // Step 8: Finalize FDS (deallocate solvers, MPI_Finalize, etc.)
     fds_finalize_all(t, dt);

@@ -44,10 +44,27 @@ private:
     bool done_ = false;
 };
 
-/// State manager for the time-stepping cycle.
-/// No custom canTerminate() needed - the graph terminates when final BarrierData
-/// is emitted to the output and all queues drain naturally.
-using TimestepLoopStateManager = hh::StateManager<1, BarrierData, MeshData, BarrierData>;
+/// Custom state manager for the time-stepping cycle.
+/// Overrides canTerminate() to break the cycle when the simulation is done.
+/// Without this, Hedgehog cannot terminate nodes in the cycle because they
+/// wait on each other indefinitely.
+class TimestepLoopStateManager
+    : public hh::StateManager<1, BarrierData, MeshData, BarrierData> {
+public:
+    TimestepLoopStateManager(
+        std::shared_ptr<TimestepLoopState> const &state,
+        std::string const &name)
+        : hh::StateManager<1, BarrierData, MeshData, BarrierData>(
+              state, name) {}
+
+    [[nodiscard]] bool canTerminate() const override {
+        this->state()->lock();
+        auto ret = std::dynamic_pointer_cast<TimestepLoopState>(
+            this->state())->isDone();
+        this->state()->unlock();
+        return ret;
+    }
+};
 
 /// Simple sink state for graph termination.
 /// Receives the final BarrierData (with done=true) and passes it to graph output.

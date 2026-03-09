@@ -38,8 +38,8 @@ inline auto buildChangeTimeStepSubgraph() {
     auto retryVelocityPredictor = std::make_shared<RetryVelocityPredictorTask>();
     auto retryExit = std::make_shared<RetryExitTask>();
 
-    // --- Create retry loop state manager ---
-    auto retryLoopSM = std::make_shared<hh::StateManager<1, RetrySequenceData, RetrySequenceData>>(
+    // --- Create retry loop state manager (custom canTerminate to break cycle) ---
+    auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
         std::make_shared<RetryLoopState>(), "RetryLoop");
 
     // --- Wire the sub-graph ---
