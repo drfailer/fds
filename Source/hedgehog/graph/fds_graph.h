@@ -8,18 +8,21 @@
 #include "../data/velocity_corrector_data.h"
 #include "../data/velocity_predictor_data.h"
 #include "../data/divergence_part2_data.h"
+#include "../data/corr_step1_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
 #include "../task/velocity_predictor_kernel_task.h"
 #include "../task/velocity_corrector_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
+#include "../task/corr_step1_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
 #include "../state/velocity_predictor_state.h"
 #include "../state/velocity_corrector_state.h"
 #include "../state/divergence_part2_state.h"
+#include "../state/corr_step1_state.h"
 #include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -52,7 +55,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto predFinal       = std::make_shared<PredFinalTask>(1);
 
     // --- Create corrector tasks (all sequential) ---
-    auto corrStep1       = std::make_shared<CorrStep1Task>(1);
+    // NOTE: corrStep1 replaced by corrector step 1 sub-graph (see below)
     auto corrDivSetup    = std::make_shared<CorrDivSetupTask>(1);
     auto corrCondens     = std::make_shared<CorrCondensTask>(1);
     auto corrParticle    = std::make_shared<CorrParticleTask>(1);
@@ -92,6 +95,14 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
     auto corrDivP2CollectorSM = std::make_shared<hh::StateManager<1, DivergencePart2Work, MeshData>>(
         std::make_shared<DivergencePart2Collector>(nmeshes), "CorrDivP2Collector");
+
+    // --- Create corrector step 1 sub-graph components ---
+    // Bundles COMPUTE_VISCOSITY + MASS_FINITE_DIFFERENCES + DENSITY kernels
+    auto corrStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, CorrStep1Work>>(
+        std::make_shared<CorrStep1Orchestrator>(nmeshes), "CorrStep1Orch");
+    auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(kernelThreads);
+    auto corrStep1CollectorSM = std::make_shared<hh::StateManager<1, CorrStep1Work, MeshData>>(
+        std::make_shared<CorrStep1Collector>(nmeshes), "CorrStep1Collector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -237,10 +248,13 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(meshExchange3, predFinal);
     graph->edges(predFinal, phaseTransCollectorSM);           // Collect for phase transition
     graph->edges(phaseTransCollectorSM, phaseTransTask);      // Do phase transition
-    graph->edges(phaseTransTask, corrStep1);                  // -> corrector
+    // Corrector step 1 sub-graph (parallel multi-mesh execution)
+    graph->edges(phaseTransTask, corrStep1OrchSM);            // PhaseTrans -> CorrStep1 Orchestrator
+    graph->edges(corrStep1OrchSM, corrStep1KernelTask);       // Orchestrator -> Kernel (parallel)
+    graph->edges(corrStep1KernelTask, corrStep1CollectorSM);  // Kernel -> Collector
 
     // Corrector pipeline
-    graph->edges(corrStep1, collector4SM);                    // Collect for MESH_EXCHANGE(4)
+    graph->edges(corrStep1CollectorSM, collector4SM);         // Collect for MESH_EXCHANGE(4)
     graph->edges(collector4SM, meshExchange4);                // Do MESH_EXCHANGE(4)
     graph->edges(meshExchange4, corrDivSetup);
     graph->edges(corrDivSetup, combustionCollectorSM);        // Collect for COMBUSTION

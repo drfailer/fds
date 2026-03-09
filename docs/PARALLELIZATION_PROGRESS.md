@@ -36,11 +36,10 @@ Each sub-graph replaces a sequential task with:
 ## Planned Sub-Graphs
 
 ### 4. Corrector Step 1 (viscosity + mass FD + density)
-- **Task to replace**: CorrStep1Task
+- **Task replaced**: CorrStep1Task
 - **Kernels**: COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL, DENSITY_KERNEL
-- **Pattern**: Multi-kernel (all three called sequentially per mesh, parallel across meshes)
-- **Difficulty**: Easy — all orchestration wrappers are pure timing wrappers
-- **Status**: NOT STARTED
+- **Files**: data/corr_step1_data.h, state/corr_step1_state.h, task/corr_step1_kernel_task.h
+- **Status**: COMPLETE - verified byte-identical (DEVC) across all 5 test cases
 
 ### 5. Density Predictor
 - **Task to replace**: DensityPredTask
