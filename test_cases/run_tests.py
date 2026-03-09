@@ -12,6 +12,7 @@ import subprocess
 import argparse
 import json
 import select
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 import time
@@ -24,7 +25,9 @@ GOLD_DIR = TEST_DIR / "gold"
 RUN_DIR = TEST_DIR / "run"
 BUILD_DIR = REPO_ROOT / "build_hh"
 FDS_HH = BUILD_DIR / "Source" / "hedgehog" / "fds_hh"
-FDS_ORIG = REPO_ROOT / "Build" / "ompi_gnu_linux_db" / "fds_ompi_gnu_linux_db"
+# Use fds6 from PATH
+FDS_ORIG_PATH = shutil.which('fds6')
+FDS_ORIG = Path(FDS_ORIG_PATH) if FDS_ORIG_PATH else None
 COMPARE_SCRIPT = TEST_DIR / "compare_csv.py"
 
 # Test cases configuration
@@ -94,6 +97,9 @@ class TestRunner:
 
     def check_executable(self, exe_path: Path, name: str) -> bool:
         """Check if executable exists."""
+        if exe_path is None:
+            self.log(f"{name} not found in PATH", "FAIL")
+            return False
         if not exe_path.exists():
             self.log(f"{name} not found at {exe_path}", "FAIL")
             return False
@@ -108,6 +114,7 @@ class TestRunner:
 
         For fds_hh: Monitors output and terminates process as soon as dot file is written
         (which happens right before the waitForTermination() hang).
+        For original FDS: Runs normally to completion.
 
         Args:
             input_file: Input .fds filename
@@ -132,71 +139,92 @@ class TestRunner:
         # Run FDS
         cmd = ['mpiexec', '--oversubscribe', '-n', '1', str(exe), input_file.name]
 
+        # Check if this is fds_hh (needs early termination) or original FDS
+        is_fds_hh = 'fds_hh' in exe.name
+
         try:
             start_time = time.time()
 
-            # Use Popen to monitor output in real-time and kill when complete
-            process = subprocess.Popen(
-                cmd,
-                cwd=work_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
+            if is_fds_hh:
+                # Use Popen to monitor output in real-time and kill when complete
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=work_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1
+                )
 
-            stdout_lines = []
-            completion_detected = False
+                stdout_lines = []
+                completion_detected = False
 
-            # Monitor stdout for completion signal
-            while True:
-                # Check if process is still running
-                if process.poll() is not None:
-                    break
+                # Monitor stdout for completion signal
+                while True:
+                    # Check if process is still running
+                    if process.poll() is not None:
+                        break
 
-                # Read available output with timeout
-                ready, _, _ = select.select([process.stdout], [], [], 0.1)
-                if ready:
-                    line = process.stdout.readline()
-                    if line:
-                        stdout_lines.append(line)
-                        if self.verbose:
-                            print(line, end='')
+                    # Read available output with timeout
+                    ready, _, _ = select.select([process.stdout], [], [], 0.1)
+                    if ready:
+                        line = process.stdout.readline()
+                        if line:
+                            stdout_lines.append(line)
+                            if self.verbose:
+                                print(line, end='')
 
-                        # Detect completion signal (dot file written = simulation complete)
-                        if "Graph dot file written" in line:
-                            completion_detected = True
-                            # Give it a moment to finish writing, then kill
-                            time.sleep(0.5)
-                            process.terminate()
-                            try:
-                                process.wait(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                process.kill()
-                                process.wait()
-                            break
+                            # Detect completion signal (dot file written = simulation complete)
+                            if "Graph dot file written" in line:
+                                completion_detected = True
+                                # Give it a moment to finish writing, then kill
+                                time.sleep(0.5)
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=2)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    process.wait()
+                                break
 
-                # Safety timeout
+                    # Safety timeout
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout:
+                        process.kill()
+                        process.wait()
+                        break
+
                 elapsed = time.time() - start_time
-                if elapsed > timeout:
-                    process.kill()
-                    process.wait()
-                    break
+            else:
+                # Original FDS: run to completion normally
+                result = subprocess.run(
+                    cmd,
+                    cwd=work_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
+                elapsed = time.time() - start_time
 
-            elapsed = time.time() - start_time
-            stdout = ''.join(stdout_lines)
+                if self.verbose:
+                    print(result.stdout)
+                    if result.stderr:
+                        print(result.stderr, file=sys.stderr)
 
             # Check for success
             out_file = work_dir / f"{chid}.out"
-            if completion_detected or out_file.exists():
+            if out_file.exists():
                 with open(out_file, 'r') as f:
                     content = f.read()
-                    if "Total Time:" in content:
+                    if "STOP: FDS completed successfully" in content or "Total Time:" in content:
                         return True, elapsed
 
             self.log(f"FDS did not complete successfully", "FAIL")
             return False, elapsed
 
+        except subprocess.TimeoutExpired:
+            self.log(f"FDS timed out after {timeout}s", "FAIL")
+            return False, timeout
         except Exception as e:
             self.log(f"Error running FDS: {e}", "FAIL")
             import traceback
@@ -321,8 +349,8 @@ class TestRunner:
 
         # Choose which FDS to use
         if use_original:
-            if not self.check_executable(FDS_ORIG, "FDS original"):
-                self.log("Original FDS not available, using fds_hh", "WARN")
+            if FDS_ORIG is None or not self.check_executable(FDS_ORIG, "fds6"):
+                self.log("fds6 not found in PATH, using fds_hh", "WARN")
                 exe = FDS_HH
             else:
                 exe = FDS_ORIG
