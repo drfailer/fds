@@ -331,6 +331,15 @@ RECURSIVE SUBROUTINE C_FDS_CHECK_DIVERGENCE_KERNEL(NM) BIND(C, NAME="fds_check_d
     CALL CHECK_DIVERGENCE_KERNEL(MESHES(NM))
 END SUBROUTINE C_FDS_CHECK_DIVERGENCE_KERNEL
 
+RECURSIVE SUBROUTINE C_FDS_DIVERGENCE_PART_2_KERNEL(NM, DT) BIND(C, NAME="fds_divergence_part_2_kernel")
+    USE DIVG_KERNELS, ONLY: DIVERGENCE_PART_2_KERNEL
+    USE MESH_VARIABLES, ONLY: MESHES
+    INTEGER(C_INT), VALUE :: NM
+    REAL(C_DOUBLE), VALUE :: DT
+    ! Call kernel directly without POINT_TO_MESH - thread-safe
+    CALL DIVERGENCE_PART_2_KERNEL(MESHES(NM), DT, NM)
+END SUBROUTINE C_FDS_DIVERGENCE_PART_2_KERNEL
+
 !==============================================================================
 ! Output subroutines
 !==============================================================================
