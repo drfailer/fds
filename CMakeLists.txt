@@ -57,6 +57,7 @@ set(FDS_FORTRAN_SOURCES
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_exchange.f90
     ${CMAKE_SOURCE_DIR}/Source/ccib/ccib_init.f90
     ${CMAKE_SOURCE_DIR}/Source/radi.f90
+    ${CMAKE_SOURCE_DIR}/Source/part_kernels.f90
     ${CMAKE_SOURCE_DIR}/Source/part.f90
     ${CMAKE_SOURCE_DIR}/Source/vege.f90
     ${CMAKE_SOURCE_DIR}/Source/ctrl.f90

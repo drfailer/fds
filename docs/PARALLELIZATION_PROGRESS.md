@@ -28,7 +28,7 @@ The full pipeline to parallelize an FDS routine:
    See: METHOD_SUBGRAPH.md
 ```
 
-## Completed Sub-Graphs (7 sub-graphs, 9 graph node replacements)
+## Completed Sub-Graphs (11 sub-graphs, 13 graph node replacements)
 
 ### 1. Velocity Corrector (corrector phase) — Pattern A
 - **Task replaced**: CorrVelocityTask
@@ -62,58 +62,86 @@ The full pipeline to parallelize an FDS routine:
 - **Sequential pre-processing**: VISCOSITY_BC (reads OMESH%MU/D/DS) + AGGLOMERATION (corr only)
 - **Kernel**: VELOCITY_FLUX_KERNEL
 
-All verified byte-identical (DEVC) across 5 test cases (1/3/4/5-mesh configurations).
+### 8. Predictor Step 1 (insert particles + viscosity + mass FD) — Pattern B
+- **Task replaced**: PredStep1Task
+- **Sequential pre-processing**: INSERT_ALL_PARTICLES (cross-mesh, global state)
+- **Kernels**: COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL
+- **Files**: data/pred_step1_data.h, state/pred_step1_state.h, task/pred_step1_kernel_task.h
 
-## Remaining Sequential Tasks (not parallelizable with current kernels)
+### 9. Corrector Condensation — Pattern A
+- **Task replaced**: CorrCondensTask
+- **Kernel**: CONDENSATION_EVAPORATION_KERNEL (new extraction from fire.f90)
+- **Files**: data/corr_condens_data.h, state/corr_condens_state.h, task/corr_condens_kernel_task.h
+
+### 10. Predictor Wall + Divergence — Pattern B
+- **Task replaced**: PredWallDivTask
+- **Sequential pre-processing**: WALL_BC (reads OMESH for ghost cells)
+- **Kernels**: PARTICLE_MOMENTUM_TRANSFER_KERNEL (new extraction from part.f90), DIVERGENCE_PART_1_KERNEL
+- **Files**: data/pred_wall_div_data.h, state/pred_wall_div_state.h, task/pred_wall_div_kernel_task.h
+
+### 11. Corrector Particle Step — Pattern B
+- **Task replaced**: CorrParticleTask
+- **Sequential pre-processing**: PARTICLE_MASS_ENERGY_TRANSFER + MOVE_PARTICLES (cross-mesh transfer)
+- **Kernel**: PARTICLE_MOMENTUM_TRANSFER_KERNEL
+- **Files**: data/corr_particle_data.h, state/corr_particle_state.h, task/corr_particle_kernel_task.h
+
+All verified byte-identical (DEVC) across 1-mesh and 4-mesh test configurations.
+
+## New Kernel Extractions (this session)
+
+| Kernel | Source Module | Kernel Module | Lines |
+|--------|---------------|---------------|-------|
+| PARTICLE_MOMENTUM_TRANSFER_KERNEL | part.f90 | part_kernels.f90 | 48 |
+| CONDENSATION_EVAPORATION_KERNEL | fire.f90 | fire_kernels.f90 | 303 |
+
+## Remaining Sequential Tasks (not parallelizable)
 
 | Task | Routines | Blocker |
 |------|----------|---------|
-| PredStep1Task | INSERT_ALL_PARTICLES, COMPUTE_VISCOSITY, MASS_FINITE_DIFFERENCES, DENSITY | INSERT_ALL_PARTICLES has no kernel |
-| PredWallDivTask | WALL_BC, PARTICLE_MOMENTUM, DIVERGENCE_PART_1 | WALL_BC: 239-line orchestration, OMESH access |
 | PredFinalTask | MATCH_VELOCITY, VELOCITY_BC, CC_END_STEP | MATCH_VELOCITY/VELOCITY_BC use OMESH |
-| CorrCondensTask | CONDENSATION_EVAPORATION | No kernel, uses POINT_TO_MESH |
-| CorrParticleTask | MOVE_PARTICLES, PARTICLE_MASS_ENERGY, REMOVE_PARTICLES | No kernels, cross-mesh particle transfer |
-| CorrWallBCTask | WALL_BC | 239-line orchestration, global state, OMESH |
-| CorrRadiationTask | COMPUTE_RADIATION | Complex iterative solver, no kernel |
+| CorrWallBCTask | WALL_BC | 239-line orchestration, OMESH in ASSIGN_GHOST_VALUE, SURFACE_HEAT_TRANSFER |
+| CorrRadiationTask | COMPUTE_RADIATION | Complex iterative solver, no kernel, low priority |
 | CorrFinalTask | MATCH_VELOCITY, VELOCITY_BC, CC_END_STEP, outputs | OMESH access in velocity routines |
 | All barrier tasks | MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC, etc. | Inherently global/sequential |
 
+## Analysis of Remaining Tasks
+
+### PredFinalTask / CorrFinalTask
+MATCH_VELOCITY and VELOCITY_BC both read OMESH data. These routines coordinate velocity values across mesh boundaries — fundamentally sequential. No kernel extraction possible without redesigning the inter-mesh velocity matching.
+
+### CorrWallBCTask
+WALL_BC (wall.f90) is a 239-line orchestration routine. Key sub-routines:
+- **ASSIGN_GHOST_VALUE**: Heavy OMESH access (ghost cell interpolation) → must stay sequential
+- **SURFACE_HEAT_TRANSFER**: 95% cell-local, but INTERPOLATED_BC case uses OMESH → mixed
+- **CALCULATE_ZZ_F**: 95% cell-local, but CONSUME_MASS uses OMESH → mixed
+- **CALCULATE_RHO_F**: Pure cell-local → kernel candidate
+- **NEAR_SURFACE_GAS_VARIABLES**: Pure cell-local → kernel candidate
+- Already extracted kernels: CALCULATE_RHO_D_F, CALC_DEPOSITION, PYROLYSIS (in wall_kernels.f90)
+
+Decomposition is possible but requires splitting individual sub-routines (e.g., SURFACE_HEAT_TRANSFER) into OMESH and non-OMESH parts. Medium complexity, moderate ROI.
+
+### CorrRadiationTask
+COMPUTE_RADIATION is an iterative solver with complex internal state management. Low priority for parallelization.
+
+### Barrier Tasks
+MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC are inherently global synchronization points that operate across all meshes simultaneously. They cannot be parallelized within the current architecture.
+
 ## Next Steps
 
-### Phase 1: Extract More Kernels
+### Phase 1: WALL_BC Decomposition (medium priority)
 
-The remaining sequential tasks contain routines that **could** become kernels but haven't been extracted yet. These are the candidates for new kernel extraction work (see METHOD_KERNEL_EXTRACTION.md):
+The most impactful remaining work would decompose WALL_BC into:
+1. Sequential: ASSIGN_GHOST_VALUE + INTERPOLATED_BC part of SURFACE_HEAT_TRANSFER + CONSUME_MASS part of CALCULATE_ZZ_F
+2. Parallel kernels: NEAR_SURFACE_GAS_VARIABLES + main SURFACE_HEAT_TRANSFER + main CALCULATE_ZZ_F + CALCULATE_RHO_F
 
-#### 1a. PredStep1Task — partial parallelization
-
-PredStep1Task calls 4 routines. Three already have kernels (COMPUTE_VISCOSITY, MASS_FINITE_DIFFERENCES, DENSITY) but INSERT_ALL_PARTICLES does not. Options:
-
-- **Extract INSERT_ALL_PARTICLES kernel**: Requires analysis of particle insertion logic for thread safety. If it only accesses `MESHES(NM)`, it's a candidate.
-- **Split the task**: Move the 3 kernel-ready routines into a sub-graph, keep INSERT_ALL_PARTICLES sequential before it.
-
-#### 1b. WALL_BC decomposition
-
-WALL_BC (wall.f90) is a 239-line orchestration routine that calls multiple sub-routines. Some of its callees (PYROLYSIS, CALCULATE_RHO_D_F) already have kernel extractions in `wall_kernels.f90`. A deeper decomposition could:
-
-- Extract the per-wall-cell computation loops as kernels
-- Keep the ghost-cell exchange (OMESH access) sequential
-- Apply Pattern B (sequential BC + parallel kernel)
-
-#### 1c. CONDENSATION_EVAPORATION kernel
-
-CONDENSATION_EVAPORATION (fire.f90) uses `POINT_TO_MESH(NM)` but does not access `OMESH`. It could be a kernel extraction candidate if the mesh-pointer variables are replaced with `M%` prefixes.
-
-#### 1d. Particle routines
-
-MOVE_PARTICLES and PARTICLE_MASS_ENERGY_TRANSFER use `POINT_TO_MESH` but the cross-mesh particle transfer (REMOVE_PARTICLES) makes the overall particle step hard to parallelize. Individual routines could still be kernelized.
-
-#### 1e. COMPUTE_RADIATION
-
-The radiation solver is iterative and complex. It may benefit from a dedicated analysis to identify parallelizable inner loops. Low priority.
+This would require:
+- Splitting SURFACE_HEAT_TRANSFER into kernel (most BC types) and orchestration (INTERPOLATED_BC)
+- Splitting CALCULATE_ZZ_F into kernel (species BC) and orchestration (CONSUME_MASS)
+- Creating new kernel routines with M% prefix
 
 ### Phase 2: CC_IBM Integration
 
-The current DivSetup sub-graph bypasses CC_IBM pre/post kernel processing (calls `fds_velocity_flux_kernel` directly instead of the full `fds_velocity_flux`). For CC_IBM cases:
+The current DivSetup sub-graph bypasses CC_IBM pre/post kernel processing. For CC_IBM cases:
 
 - `CC_VELOCITY_BC` reads OMESH (115 occurrences) → must stay sequential
 - `CUTFACE_VELOCITIES` and `CC_VELOCITY_FLUX` are in `ccib_velocity_kernels.f90` → could run in parallel
@@ -136,9 +164,26 @@ Currently FDS uses MPI for multi-mesh (one process per mesh group). The Hedgehog
 2. **Load balancing**: Assign meshes to MPI ranks considering both mesh count and kernel thread availability
 3. **MESH_EXCHANGE optimization**: Overlap MPI communication with kernel computation using Hedgehog's asynchronous task execution
 
-## Unused Thread-Safe Kernels
+## Complete Kernel Module Inventory
 
-These kernels exist in `*_kernels.f90` but are not directly used in sub-graphs (they're called internally by other kernels or from orchestration code):
+### Directly Used in Sub-Graphs
+
+| Kernel | File | Sub-Graph |
+|--------|------|-----------|
+| VELOCITY_PREDICTOR_KERNEL | velo_kernels.f90 | VelocityPredictor |
+| CHECK_STABILITY_KERNEL | velo_kernels.f90 | VelocityPredictor |
+| VELOCITY_CORRECTOR_KERNEL | velo_kernels.f90 | VelocityCorrector |
+| CHECK_DIVERGENCE_KERNEL | divg_kernels.f90 | VelocityCorrector |
+| DIVERGENCE_PART_1_KERNEL | divg_kernels.f90 | CorrDivPart1, PredWallDiv |
+| DIVERGENCE_PART_2_KERNEL | divg_kernels.f90 | DivPart2 (pred+corr) |
+| COMPUTE_VISCOSITY_KERNEL | velo_kernels.f90 | CorrStep1, PredStep1 |
+| VELOCITY_FLUX_KERNEL | velo_kernels.f90 | DivSetup (pred+corr) |
+| MASS_FINITE_DIFFERENCES_NEW_KERNEL | mass_kernels.f90 | CorrStep1, PredStep1 |
+| DENSITY_KERNEL | mass_kernels.f90 | CorrStep1, DensityPred |
+| CONDENSATION_EVAPORATION_KERNEL | fire_kernels.f90 | CorrCondens |
+| PARTICLE_MOMENTUM_TRANSFER_KERNEL | part_kernels.f90 | PredWallDiv, CorrParticle |
+
+### Indirectly Used (called by other kernels)
 
 | Kernel | File | Called By |
 |--------|------|-----------|

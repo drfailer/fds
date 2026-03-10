@@ -12,6 +12,10 @@
 #include "../data/density_pred_data.h"
 #include "../data/corr_div_part1_data.h"
 #include "../data/div_setup_data.h"
+#include "../data/pred_step1_data.h"
+#include "../data/corr_condens_data.h"
+#include "../data/pred_wall_div_data.h"
+#include "../data/corr_particle_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
@@ -22,6 +26,10 @@
 #include "../task/density_pred_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
+#include "../task/pred_step1_kernel_task.h"
+#include "../task/corr_condens_kernel_task.h"
+#include "../task/pred_wall_div_kernel_task.h"
+#include "../task/corr_particle_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
@@ -32,6 +40,10 @@
 #include "../state/density_pred_state.h"
 #include "../state/corr_div_part1_state.h"
 #include "../state/div_setup_state.h"
+#include "../state/pred_step1_state.h"
+#include "../state/corr_condens_state.h"
+#include "../state/pred_wall_div_state.h"
+#include "../state/corr_particle_state.h"
 #include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -55,10 +67,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
     // --- Create predictor tasks (all sequential) ---
-    auto predStep1       = std::make_shared<PredStep1Task>(1);
+    // NOTE: predStep1 replaced by pred step 1 sub-graph (see below)
     // NOTE: densityPred replaced by density predictor sub-graph (see below)
     // NOTE: predDivSetup replaced by div setup sub-graph (see below)
-    auto predWallDiv     = std::make_shared<PredWallDivTask>(1);
+    // NOTE: predWallDiv replaced by pred wall div sub-graph (see below)
     // NOTE: divPart2Pred replaced by divergence part 2 sub-graph (see below)
     // NOTE: velPredictor replaced by velocity predictor sub-graph (see below)
     auto predFinal       = std::make_shared<PredFinalTask>(1);
@@ -66,8 +78,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // --- Create corrector tasks (all sequential) ---
     // NOTE: corrStep1 replaced by corrector step 1 sub-graph (see below)
     // NOTE: corrDivSetup replaced by div setup sub-graph (see below)
-    auto corrCondens     = std::make_shared<CorrCondensTask>(1);
-    auto corrParticle    = std::make_shared<CorrParticleTask>(1);
+    // NOTE: corrCondens replaced by corr condens sub-graph (see below)
+    // NOTE: corrParticle replaced by corr particle sub-graph (see below)
     auto corrWallBC      = std::make_shared<CorrWallBCTask>(1);
     auto corrRadiation   = std::make_shared<CorrRadiationTask>(1);
     // NOTE: corrDivPart1 replaced by corr div part 1 sub-graph (see below)
@@ -143,6 +155,38 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
     auto corrDivSetupCollectorSM = std::make_shared<hh::StateManager<1, DivSetupWork, MeshData>>(
         std::make_shared<DivSetupCollector>(nmeshes), "CorrDivSetupCollector");
+
+    // --- Create predictor step 1 sub-graph components ---
+    // Sequential INSERT_ALL_PARTICLES in orchestrator, parallel COMPUTE_VISCOSITY + MASS_FD kernels
+    auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, PredStep1Work>>(
+        std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
+    auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(kernelThreads);
+    auto predStep1CollectorSM = std::make_shared<hh::StateManager<1, PredStep1Work, MeshData>>(
+        std::make_shared<PredStep1Collector>(nmeshes), "PredStep1Collector");
+
+    // --- Create corrector condensation sub-graph components ---
+    // Pure kernel (Pattern A): CONDENSATION_EVAPORATION_KERNEL
+    auto corrCondensOrchSM = std::make_shared<hh::StateManager<1, MeshData, CorrCondensWork>>(
+        std::make_shared<CorrCondensOrchestrator>(nmeshes), "CorrCondensOrch");
+    auto corrCondensKernelTask = std::make_shared<CorrCondensKernelTask>(kernelThreads);
+    auto corrCondensCollectorSM = std::make_shared<hh::StateManager<1, CorrCondensWork, MeshData>>(
+        std::make_shared<CorrCondensCollector>(nmeshes), "CorrCondensCollector");
+
+    // --- Create predictor wall+div sub-graph components ---
+    // Sequential WALL_BC in orchestrator, parallel PARTICLE_MOMENTUM + DIVERGENCE_PART_1 kernels
+    auto predWallDivOrchSM = std::make_shared<hh::StateManager<1, MeshData, PredWallDivWork>>(
+        std::make_shared<PredWallDivOrchestrator>(nmeshes), "PredWallDivOrch");
+    auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
+    auto predWallDivCollectorSM = std::make_shared<hh::StateManager<1, PredWallDivWork, MeshData>>(
+        std::make_shared<PredWallDivCollector>(nmeshes), "PredWallDivCollector");
+
+    // --- Create corrector particle sub-graph components ---
+    // Sequential PARTICLE_MASS_ENERGY + MOVE_PARTICLES in orchestrator, parallel PARTICLE_MOMENTUM_KERNEL
+    auto corrParticleOrchSM = std::make_shared<hh::StateManager<1, MeshData, CorrParticleWork>>(
+        std::make_shared<CorrParticleOrchestrator>(nmeshes), "CorrParticleOrch");
+    auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
+    auto corrParticleCollectorSM = std::make_shared<hh::StateManager<1, CorrParticleWork, MeshData>>(
+        std::make_shared<CorrParticleCollector>(nmeshes), "CorrParticleCollector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -255,11 +299,13 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
 
     // --- Wire the graph ---
 
-    // Graph input goes to predStep1
-    graph->inputs(predStep1);
+    // Graph input goes to predStep1 orchestrator
+    graph->inputs(predStep1OrchSM);
 
-    // Predictor pipeline
-    graph->edges(predStep1, predStep1BarrierSM);             // Passthrough barrier
+    // Predictor step 1 sub-graph (sequential INSERT_ALL_PARTICLES + parallel kernels)
+    graph->edges(predStep1OrchSM, predStep1KernelTask);       // Orchestrator -> Kernel (parallel)
+    graph->edges(predStep1KernelTask, predStep1CollectorSM);  // Kernel -> Collector
+    graph->edges(predStep1CollectorSM, predStep1BarrierSM);   // Collector -> Passthrough barrier
     // Density predictor sub-graph (parallel multi-mesh execution)
     graph->edges(predStep1BarrierSM, densPredOrchSM);         // Barrier -> DensPred Orchestrator
     graph->edges(densPredOrchSM, densPredKernelTask);          // Orchestrator -> Kernel (parallel)
@@ -274,8 +320,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(predHvacCollectorSM, predHvacTask);          // Do HVAC_CALC
     graph->edges(predHvacTask, predInitDivCollectorSM);       // Collect for INIT_DIV
     graph->edges(predInitDivCollectorSM, predInitDivTask);    // Do INIT_DIV_INTEGRALS
-    graph->edges(predInitDivTask, predWallDiv);               // wall_bc + particle_momentum + div_part_1
-    graph->edges(predWallDiv, predDivCollectorSM);            // Collect for DIV_EXCHANGE
+    // Predictor wall+div sub-graph (sequential WALL_BC + parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels)
+    graph->edges(predInitDivTask, predWallDivOrchSM);          // InitDiv -> PredWallDiv Orchestrator
+    graph->edges(predWallDivOrchSM, predWallDivKernelTask);    // Orchestrator -> Kernel (parallel)
+    graph->edges(predWallDivKernelTask, predWallDivCollectorSM); // Kernel -> Collector
+    graph->edges(predWallDivCollectorSM, predDivCollectorSM);  // Collector -> DIV_EXCHANGE
     graph->edges(predDivCollectorSM, predDivExchangeTask);    // Do EXCHANGE_DIV_INFO
     // Divergence part 2 sub-graph (predictor, parallel multi-mesh execution)
     graph->edges(predDivExchangeTask, predDivP2OrchSM);       // DivExchange -> DivP2 Orchestrator
@@ -310,10 +359,16 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(combustionCollectorSM, combustionTask);      // Do COMBUSTION
     graph->edges(combustionTask, corrHvacCollectorSM);        // Collect for HVAC
     graph->edges(corrHvacCollectorSM, corrHvacTask);          // Do HVAC_CALC
-    graph->edges(corrHvacTask, corrCondens);
-    graph->edges(corrCondens, corrCondensBarrierSM);          // Passthrough barrier
-    graph->edges(corrCondensBarrierSM, corrParticle);
-    graph->edges(corrParticle, collector7SM);                 // Collect for MESH_EXCHANGE(7)
+    // Corrector condensation sub-graph (parallel CONDENSATION_EVAPORATION_KERNEL)
+    graph->edges(corrHvacTask, corrCondensOrchSM);             // HVAC -> CorrCondens Orchestrator
+    graph->edges(corrCondensOrchSM, corrCondensKernelTask);    // Orchestrator -> Kernel (parallel)
+    graph->edges(corrCondensKernelTask, corrCondensCollectorSM); // Kernel -> Collector
+    graph->edges(corrCondensCollectorSM, corrCondensBarrierSM); // Collector -> Passthrough barrier
+    // Corrector particle sub-graph (sequential MASS_ENERGY + MOVE + parallel MOMENTUM kernel)
+    graph->edges(corrCondensBarrierSM, corrParticleOrchSM);    // Barrier -> CorrParticle Orchestrator
+    graph->edges(corrParticleOrchSM, corrParticleKernelTask);  // Orchestrator -> Kernel (parallel)
+    graph->edges(corrParticleKernelTask, corrParticleCollectorSM); // Kernel -> Collector
+    graph->edges(corrParticleCollectorSM, collector7SM);       // Collector -> MESH_EXCHANGE(7)
     graph->edges(collector7SM, meshExchange7);                // Do MESH_EXCHANGE(7)
     graph->edges(meshExchange7, corrWallBC);
     graph->edges(corrWallBC, collector6aSM);                  // Collect for MESH_EXCHANGE(6)
@@ -349,7 +404,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(timestepTask, timestepLoopSM);
 
     // Cycle: timestep loop state -> back to predictor (MeshData output)
-    graph->edges(timestepLoopSM, predStep1);
+    graph->edges(timestepLoopSM, predStep1OrchSM);
 
     // Termination path: timestep loop state -> termination sink (BarrierData output when done)
     graph->edges(timestepLoopSM, terminationSinkSM);

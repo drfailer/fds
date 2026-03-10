@@ -55,6 +55,8 @@ void fds_mass_finite_differences_kernel(int nm);
 void fds_density_kernel(int nm, double t, double dt);
 void fds_divergence_part_1_kernel(int nm, double t, double dt);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
+void fds_particle_momentum_kernel(int nm, double dt);
+void fds_condensation_kernel(int nm, double dt);
 
 // Corrector phase per-mesh subroutines
 void fds_combustion_bc(int nm);
