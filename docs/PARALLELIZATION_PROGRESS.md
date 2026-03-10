@@ -221,13 +221,29 @@ Super-linear speedup (9x from 4 threads) is due to better cache utilization on s
 
 **Collector/overhead**: Negligible (< 0.2% for collectors, states). The Hedgehog framework introduces minimal overhead.
 
-### Phase 4: Multi-Process + Multi-Thread
+### Phase 4: Future Work
+
+#### 4a. Breaking the Sequential Bottleneck
+
+The 49% sequential fraction limits speedup to ~2x. To go further, the fundamental blocker is `POINT_TO_MESH` — it sets module-level pointer aliases that are inherently not thread-safe. Options:
+
+1. **Thread-local POINT_TO_MESH**: Use OpenMP `THREADPRIVATE` for mesh pointer aliases. Would require changes to every module that uses `CALL POINT_TO_MESH`. Medium effort, high impact.
+2. **Explicit mesh passing**: Convert remaining sequential routines (WALL_BC, MATCH_VELOCITY, VELOCITY_BC, COMPUTE_RADIATION) to take `TYPE(MESH_TYPE)` as argument. Very large refactor (~50K+ lines affected).
+3. **Selective decomposition**: Split WALL_BC's SURFACE_HEAT_TRANSFER to separate INTERPOLATED_BC (OMESH) from other BC types (pure local). Medium effort, moderate impact (~800ms saved).
+
+#### 4b. Multi-Process + Multi-Thread (Hybrid MPI+Hedgehog)
 
 Currently FDS uses MPI for multi-mesh (one process per mesh group). The Hedgehog integration adds intra-process parallelism (multiple threads for meshes within one process). The next frontier:
 
 1. **Hybrid MPI+threads**: Each MPI rank runs a Hedgehog graph with `kernelThreads > 1`
 2. **Load balancing**: Assign meshes to MPI ranks considering both mesh count and kernel thread availability
 3. **MESH_EXCHANGE optimization**: Overlap MPI communication with kernel computation using Hedgehog's asynchronous task execution
+
+#### 4c. Architectural Improvements
+
+1. **Pipeline parallelism**: Overlap predictor/corrector computation of different meshes (requires decoupling barrier synchronization)
+2. **Asynchronous MESH_EXCHANGE**: Start communication early, overlap with computation
+3. **NUMA-aware mesh assignment**: Pin meshes to NUMA nodes for better memory locality
 
 ## Complete Kernel Module Inventory
 
