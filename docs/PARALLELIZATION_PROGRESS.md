@@ -93,6 +93,10 @@ All verified byte-identical (DEVC) across 1-mesh and 4-mesh test configurations.
 |--------|---------------|---------------|-------|
 | PARTICLE_MOMENTUM_TRANSFER_KERNEL | part.f90 | part_kernels.f90 | 48 |
 | CONDENSATION_EVAPORATION_KERNEL | fire.f90 | fire_kernels.f90 | 303 |
+| CALCULATE_RHO_F_KERNEL | wall.f90 | wall_kernels.f90 | 60 |
+| NEAR_SURFACE_GAS_VARIABLES_KERNEL | wall.f90 | wall_kernels.f90 | 142 |
+| SCALAR_TO_POINT_K | wall.f90 | wall_kernels.f90 | 20 |
+| GET_TRILINEAR_WEIGHTS_K | wall.f90 | wall_kernels.f90 | 55 |
 
 ## Remaining Sequential Tasks (not parallelizable)
 
@@ -114,8 +118,8 @@ WALL_BC (wall.f90) is a 239-line orchestration routine. Key sub-routines:
 - **ASSIGN_GHOST_VALUE**: Heavy OMESH access (ghost cell interpolation) → must stay sequential
 - **SURFACE_HEAT_TRANSFER**: 95% cell-local, but INTERPOLATED_BC case uses OMESH → mixed
 - **CALCULATE_ZZ_F**: 95% cell-local, but CONSUME_MASS uses OMESH → mixed
-- **CALCULATE_RHO_F**: Pure cell-local → kernel candidate
-- **NEAR_SURFACE_GAS_VARIABLES**: Pure cell-local → kernel candidate
+- **CALCULATE_RHO_F**: Pure cell-local → ✓ extracted as CALCULATE_RHO_F_KERNEL
+- **NEAR_SURFACE_GAS_VARIABLES**: Pure cell-local → ✓ extracted as NEAR_SURFACE_GAS_VARIABLES_KERNEL (with helpers SCALAR_TO_POINT_K, GET_TRILINEAR_WEIGHTS_K)
 - Already extracted kernels: CALCULATE_RHO_D_F, CALC_DEPOSITION, PYROLYSIS (in wall_kernels.f90)
 
 Decomposition is possible but requires splitting individual sub-routines (e.g., SURFACE_HEAT_TRANSFER) into OMESH and non-OMESH parts. Medium complexity, moderate ROI.
@@ -128,24 +132,44 @@ MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC are inherently global synchronizati
 
 ## Next Steps
 
-### Phase 1: WALL_BC Decomposition (medium priority)
+### Phase 1: WALL_BC Decomposition — Partially Complete
 
-The most impactful remaining work would decompose WALL_BC into:
-1. Sequential: ASSIGN_GHOST_VALUE + INTERPOLATED_BC part of SURFACE_HEAT_TRANSFER + CONSUME_MASS part of CALCULATE_ZZ_F
-2. Parallel kernels: NEAR_SURFACE_GAS_VARIABLES + main SURFACE_HEAT_TRANSFER + main CALCULATE_ZZ_F + CALCULATE_RHO_F
+**Completed kernel extractions:**
+- ✓ CALCULATE_RHO_F → CALCULATE_RHO_F_KERNEL (60 lines, wall_kernels.f90)
+- ✓ NEAR_SURFACE_GAS_VARIABLES → NEAR_SURFACE_GAS_VARIABLES_KERNEL (142 lines, wall_kernels.f90)
+  - Helpers: SCALAR_TO_POINT_K (20 lines), GET_TRILINEAR_WEIGHTS_K (55 lines)
+- ✓ Old routines removed from wall.f90, all call sites updated
 
-This would require:
-- Splitting SURFACE_HEAT_TRANSFER into kernel (most BC types) and orchestration (INTERPOLATED_BC)
-- Splitting CALCULATE_ZZ_F into kernel (species BC) and orchestration (CONSUME_MASS)
-- Creating new kernel routines with M% prefix
+**Deferred — low ROI:**
+- SURFACE_HEAT_TRANSFER (378 lines): INTERPOLATED_BC case (lines 616-775) deeply interleaves OMESH data with local computation. Splitting would require conditional dispatch at call sites. Large effort, small parallelizable fraction.
+- CALCULATE_ZZ_F (413 lines): CONSUME_MASS (24 lines) is the only OMESH-dependent part, but the remaining 389 lines use many module-level pointer aliases (WALL, BOUNDARY_PROP1/2, CELL_INDEX, etc.) requiring M% conversion. Large effort, marginal gain.
+- SOLID_HEAT_TRANSFER (1177 lines): Uses BACK_MESH (cross-mesh) for back-to-back wall cells. Not a kernel candidate.
 
-### Phase 2: CC_IBM Integration
+**Conclusion:** A full WALL_BC sub-graph is not feasible without redesigning the ASSIGN_GHOST_VALUE call chain. The extracted kernels (CALCULATE_RHO_F_KERNEL, NEAR_SURFACE_GAS_VARIABLES_KERNEL) are available for future use if the WALL_BC orchestration is refactored.
 
-The current DivSetup sub-graph bypasses CC_IBM pre/post kernel processing. For CC_IBM cases:
+### Phase 2: CC_IBM Integration ✓ COMPLETED
 
-- `CC_VELOCITY_BC` reads OMESH (115 occurrences) → must stay sequential
-- `CUTFACE_VELOCITIES` and `CC_VELOCITY_FLUX` are in `ccib_velocity_kernels.f90` → could run in parallel
-- The orchestrator would need to call CC_VELOCITY_BC sequentially, then dispatch both the main kernel and CC_IBM kernels
+All parallelized sub-graphs now include CC_IBM processing:
+
+**DivSetup (predictor + corrector):**
+- Orchestrators call `CC_VELOCITY_BC` sequentially (OMESH access)
+- Kernel wrapper calls `CUTFACE_VELOCITIES` (pre/post) and `CC_VELOCITY_FLUX` from `ccib_velocity_kernels.f90`
+
+**Velocity Predictor:**
+- Collector calls `CC_PROJECT_VELOCITY(STORE=.FALSE.)` after kernel execution
+
+**Velocity Corrector:**
+- Orchestrator calls `CC_PROJECT_VELOCITY(STORE=.TRUE.)` before kernel dispatch
+- Collector calls `CC_PROJECT_VELOCITY(STORE=.FALSE.)` after kernel execution
+
+**Already embedded in kernels (no changes needed):**
+- `DIVERGENCE_PART_1_KERNEL`: includes `CC_DIVERGENCE_PART_1`, `SET_EXIMDIFFLX_3D`, etc.
+- `DIVERGENCE_PART_2_KERNEL`: includes `GET_CUTCELL_DDDT`, solid cell zeroing
+- `COMPUTE_VISCOSITY_KERNEL`: includes `CUTFACE_VELOCITIES`, `CC_COMPUTE_KRES`, `CC_COMPUTE_VISCOSITY`
+- `DENSITY_KERNEL`: includes `SET_EXIMADVFLX_3D`
+- `PARTICLE_MOMENTUM_TRANSFER_KERNEL`: includes `CUTFACE_VELOCITIES`
+
+All verified byte-identical on 1-mesh and 4-mesh tests (non-CC_IBM cases).
 
 ### Phase 3: Performance Profiling
 
@@ -189,7 +213,7 @@ Currently FDS uses MPI for multi-mesh (one process per mesh group). The Hedgehog
 |--------|------|-----------|
 | BAROCLINIC_CORRECTION_KERNEL | velo_kernels.f90 | Internal to VELOCITY_*_KERNEL |
 | Turb kernels (WALE_VISCOSITY, WALL_MODEL, etc.) | turb_kernels.f90 | Called from COMPUTE_VISCOSITY_KERNEL |
-| Wall kernels (PYROLYSIS, CALCULATE_RHO_D_F, etc.) | wall_kernels.f90 | Called from WALL_BC orchestration |
+| Wall kernels (PYROLYSIS, CALCULATE_RHO_D_F, CALCULATE_RHO_F_KERNEL, NEAR_SURFACE_GAS_VARIABLES_KERNEL, etc.) | wall_kernels.f90 | Called from WALL_BC orchestration |
 | CCIB kernels (21 routines) | ccib_*_kernels.f90 | Called from CC_IBM orchestration paths |
 | Fire kernels (COMBUSTION_MODEL, etc.) | fire_kernels.f90 | Called from COMBUSTION_LOAD_BALANCED |
 | Pressure kernels (FFT, RHS, residuals) | pres_kernels.f90 | Called from PRESSURE_ITERATION |
