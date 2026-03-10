@@ -27,6 +27,7 @@ public:
             for (auto &md : collected_) {
                 fds_set_baroclinic_false(md->nm);
                 fds_viscosity_bc(md->nm, 0);  // estimated=false
+                fds_cc_velocity_bc(md->t, md->nm, 0);  // CC_IBM: sequential OMESH access
             }
 
             // Dispatch parallel kernel work
@@ -66,6 +67,7 @@ public:
             for (auto &md : collected_) {
                 fds_set_baroclinic_false(md->nm);
                 fds_viscosity_bc(md->nm, 1);  // estimated=true
+                fds_cc_velocity_bc(md->t, md->nm, 1);  // CC_IBM: sequential OMESH access
                 fds_agglomeration(md->dt, md->nm);
             }
 

@@ -6,6 +6,7 @@
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/velocity_predictor_data.h"
+#include "../fds_fortran_interface.h"
 
 /// Orchestrator state for velocity predictor sub-graph.
 ///
@@ -29,9 +30,8 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             // All mesh tokens collected - ready to dispatch parallel work
 
-            // Sequential pre-processing would go here
-            // (e.g., CC_IBM CC_PROJECT_VELOCITY, WALL_VELOCITY_NO_GRADH
-            //  if needed in the future)
+            // No sequential pre-processing needed for velocity predictor
+            // (CC_PROJECT_VELOCITY STORE=.FALSE. is in the collector)
 
             // Emit work tokens for parallel kernel execution
             for (auto &md : collected_) {
@@ -72,6 +72,11 @@ public:
             // Sort by mesh index to guarantee deterministic ordering
             std::sort(results_.begin(), results_.end(),
                       [](const auto &a, const auto &b) { return a->nm < b->nm; });
+
+            // Sequential post-processing: CC_IBM velocity projection
+            for (auto &w : results_) {
+                fds_cc_project_velocity(w->nm, w->dt, 0);  // STORE=.FALSE.
+            }
 
             // Emit original MeshData tokens to continue graph flow
             for (auto &w : results_) {
