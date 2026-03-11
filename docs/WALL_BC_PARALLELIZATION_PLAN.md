@@ -1,12 +1,20 @@
 # WALL_BC Parallelization Implementation Plan
 
-## Status: Ready to Implement
+## Status: Step 1 Complete - Kernel Extracted
 
 All prerequisite thread-safe conversions completed:
 - ✅ CALC_HVAC_BC (52 lines)
 - ✅ HEAT_TRANSFER_COEFFICIENT (~175 lines)
 - ✅ SURFACE_HEAT_TRANSFER (379 lines)
 - ✅ CALCULATE_ZZ_F (413 lines)
+
+**Step 1 Completed**: WALL_BC_PROCESS_CELLS_KERNEL extracted (155 lines)
+- Location: `Source/wall.f90` lines 1370-1524
+- Signature: `WALL_BC_PROCESS_CELLS_KERNEL(M,NM,PREDICTOR_FLAG,T,DT,DT_BC,CALL_HT_1D)`
+- Processes wall cells, CFACE cells, and particles
+- Skips cells with `HAS_INTERPOLATED_BC` or `HAS_BACK_MESH` flags
+- Includes SURFACE_HEAT_TRANSFER and SOLID_HEAT_TRANSFER calls
+- Thread-safe and ready for Hedgehog integration
 
 ## Three-Phase Architecture
 
