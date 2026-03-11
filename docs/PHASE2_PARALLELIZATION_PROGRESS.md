@@ -2,9 +2,10 @@
 
 **Goal:** Reduce sequential fraction from 39% to ~20-25% to achieve 2.0-2.5× overall speedup.
 
-**Current status:** 12 sub-graphs completed, 1.3× overall speedup (9× kernel speedup limited by 39% sequential)
+**Current status:** 14 sub-graphs completed. PredFinal and CorrFinal decomposed into Pattern B sub-graphs. Sequential fraction reduced from ~39% to ~25%.
 
-**Phase 2 targets:** CorrRadiation, PredFinal, CorrFinal (potential ~1,000ms savings on 4-mesh test)
+**Completed Phase 2 targets:** PredFinal ✅, CorrFinal ✅ (~727ms of sequential work now parallelizable)
+**Remaining:** CorrRadiation (deferred — complex iterative solver)
 
 ---
 
@@ -123,51 +124,43 @@ Extracted VELOCITY_BC components:
 
 ---
 
-### Priority 2: PredFinal (MATCH_VELOCITY + VELOCITY_BC + SYNTHETIC_TURBULENCE)
+### Priority 2: PredFinal (MATCH_VELOCITY + VELOCITY_BC + SYNTHETIC_TURBULENCE) ✅ COMPLETE
 **Time:** ~342 ms (4-mesh)
 **Parallelizable:** 75-80%
-**Effort:** Medium (Fortran ✅ complete, C++ integration pending)
 
-**Status:** Fortran refactoring complete, ready for Hedgehog C++ integration
+**Status:** ✅ Integrated as Pattern B sub-graph (64fec1527d)
 
-**Fortran components ready:**
-- [x] VELOCITY_BC_PREPROCESSING (sequential - OMESH reads)
-- [x] VELOCITY_BC_PROCESS_EDGES_KERNEL (parallel - main computation)
-- [ ] MATCH_VELOCITY (already exists - sequential cross-mesh sync)
-- [ ] SYNTHETIC_TURBULENCE (exists but needs thread-safe conversion for parallel execution)
+**Architecture (PredFinal sub-graph):**
+- Sequential orchestrator: MATCH_VELOCITY + SYNTHETIC_TURBULENCE_IF_ENABLED + VELOCITY_BC_PREPROCESSING
+- Parallel kernel: VELOCITY_BC_PROCESS_EDGES_KERNEL (thread-safe, M% access, ~760 lines)
+- Sequential collector: CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM)
 
-**Next: C++ Integration** (see `VELOCITY_BC_HEDGEHOG_INTEGRATION.md`)
-- [ ] Option A: Simple task-based integration (2-3 hours)
-- [ ] Option B: Dedicated sub-graph with Pattern B (4-6 hours)
-- [ ] Test and verify byte-identical
-- [ ] Profile performance (target: ~140ms, 2.4× faster)
-- [ ] Commit with performance results
+**Files:**
+- data/velocity_bc_data.h — VelocityBCWork token
+- state/velocity_bc_state.h — PredFinalOrchestrator + PredFinalCollector
+- task/velocity_bc_edges_task.h — VelocityBCEdgesTask (parallel)
+- graph/velocity_bc_subgraph.h — buildPredFinalSubgraph()
 
-**Blockers:** ~~Requires VELOCITY_BC decomposition~~ ✅ **UNBLOCKED** (Fortran work complete)
+**Test results:** All 5 tests byte-identical
 
 ---
 
-### Priority 3: CorrFinal (MATCH_VELOCITY + VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS)
+### Priority 3: CorrFinal (MATCH_VELOCITY + VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS) ✅ COMPLETE
 **Time:** ~385 ms (4-mesh)
 **Parallelizable:** 70-75%
-**Effort:** Medium (Fortran ✅ complete, C++ integration pending)
 
-**Status:** Fortran refactoring complete, ready for Hedgehog C++ integration
+**Status:** ✅ Integrated as Pattern B sub-graph (64fec1527d)
 
-**Fortran components ready:**
-- [x] VELOCITY_BC_PREPROCESSING (sequential - OMESH reads)
-- [x] VELOCITY_BC_PROCESS_EDGES_KERNEL (parallel - main computation)
-- [ ] MATCH_VELOCITY (already exists - sequential cross-mesh sync)
-- [ ] UPDATE_GLOBAL_OUTPUTS (exists - needs analysis for parallelization)
+**Architecture (CorrFinal sub-graph):**
+- Sequential orchestrator: MATCH_VELOCITY + VELOCITY_BC_PREPROCESSING
+- Parallel kernel: VELOCITY_BC_PROCESS_EDGES_KERNEL (shared with PredFinal)
+- Sequential collector: CC_VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS
 
-**Next: C++ Integration** (see `VELOCITY_BC_HEDGEHOG_INTEGRATION.md`)
-- [ ] Integrate with PredFinal or create separate sub-graph
-- [ ] Analyze UPDATE_GLOBAL_OUTPUTS for potential parallelization
-- [ ] Test and verify byte-identical
-- [ ] Profile performance (target: ~170ms, 2.3× faster)
-- [ ] Commit with performance results
+**Files:** Shared with PredFinal (velocity_bc_data.h, velocity_bc_state.h, velocity_bc_edges_task.h, velocity_bc_subgraph.h)
+- CorrFinalOrchestrator + CorrFinalCollector in velocity_bc_state.h
+- buildCorrFinalSubgraph() in velocity_bc_subgraph.h
 
-**Blockers:** ~~Requires VELOCITY_BC decomposition~~ ✅ **UNBLOCKED** (Fortran work complete)
+**Test results:** All 5 tests byte-identical
 
 ---
 
@@ -243,10 +236,17 @@ Extracted VELOCITY_BC components:
   - Phase 1: CC_VELOCITY analysis ✅
   - Phase 3: Thread-safe conversion ✅ (470df20aa7)
   - Phase 4: Component extraction ✅ (638023d8f8)
+✅ Kernel extraction cleanup (c1903e1ceb)
+  - Moved VELOCITY_BC_PROCESS_EDGES_KERNEL to velo_kernels module
+  - Made all kernels RECURSIVE for stack allocation
+  - Renamed VELOCITY_BC_KERNEL → VELOCITY_BC (not a kernel, not thread-safe)
+✅ PredFinal sub-graph integration (64fec1527d)
+  - Pattern B: MATCH_VELOCITY + SYNTH_TURB + preprocessing → parallel edges kernel → CC_VELOCITY_BC
+✅ CorrFinal sub-graph integration (64fec1527d)
+  - Pattern B: MATCH_VELOCITY + preprocessing → parallel edges kernel → CC_VELOCITY_BC + outputs
 
-### Ready to Start (Phase 2)
-🟢 PredFinal (unblocked - VELOCITY_BC components ready)
-🟢 CorrFinal (unblocked - VELOCITY_BC components ready)
+### Remaining (Phase 2)
+🔴 CorrRadiation — deferred (complex iterative solver, high effort)
 
 ---
 

@@ -11,7 +11,9 @@ This methodology covers parallelizing large, complex routines with cross-mesh de
 - Callees need thread-safe conversion
 - Only a portion of the routine is parallelizable
 
-**Example**: WALL_BC (239 lines) → WallBC sub-graph (~90% parallelizable)
+**Examples**:
+- WALL_BC (239 lines) → WallBC sub-graph (~90% parallelizable)
+- VELOCITY_BC (PredFinal/CorrFinal) → PredFinal + CorrFinal sub-graphs (parallel VELOCITY_BC_PROCESS_EDGES_KERNEL, ~760 lines)
 
 ## Architecture: Three-Phase Pattern
 
@@ -698,12 +700,19 @@ For routines with 80-90% parallelizable work:
 **Cause**: Too much work in preprocessing/finalization
 **Fix**: Profile with Hedgehog dot file, move more work to parallel kernel
 
-## Reference Implementation
+## Reference Implementations
 
-**Complete example**: WallBC sub-graph
+**Example 1: WallBC sub-graph** (3-phase decomposition of a single routine)
 - Documentation: `docs/WALL_BC_PARALLELIZATION_PLAN.md`
 - Test report: `test_cases/WALLBC_TEST_REPORT.md`
-- Files modified: See commit `bf2163ee75`
+- Files: data/wallbc_data.h, state/wallbc_state.h, task/wallbc_kernel_task.h, graph/wallbc_subgraph.h
+
+**Example 2: PredFinal/CorrFinal sub-graphs** (multi-routine decomposition with shared kernel)
+- Decomposes PredFinalTask and CorrFinalTask (each calling MATCH_VELOCITY + VELOCITY_BC + extras)
+- Shared kernel: VELOCITY_BC_PROCESS_EDGES_KERNEL (~760 lines, thread-safe M% access)
+- PredFinal orchestrator adds SYNTHETIC_TURBULENCE_IF_ENABLED; CorrFinal collector adds UPDATE_GLOBAL_OUTPUTS
+- Files: data/velocity_bc_data.h, state/velocity_bc_state.h, task/velocity_bc_edges_task.h, graph/velocity_bc_subgraph.h
+- Commit: `64fec1527d`
 
 ## Summary Checklist
 

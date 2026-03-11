@@ -298,6 +298,8 @@ All DEVC outputs must be byte-identical.
 | 5 | DensityPred | A | DENSITY_KERNEL | Pred |
 | 6 | CorrDivPart1 | B | DIVERGENCE_PART_1_KERNEL (seq: COMBUSTION_BC) | Corr |
 | 7 | DivSetup | B | VELOCITY_FLUX_KERNEL (seq: VISCOSITY_BC) | Both (2 instances) |
+| 8 | PredFinal | B | VELOCITY_BC_PROCESS_EDGES_KERNEL (seq: MATCH_VELOCITY, SYNTH_TURB, VELOCITY_BC_PREPROCESSING; post: CC_VELOCITY_BC) | Pred |
+| 9 | CorrFinal | B | VELOCITY_BC_PROCESS_EDGES_KERNEL (seq: MATCH_VELOCITY, VELOCITY_BC_PREPROCESSING; post: CC_VELOCITY_BC, UPDATE_GLOBAL_OUTPUTS) | Corr |
 
 ## Files per Sub-Graph
 

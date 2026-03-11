@@ -26,7 +26,7 @@ Step-by-step procedures for parallelizing FDS routines:
    - Pattern B: Sequential pre/post + parallel kernel
 ```
 
-## Completed Sub-Graphs (12 sub-graphs)
+## Completed Sub-Graphs (14 sub-graphs)
 
 All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
@@ -91,6 +91,20 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Documentation: docs/WALL_BC_PARALLELIZATION_PLAN.md, test_cases/WALLBC_TEST_REPORT.md
     - Replaced: CorrWallBCTask
 
+13. **PredFinal** (3-phase complex routine, Pattern B)
+    - Sequential pre-processing: MATCH_VELOCITY (cross-mesh interpolation), SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow), VELOCITY_BC_PREPROCESSING (OMESH reads)
+    - Kernel: VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe M% access)
+    - Sequential finalization: CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM active)
+    - Files: data/velocity_bc_data.h, state/velocity_bc_state.h, task/velocity_bc_edges_task.h, graph/velocity_bc_subgraph.h
+    - Replaced: PredFinalTask
+
+14. **CorrFinal** (3-phase complex routine, Pattern B)
+    - Sequential pre-processing: MATCH_VELOCITY (cross-mesh interpolation), VELOCITY_BC_PREPROCESSING (OMESH reads)
+    - Kernel: VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe M% access)
+    - Sequential finalization: CC_VELOCITY_BC (cut-cell velocity BC), UPDATE_GLOBAL_OUTPUTS (per-mesh output accumulation)
+    - Files: shared with PredFinal (velocity_bc_data.h, velocity_bc_state.h, velocity_bc_edges_task.h, velocity_bc_subgraph.h)
+    - Replaced: CorrFinalTask
+
 ## Kernel Extraction Summary
 
 ### Directly Used in Sub-Graphs
@@ -110,6 +124,7 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | CONDENSATION_EVAPORATION_KERNEL | fire_kernels.f90 | CorrCondens |
 | PARTICLE_MOMENTUM_TRANSFER_KERNEL | part_kernels.f90 | PredWallDiv, CorrParticle |
 | WALL_BC_PROCESS_CELLS_KERNEL | wall.f90 | WallBC |
+| VELOCITY_BC_PROCESS_EDGES_KERNEL | velo_kernels.f90 | PredFinal, CorrFinal |
 
 ### New Extractions for WallBC
 
@@ -120,6 +135,13 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | WALL_BC_FINALIZE | wall.f90 | 68 | OMESH writes, cross-mesh coupling |
 | CALCULATE_RHO_F_KERNEL | wall_kernels.f90 | 60 | Cell-local RHO_F calculation |
 | NEAR_SURFACE_GAS_VARIABLES_KERNEL | wall_kernels.f90 | 142 | Gas properties near walls |
+
+### New Extractions for VelocityBC (PredFinal/CorrFinal)
+
+| Routine | Source | Lines | Purpose |
+|---------|--------|-------|---------|
+| VELOCITY_BC_PREPROCESSING | velo.f90 | 75 | OMESH wall velocity reads, sequential |
+| VELOCITY_BC_PROCESS_EDGES_KERNEL | velo_kernels.f90 | 760 | Edge BC processing, parallel (thread-safe M%) |
 
 ### Thread-Safe Callee Conversions (WallBC)
 
@@ -138,12 +160,10 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
 | Task | Routines | Blocker |
 |------|----------|---------|
-| PredFinalTask | MATCH_VELOCITY, VELOCITY_BC, CC_END_STEP | OMESH access in velocity routines |
 | CorrRadiationTask | COMPUTE_RADIATION | Complex iterative solver, low priority |
-| CorrFinalTask | MATCH_VELOCITY, VELOCITY_BC, CC_END_STEP, outputs | OMESH access, output coordination |
 | All barrier tasks | MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC | Inherently global/sequential |
 
-**Note**: PredFinalTask and CorrFinalTask fundamentally require cross-mesh coordination (MATCH_VELOCITY synchronizes velocities at mesh boundaries). COMPUTE_RADIATION is a complex solver with internal state management. These are candidates for future decomposition but require significant architectural changes.
+**Note**: PredFinal and CorrFinal have been decomposed into Pattern B sub-graphs (sub-graphs 13, 14). COMPUTE_RADIATION is a complex solver with internal state management — candidate for future decomposition.
 
 ## Performance Profiling Results
 
@@ -190,12 +210,13 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | Task | Time | Notes |
 |------|------|-------|
 | CorrRadiation | 356 ms | Complex iterative solver (future target) |
-| PredFinal | 342 ms | MATCH_VELOCITY, VELOCITY_BC use OMESH |
-| CorrFinal | 385 ms | MATCH_VELOCITY, VELOCITY_BC use OMESH |
 | TimestepCompute | 349 ms | Outputs, diagnostics |
 | PressureIteration (2×) | 302 ms | Global Poisson solver |
 
-**Previous bottleneck eliminated**: CorrWallBC (was 406 ms) → now WallBC sub-graph (preprocessing + kernel + finalization)
+**Previous bottlenecks eliminated**:
+- CorrWallBC (was 406 ms) → now WallBC sub-graph (preprocessing + parallel kernel + finalization)
+- PredFinal (was 342 ms) → now PredFinal sub-graph (Pattern B: MATCH_VELOCITY + preprocessing + parallel VELOCITY_BC_PROCESS_EDGES_KERNEL + CC_VELOCITY_BC)
+- CorrFinal (was 385 ms) → now CorrFinal sub-graph (Pattern B: MATCH_VELOCITY + preprocessing + parallel VELOCITY_BC_PROCESS_EDGES_KERNEL + CC_VELOCITY_BC + outputs)
 
 ## CC_IBM Integration
 
@@ -217,19 +238,14 @@ All verified byte-identical on CC_IBM test cases.
 
 ### 1. Breaking the Sequential Bottleneck
 
-Current sequential fraction (~39%) limits speedup to ~2.5× (Amdahl's law). Options:
+Current sequential fraction reduced from ~39% to ~25% with PredFinal/CorrFinal decomposition. Options:
 
 **a) RADIATION Decomposition**
 - Extract angle loop into parallel kernel
 - Keep RTE source correction sequential
 - Medium effort, moderate ROI (~350ms saved)
 
-**b) MATCH_VELOCITY/VELOCITY_BC Decomposition**
-- Separate local BC processing from cross-mesh velocity matching
-- Parallelize local BC, keep matching sequential
-- High effort, moderate ROI (~700ms saved)
-
-**c) Hybrid MPI+Hedgehog**
+**b) Hybrid MPI+Hedgehog**
 - Each MPI rank runs Hedgehog graph with kernelThreads > 1
 - Load balancing across MPI ranks and threads
 - Overlap MPI communication with kernel computation
@@ -257,13 +273,13 @@ Current sequential fraction (~39%) limits speedup to ~2.5× (Amdahl's law). Opti
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 12
-- **Graph nodes replaced**: 15 (some tasks appear in both predictor/corrector)
-- **Kernels extracted**: 13 new kernels + utilizing ~30 existing kernels
-- **Thread-safe conversions**: 1000+ lines converted
+- **Sub-graphs created**: 14
+- **Graph nodes replaced**: 17 (some tasks appear in both predictor/corrector)
+- **Kernels extracted**: 14 new kernels + utilizing ~30 existing kernels
+- **Thread-safe conversions**: 1800+ lines converted (including ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
 - **Test coverage**: 5 test cases, 1-5 meshes, all byte-identical
 - **Speedup achieved**: 9× on parallel kernels (4 meshes, 4 threads)
-- **Overall speedup**: ~1.3× (limited by 39% sequential fraction)
+- **Sequential fraction**: reduced from ~39% to ~25% (PredFinal + CorrFinal decomposed)
 
 ## Documentation Index
 
