@@ -57,7 +57,9 @@ void fds_divergence_part_1_kernel(int nm, double t, double dt);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
 void fds_particle_momentum_kernel(int nm, double dt);
 void fds_condensation_kernel(int nm, double dt);
+void fds_wall_bc_preprocessing(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_wall_bc_process_cells_kernel(int nm, double t, double dt, double dt_bc, int call_ht_1d);
+void fds_wall_bc_finalize(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_cc_velocity_bc(double t, int nm, int estimated);
 void fds_cc_project_velocity(int nm, double dt, int store_flag);
 
@@ -99,6 +101,11 @@ int fds_get_stop_status();
 void fds_synthetic_turbulence(double dt, double t, int nm);
 void fds_hvac_calc(double t, double dt, int first);
 void fds_set_baroclinic_false(int nm);
+
+// WALL_BC helper functions
+double fds_compute_wall_bc_dt_bc(double t);
+int fds_check_call_ht_1d();
+void fds_update_bc_clock(double t);
 
 } // extern "C"
 

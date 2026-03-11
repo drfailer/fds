@@ -1,6 +1,6 @@
 # WALL_BC Parallelization Implementation Plan
 
-## Status: Steps 1-4 Complete - Hedgehog Sub-Graph Components Created
+## Status: ✅ COMPLETE - WallBC Sub-Graph Fully Integrated and Tested
 
 All prerequisite thread-safe conversions completed:
 - ✅ CALC_HVAC_BC (52 lines)
@@ -8,7 +8,7 @@ All prerequisite thread-safe conversions completed:
 - ✅ SURFACE_HEAT_TRANSFER (379 lines)
 - ✅ CALCULATE_ZZ_F (413 lines)
 
-**Step 1 Completed**: WALL_BC_PROCESS_CELLS_KERNEL extracted (155 lines)
+**Step 1 ✅**: WALL_BC_PROCESS_CELLS_KERNEL extracted (155 lines)
 - Location: `Source/wall.f90` lines 1370-1524
 - Signature: `WALL_BC_PROCESS_CELLS_KERNEL(M,NM,PREDICTOR_FLAG,T,DT,DT_BC,CALL_HT_1D)`
 - Processes wall cells, CFACE cells, and particles
@@ -16,7 +16,7 @@ All prerequisite thread-safe conversions completed:
 - Includes SURFACE_HEAT_TRANSFER and SOLID_HEAT_TRANSFER calls
 - Thread-safe and ready for Hedgehog integration
 
-**Step 2 Completed**: WALL_BC_FINALIZE created (68 lines)
+**Step 2 ✅**: WALL_BC_FINALIZE created (68 lines)
 - Location: `Source/wall.f90` lines 1527-1594
 - Signature: `WALL_BC_FINALIZE(NM,T,DT_BC,CALL_HT_1D)`
 - Handles wall cells with `HAS_BACK_MESH` (thin walls spanning meshes)
@@ -24,25 +24,34 @@ All prerequisite thread-safe conversions completed:
 - Handles particle off-gassing via DEPOSIT_PARTICLE_MASS (CORRECTOR phase)
 - Sequential processing for cross-mesh dependencies
 
-**Step 3 Completed**: Main WALL_BC restructured to three-phase architecture
-- Location: `Source/wall.f90` lines 141-161
-- Replaced ~130 lines of explicit loops with 2 subroutine calls
-- Preprocessing (Phase 1): WALL_CELL_LOOP_0 and THIN_WALL_CELL_LOOP_0 remain sequential
-  - ASSIGN_GHOST_VALUE for external walls
-  - NEAR_SURFACE_GAS_VARIABLES_KERNEL and HEAT_TRANSFER_COEFFICIENT setup
-- Phase 2: `CALL WALL_BC_PROCESS_CELLS_KERNEL` (ready for Hedgehog parallelization)
-- Phase 3: `CALL WALL_BC_FINALIZE` (sequential cross-mesh processing)
-- Testing: ✅ Byte-identical results on dancing_eddies_1mesh_short (DEVC and HRR)
+**Step 3 ✅**: WALL_BC_PREPROCESSING created (49 lines)
+- Location: `Source/wall.f90` lines 1597-1645
+- Signature: `WALL_BC_PREPROCESSING(NM,T,DT_BC,CALL_HT_1D)`
+- Handles ASSIGN_GHOST_VALUE for external walls (OMESH reads)
+- Calls NEAR_SURFACE_GAS_VARIABLES_KERNEL for all wall cells
+- Computes HEAT_TRANS_COEF for thermally-thick surfaces
+- Sequential preprocessing to handle cross-mesh dependencies
 
-**Step 4 Completed**: Hedgehog sub-graph components created
-- C wrapper: `fds_c_interface.f90` - C_FDS_WALL_BC_PROCESS_CELLS_KERNEL (RECURSIVE)
-- C declaration: `fds_fortran_interface.h` - fds_wall_bc_process_cells_kernel()
+**Step 4 ✅**: Hedgehog sub-graph components created
+- C wrappers: `fds_c_interface.f90` - 3 wrappers (preprocessing, kernel, finalize) + 3 helper functions
+- C declarations: `fds_fortran_interface.h` - 6 new function declarations
 - Work token: `data/wallbc_data.h` - WallBCWork struct
-- Orchestrator: `state/wallbc_state.h` - WallBCOrchestrator class
-- Collector: `state/wallbc_state.h` - WallBCCollector class
-- Kernel task: `task/wallbc_kernel_task.h` - WallBCKernelTask class
-- Testing: ✅ Compiles successfully, FDS runs correctly
-- Status: Components ready for graph integration (Step 5)
+- Orchestrator: `state/wallbc_state.h` - WallBCOrchestrator (Pattern B: collects N meshes, computes DT_BC/CALL_HT_1D, runs preprocessing, dispatches parallel work)
+- Collector: `state/wallbc_state.h` - WallBCCollector (gathers results, runs finalization, sorts, emits MeshData)
+- Kernel task: `task/wallbc_kernel_task.h` - WallBCKernelTask (parallel execution)
+
+**Step 5 ✅**: WallBC sub-graph integrated into main graph
+- Location: `Source/hedgehog/graph/fds_graph.h`
+- Added component declarations (lines 194-202)
+- Wired sub-graph into corrector flow (lines 386-390)
+- Replaced sequential corrWallBC task with Pattern B sub-graph
+- Flow: MESH_EXCHANGE(7) → WallBCOrch → WallBCKernel → WallBCCollector → MESH_EXCHANGE(6)
+
+**Integration Testing ✅**:
+- ✅ 1-mesh test (dancing_eddies_1mesh_short): Byte-identical DEVC and HRR
+- ✅ 4-mesh test (dancing_eddies_4mesh_short): Byte-identical DEVC and HRR
+- ✅ Build successful with Hedgehog parallelization
+- ✅ All cross-mesh dependencies handled correctly
 
 ## Three-Phase Architecture
 

@@ -16,6 +16,7 @@
 #include "../data/corr_condens_data.h"
 #include "../data/pred_wall_div_data.h"
 #include "../data/corr_particle_data.h"
+#include "../data/wallbc_data.h"
 #include "../task/predictor_tasks.h"
 #include "../task/corrector_tasks.h"
 #include "../task/barrier_tasks.h"
@@ -30,6 +31,7 @@
 #include "../task/corr_condens_kernel_task.h"
 #include "../task/pred_wall_div_kernel_task.h"
 #include "../task/corr_particle_kernel_task.h"
+#include "../task/wallbc_kernel_task.h"
 #include "../state/collector_state.h"
 #include "../state/mesh_barrier_state.h"
 #include "../state/timestep_state.h"
@@ -44,6 +46,7 @@
 #include "../state/corr_condens_state.h"
 #include "../state/pred_wall_div_state.h"
 #include "../state/corr_particle_state.h"
+#include "../state/wallbc_state.h"
 #include "change_timestep_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -80,7 +83,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // NOTE: corrDivSetup replaced by div setup sub-graph (see below)
     // NOTE: corrCondens replaced by corr condens sub-graph (see below)
     // NOTE: corrParticle replaced by corr particle sub-graph (see below)
-    auto corrWallBC      = std::make_shared<CorrWallBCTask>(1);
+    // NOTE: corrWallBC replaced by WallBC sub-graph (Pattern B: preprocessing + parallel kernel + finalization)
     auto corrRadiation   = std::make_shared<CorrRadiationTask>(1);
     // NOTE: corrDivPart1 replaced by corr div part 1 sub-graph (see below)
     // NOTE: corrDivPart2 replaced by divergence part 2 sub-graph (see below)
@@ -187,6 +190,15 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
     auto corrParticleCollectorSM = std::make_shared<hh::StateManager<1, CorrParticleWork, MeshData>>(
         std::make_shared<CorrParticleCollector>(nmeshes), "CorrParticleCollector");
+
+    // --- Create WallBC sub-graph components (Pattern B) ---
+    // Sequential preprocessing (ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES) in orchestrator,
+    // parallel WALL_BC_PROCESS_CELLS_KERNEL, sequential finalization (HAS_BACK_MESH, thin walls)
+    auto wallBCOrchSM = std::make_shared<hh::StateManager<1, MeshData, WallBCWork>>(
+        std::make_shared<WallBCOrchestrator>(nmeshes), "WallBCOrch");
+    auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(kernelThreads);
+    auto wallBCCollectorSM = std::make_shared<hh::StateManager<1, WallBCWork, MeshData>>(
+        std::make_shared<WallBCCollector>(nmeshes), "WallBCCollector");
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -370,8 +382,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(corrParticleKernelTask, corrParticleCollectorSM); // Kernel -> Collector
     graph->edges(corrParticleCollectorSM, collector7SM);       // Collector -> MESH_EXCHANGE(7)
     graph->edges(collector7SM, meshExchange7);                // Do MESH_EXCHANGE(7)
-    graph->edges(meshExchange7, corrWallBC);
-    graph->edges(corrWallBC, collector6aSM);                  // Collect for MESH_EXCHANGE(6)
+    // WallBC sub-graph (Pattern B: sequential preprocessing + parallel kernel + sequential finalization)
+    graph->edges(meshExchange7, wallBCOrchSM);                // MeshExch -> WallBC Orchestrator
+    graph->edges(wallBCOrchSM, wallBCKernelTask);             // Orchestrator -> Kernel (parallel)
+    graph->edges(wallBCKernelTask, wallBCCollectorSM);        // Kernel -> Collector
+    graph->edges(wallBCCollectorSM, collector6aSM);           // Collector -> MESH_EXCHANGE(6)
     graph->edges(collector6aSM, meshExchange6a);              // Do MESH_EXCHANGE(6)
     graph->edges(meshExchange6a, corrRadiation);
     graph->edges(corrRadiation, collector2SM);                // Collect for MESH_EXCHANGE(2)

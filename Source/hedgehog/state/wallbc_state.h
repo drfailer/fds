@@ -6,14 +6,14 @@
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/wallbc_data.h"
+#include "../fds_fortran_interface.h"
 
-/// Orchestrator state for WallBC sub-graph (Pattern A - Pure Kernel).
+/// Orchestrator state for WallBC sub-graph (Pattern B - Sequential Pre-Processing).
 ///
-/// Collects all N mesh tokens and dispatches parallel work tokens.
-/// Note: Preprocessing (ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES, etc.)
-/// must be handled before this sub-graph is invoked.
+/// Collects all N mesh tokens, runs sequential preprocessing, then dispatches parallel work.
+/// Preprocessing includes ASSIGN_GHOST_VALUE (cross-mesh reads) and NEAR_SURFACE_GAS_VARIABLES setup.
 ///
-/// Flow: Collects N MeshData -> Emits N WallBCWork
+/// Flow: Collects N MeshData -> Sequential preprocessing -> Emits N WallBCWork
 class WallBCOrchestrator
     : public hh::AbstractState<1, MeshData, WallBCWork> {
 public:
@@ -27,16 +27,24 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
+            // Compute dt_bc and call_ht_1d from global Fortran state (same for all meshes)
+            double dt_bc = fds_compute_wall_bc_dt_bc(collected_[0]->t);
+            int call_ht_1d = fds_check_call_ht_1d();
+
+            // If calling 1-D heat transfer, update BC_CLOCK
+            if (call_ht_1d) {
+                fds_update_bc_clock(collected_[0]->t);
+            }
+
+            // Sequential preprocessing: ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES, HEAT_TRANS_COEF
+            for (auto &md : collected_) {
+                fds_wall_bc_preprocessing(md->nm, md->t, dt_bc, call_ht_1d);
+            }
+
             // Dispatch parallel work for WALL_BC_PROCESS_CELLS_KERNEL
-            // DT_BC and CALL_HT_1D are computed from global state (same for all meshes)
-            // For now, we pass them as part of the work token
-            // TODO: Extract these from Fortran global state or pass via MeshData
             for (auto &md : collected_) {
                 auto work = std::make_shared<WallBCWork>(
-                    md->nm, md->t, md->dt,
-                    md->dt,  // dt_bc (placeholder - should be computed properly)
-                    1,        // call_ht_1d (placeholder - should be computed properly)
-                    md);
+                    md->nm, md->t, md->dt, dt_bc, call_ht_1d, md);
                 this->addResult(work);
             }
 
@@ -50,13 +58,13 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector state for WallBC sub-graph.
+/// Collector state for WallBC sub-graph (Pattern B - Sequential Post-Processing).
 ///
-/// Gathers all N kernel results, sorts by mesh index for deterministic
-/// ordering, and emits MeshData tokens downstream.
-/// Note: Finalization (WALL_BC_FINALIZE) must be handled after this sub-graph.
+/// Gathers all N kernel results, runs sequential finalization, sorts by mesh index,
+/// and emits MeshData tokens downstream.
+/// Finalization includes HAS_BACK_MESH processing, thin wall heat transfer, and particle off-gassing.
 ///
-/// Flow: Collects N WallBCWork -> Emits N MeshData
+/// Flow: Collects N WallBCWork -> Sequential finalization -> Emits N MeshData
 class WallBCCollector
     : public hh::AbstractState<1, WallBCWork, MeshData> {
 public:
@@ -75,6 +83,11 @@ public:
                       [](const auto &a, const auto &b) {
                           return a->nm < b->nm;
                       });
+
+            // Sequential finalization: HAS_BACK_MESH cells, thin walls, particle off-gassing
+            for (auto &w : results_) {
+                fds_wall_bc_finalize(w->nm, w->t, w->dt_bc, w->call_ht_1d);
+            }
 
             for (auto &w : results_) {
                 this->addResult(w->originalMeshData);
