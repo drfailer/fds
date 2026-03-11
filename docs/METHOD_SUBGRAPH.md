@@ -18,6 +18,35 @@ Convert sequential, single-mesh Hedgehog tasks into parallel, multi-mesh sub-gra
 - **Kernel Task**: `numThreads = kernelThreads` (controlled by `buildFDSGraph` parameter)
 - **Collector**: always single-threaded, sorts results by `nm` for deterministic ordering
 
+## Graph Naming Convention
+
+**IMPORTANT**: When creating sub-graphs, use a named graph that matches the Fortran routine being parallelized. This allows tracing graph sections back to original code.
+
+```cpp
+// Create named graph for WALL_BC parallelization
+auto wallBCGraph = std::make_shared<hh::Graph<...>>("WallBC");
+
+// Add nodes to the named graph
+wallBCGraph->input<MeshData>(orchestrator);
+wallBCGraph->addEdge(orchestrator, kernelTask);
+wallBCGraph->addEdge(kernelTask, collector);
+wallBCGraph->output<MeshData>(collector);
+
+// Add the sub-graph to main graph
+mainGraph->addEdge(prevNode, wallBCGraph);
+mainGraph->addEdge(wallBCGraph, nextNode);
+```
+
+**Naming guidelines**:
+- Use PascalCase matching Fortran routine name: `"WallBC"`, `"VelocityPredictor"`, `"Radiation"`
+- For complex routines with multiple phases, use descriptive names: `"WallBCPhase2"`, `"RadiationSolve"`
+- Maintain consistency with existing graphs (see completed sub-graphs in `MEMORY.md`)
+
+**Benefits**:
+- Easier debugging: graph name appears in Hedgehog logs
+- Code traceability: graph name → Fortran routine
+- Documentation: graph structure mirrors Fortran call hierarchy
+
 ## Prerequisites
 
 Before creating a sub-graph:
