@@ -25,7 +25,8 @@ GOLD_DIR = TEST_DIR / "gold"
 RUN_DIR = TEST_DIR / "run"
 BUILD_DIR = REPO_ROOT / "build_hh"
 FDS_HH = BUILD_DIR / "Source" / "hedgehog" / "fds_hh"
-# Use fds6 from PATH
+FDS_FORTRAN = BUILD_DIR / "fds"  # Pure Fortran build (with our VELOCITY_BC changes)
+# Use fds6 from PATH (ground truth for gold file generation)
 FDS_ORIG_PATH = shutil.which('fds6')
 FDS_ORIG = Path(FDS_ORIG_PATH) if FDS_ORIG_PATH else None
 COMPARE_SCRIPT = TEST_DIR / "compare_csv.py"
@@ -72,9 +73,10 @@ TEST_CASES = {
 }
 
 class TestRunner:
-    def __init__(self, verbose: bool = False, tolerance: float = 1e-10):
+    def __init__(self, verbose: bool = False, tolerance: float = 1e-10, fds_exe: Path = None):
         self.verbose = verbose
         self.tolerance = tolerance
+        self.fds_exe = fds_exe if fds_exe else FDS_HH
         self.results = {}
 
     def log(self, message: str, level: str = "INFO"):
@@ -312,8 +314,8 @@ class TestRunner:
         }
 
         # Run FDS
-        self.log(f"Running FDS...", "RUN")
-        success, elapsed = self.run_fds(input_file, chid, FDS_HH, work_dir)
+        self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
+        success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir)
         result['run_time'] = elapsed
 
         if not success:
@@ -411,10 +413,20 @@ def main():
                         help='Comparison tolerance (default: 1e-10)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Verbose output')
+    parser.add_argument('--exe', choices=['fds_hh', 'fds', 'fds6'], default='fds_hh',
+                        help='FDS executable to test: fds_hh (Hedgehog), fds (pure Fortran), fds6 (ground truth)')
 
     args = parser.parse_args()
 
-    runner = TestRunner(verbose=args.verbose, tolerance=args.tolerance)
+    # Select executable
+    exe_map = {
+        'fds_hh': FDS_HH,
+        'fds': FDS_FORTRAN,
+        'fds6': FDS_ORIG
+    }
+    fds_exe = exe_map[args.exe]
+
+    runner = TestRunner(verbose=args.verbose, tolerance=args.tolerance, fds_exe=fds_exe)
     runner.ensure_directories()
 
     # Select tests to run
@@ -441,12 +453,13 @@ def main():
         return 0
     else:
         # Run tests
-        print("Running tests...")
+        print(f"Running tests with: {runner.fds_exe.name}")
 
         # Check executable
-        if not runner.check_executable(FDS_HH, "fds_hh"):
-            print("\nPlease build fds_hh first:")
-            print("  cd build_hh && cmake --build . --target fds_hh")
+        if not runner.check_executable(runner.fds_exe, runner.fds_exe.name):
+            print(f"\nExecutable not found: {runner.fds_exe}")
+            if runner.fds_exe == FDS_HH or runner.fds_exe == FDS_FORTRAN:
+                print("  cd build_hh && cmake --build . -j$(nproc)")
             return 1
 
         # Run each test
