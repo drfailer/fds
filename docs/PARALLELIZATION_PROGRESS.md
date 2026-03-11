@@ -390,3 +390,50 @@ ENDIF
 
 **Estimated total to full WALL_BC parallelization**: 10-15 hours
 
+
+## Update: Large Routine Conversions Completed
+
+### ✅ Breakthrough: Pointer-Based Approach
+
+**Problem solved**: Used `TYPE(MESH_TYPE), POINTER :: M` instead of `INTENT(INOUT)`.
+
+**Key insight**: Since MESHES is declared with TARGET attribute:
+```fortran
+TYPE (MESH_TYPE), SAVE, DIMENSION(:), ALLOCATABLE, TARGET :: MESHES
+```
+
+We can use:
+```fortran
+TYPE(MESH_TYPE), POINTER :: M
+M => MESHES(NM)
+! Now pointer assignment to M% components works:
+UU => M%US  ! ✅ No error
+```
+
+### ✅ SURFACE_HEAT_TRANSFER - Completed
+**Lines**: 379  
+**Signature**: `(NM, PREDICTOR_FLAG, T, SF, BC, B1, WALL_INDEX, CFACE_INDEX, PARTICLE_INDEX)`  
+**Pattern**: Local M pointer + conditional pointer setup for pred/corr arrays  
+**Call sites**: 3 updated  
+**Verified**: Byte-identical on dancing_eddies_1mesh_short  
+
+### ✅ CALCULATE_ZZ_F - Completed
+**Lines**: 413  
+**Signature**: `(NM, PREDICTOR_FLAG, T, DT, WALL_INDEX, CFACE_INDEX, PARTICLE_INDEX)`  
+**Pattern**: Same as SURFACE_HEAT_TRANSFER  
+**Call sites**: 3 updated  
+**Verified**: Byte-identical
+
+### Summary: All 4 WALL_BC Callees Now Thread-Safe
+
+| Routine | Lines | Status | Pattern Used |
+|---------|-------|--------|--------------|
+| CALC_HVAC_BC | 52 | ✅ Converted | Explicit M + PREDICTOR_FLAG args |
+| HEAT_TRANSFER_COEFFICIENT | ~175 | ✅ Converted | Index-based access (no pointers to arrays) |
+| SURFACE_HEAT_TRANSFER | 379 | ✅ Converted | M pointer + conditional pointer setup |
+| CALCULATE_ZZ_F | 413 | ✅ Converted | M pointer + conditional pointer setup |
+
+**Total converted**: 1019 lines of thread-safe code  
+**Total call sites updated**: 23
+
+**Next step**: Extract main WALL_BC into three-phase parallelizable structure.
