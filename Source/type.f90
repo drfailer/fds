@@ -451,6 +451,8 @@ TYPE WALL_TYPE
    INTEGER :: N_LOGICALS=0            !< Number of logicals to pack into restart or send/recv buffer
 
    LOGICAL :: THIN=.FALSE.            !< Indicates if the underlying solid is zero cells thick
+   LOGICAL :: HAS_INTERPOLATED_BC=.FALSE. !< Cell has INTERPOLATED_BOUNDARY requiring OMESH access
+   LOGICAL :: HAS_BACK_MESH=.FALSE.   !< Cell has back-side mesh coupling for thin walls
 
 END TYPE WALL_TYPE
 

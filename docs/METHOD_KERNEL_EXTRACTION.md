@@ -245,3 +245,107 @@ For each routine to extract:
 9. [ ] Add to CMakeLists.txt before parent module
 10. [ ] Build both `fds` and `fds_hh` targets
 11. [ ] Verify byte-identical CSV output against baselines
+
+## Advanced Pattern: Index-Based Access (No Pointers)
+
+### Problem
+
+When converting routines that use pointer variables to access ALLOCATABLE array elements, gfortran requires the TARGET attribute:
+
+```fortran
+! This fails without TARGET attribute on M%WALL:
+TYPE(MESH_TYPE), INTENT(INOUT) :: M
+TYPE(WALL_TYPE), POINTER :: WC
+WC => M%WALL(WALL_INDEX)  ! Error: target is neither TARGET nor POINTER
+```
+
+### Solution: Use Integer Indices Instead
+
+Instead of creating pointer variables, store the indices and use direct array access:
+
+```fortran
+! OLD approach (requires TARGET):
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(BOUNDARY_PROP1_TYPE), POINTER :: B1
+TYPE(BOUNDARY_PROP2_TYPE), POINTER :: B2
+
+WC => M%WALL(WALL_INDEX)
+B1 => M%BOUNDARY_PROP1(WC%B1_INDEX)
+B2 => M%BOUNDARY_PROP2(WC%B2_INDEX)
+
+B1%HEAT_TRANS_COEF = 2.0_EB * B1%K_G * B1%RDN
+
+! NEW approach (index-based, no TARGET needed):
+INTEGER :: B1_INDEX, B2_INDEX
+
+B1_INDEX = M%WALL(WALL_INDEX)%B1_INDEX
+B2_INDEX = M%WALL(WALL_INDEX)%B2_INDEX
+
+M%BOUNDARY_PROP1(B1_INDEX)%HEAT_TRANS_COEF = &
+   2.0_EB * M%BOUNDARY_PROP1(B1_INDEX)%K_G * M%BOUNDARY_PROP1(B1_INDEX)%RDN
+```
+
+### Automated Replacement with awk
+
+For routines with many pointer references, use awk to automate the replacement:
+
+```bash
+cat > /tmp/replace_pointers.awk << 'AWKEOF'
+BEGIN { in_func = 0 }
+
+/^SUBROUTINE YOUR_ROUTINE_NAME/ { in_func = 1 }
+
+in_func {
+    gsub(/B1%/, "M%BOUNDARY_PROP1(B1_INDEX)%")
+    gsub(/B2%/, "M%BOUNDARY_PROP2(B2_INDEX)%")
+    gsub(/BC%/, "M%BOUNDARY_COORD(BC_INDEX)%")
+}
+
+/^END SUBROUTINE YOUR_ROUTINE_NAME/ { in_func = 0 }
+
+{ print }
+AWKEOF
+
+awk -f /tmp/replace_pointers.awk your_file.f90 > /tmp/new_file.f90
+mv /tmp/new_file.f90 your_file.f90
+```
+
+### Watch for Line Length
+
+Index-based access is more verbose and may exceed Fortran's 132-character limit:
+
+```fortran
+! Too long (>132 chars):
+IF (ALLOCATED(M%BOUNDARY_PROP1(B1_INDEX)%M_DOT_G_PP_ACTUAL)) THEN
+
+! Fixed with continuation:
+IF (ALLOCATED(M%BOUNDARY_PROP1(B1_INDEX)%M_DOT_G_PP_ACTUAL)) &
+   THEN
+```
+
+Find long lines:
+```bash
+awk 'length($0)>132 {print NR":"length($0)}' your_file.f90
+```
+
+### Examples
+
+**HEAT_TRANSFER_COEFFICIENT** (func.f90) - Converted using this pattern
+**CALC_HVAC_BC** (wall.f90) - Simpler case, didn't need pointer replacement
+
+See: `docs/WALL_BC_CONVERSIONS_SUMMARY.md` for detailed examples.
+
+### Benefits
+
+- ✅ No need to modify MESH_TYPE definition (add TARGET)
+- ✅ Works with existing Fortran compilers
+- ✅ Thread-safe (no module-level state)
+- ✅ Explicit mesh parameter enables parallelization
+
+### Trade-offs
+
+- More verbose code (`M%BOUNDARY_PROP1(B1_INDEX)%X` vs `B1%X`)
+- Watch for line length issues
+- Need to track multiple index variables
+
+Despite verbosity, this is the **recommended approach** for converting routines with complex pointer usage.

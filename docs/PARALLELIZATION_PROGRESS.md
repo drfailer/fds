@@ -87,7 +87,7 @@ The full pipeline to parallelize an FDS routine:
 
 All verified byte-identical (DEVC) across 1-mesh and 4-mesh test configurations.
 
-## New Kernel Extractions (this session)
+## New Kernel Extractions
 
 | Kernel | Source Module | Kernel Module | Lines |
 |--------|---------------|---------------|-------|
@@ -97,6 +97,19 @@ All verified byte-identical (DEVC) across 1-mesh and 4-mesh test configurations.
 | NEAR_SURFACE_GAS_VARIABLES_KERNEL | wall.f90 | wall_kernels.f90 | 142 |
 | SCALAR_TO_POINT_K | wall.f90 | wall_kernels.f90 | 20 |
 | GET_TRILINEAR_WEIGHTS_K | wall.f90 | wall_kernels.f90 | 55 |
+
+## Thread-Safe Routine Conversions (WALL_BC Callees)
+
+| Routine | Source Module | Status | Approach |
+|---------|---------------|--------|----------|
+| CALC_HVAC_BC | wall.f90 | ✅ Converted | Added M and PREDICTOR_FLAG arguments |
+| HEAT_TRANSFER_COEFFICIENT | func.f90 | ✅ Converted | Index-based access (no pointers) |
+| DEPOSIT_PARTICLE_MASS | wall.f90 | Already safe | No module-level pointers used |
+
+**Key technique**: Use integer indices instead of pointers to avoid Fortran ALLOCATABLE/TARGET issues.
+Example: `B1_INDEX = M%WALL(IW)%B1_INDEX; M%BOUNDARY_PROP1(B1_INDEX)%...`
+
+See: `docs/WALL_BC_CONVERSIONS_SUMMARY.md` for details.
 
 ## Remaining Sequential Tasks (not parallelizable)
 
