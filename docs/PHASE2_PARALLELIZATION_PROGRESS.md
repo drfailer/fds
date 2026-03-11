@@ -62,18 +62,18 @@ Each complex routine follows this pipeline:
   - [x] Pass NM to callees when needed
   - [x] Test: full test suite (byte-identical)
   - [x] Commit ✅ (470df20aa7)
-- [ ] **Phase 4**: Extract VELOCITY_BC components
-  - [ ] Extract VELOCITY_BC_PREPROCESSING (OMESH wall velocity reads)
-  - [ ] Extract VELOCITY_BC_PROCESS_EDGES_KERNEL (local edge processing, excluding INTERPOLATED)
-  - [ ] Extract VELOCITY_BC_FINALIZE (INTERPOLATED edges, if needed)
-  - [ ] Test: full test suite (byte-identical)
-  - [ ] Commit
+- [x] **Phase 4**: Extract VELOCITY_BC components ✅
+  - [x] Extract VELOCITY_BC_PREPROCESSING (OMESH wall velocity reads)
+  - [x] Extract VELOCITY_BC_PROCESS_EDGES_KERNEL (local edge processing, all edges)
+  - [x] Modified VELOCITY_BC_KERNEL to call both components
+  - [x] Test: full test suite ✅ (all 5 tests byte-identical)
+  - [ ] **NEXT**: Commit
 
 **Estimated effort**: 11-15 hours total (Phase 2 skipped)
 
 **Blockers:** Must complete before PredFinal/CorrFinal refactoring
 
-**Current status**: Phase 3 ✅ complete, Phase 4 ready to start
+**Current status**: Phase 4 ✅ complete (fds_hh build + tests successful)
 
 **Phase 3 substeps:** ✅ All complete
 - [x] Created VELOCITY_BC_CONVERSION_MAP.md with systematic substitution plan
@@ -95,11 +95,30 @@ Each complex routine follows this pipeline:
 - ✅ multiple_reac_3mesh (6.14s) - byte-identical
 - ✅ species_props_5mesh (1.09s) - byte-identical
 
-**Phase 4 plan:**
-Extract VELOCITY_BC components for parallelization:
-- VELOCITY_BC_PREPROCESSING: OMESH wall velocity reads (sequential)
-- VELOCITY_BC_PROCESS_EDGES_KERNEL: Local edge processing (parallel)
-- VELOCITY_BC_FINALIZE: INTERPOLATED edges (sequential, if needed)
+**Phase 4 results:** ✅ Complete
+
+Test results (fds_hh):
+- ✅ dancing_eddies_1mesh (7.47s) - byte-identical
+- ✅ dancing_eddies_2mesh (13.10s) - byte-identical
+- ✅ dancing_eddies_4mesh (5.50s) - byte-identical
+- ✅ multiple_reac_3mesh (6.11s) - byte-identical
+- ✅ species_props_5mesh (1.08s) - byte-identical
+
+Extracted VELOCITY_BC components:
+1. **VELOCITY_BC_PREPROCESSING** (~77 lines):
+   - WALL_LOOP: reads OMESH velocities for external wall boundaries
+   - Initializes M%DRAG_UVWMAX
+   - Must run sequentially before parallel kernel (cross-mesh dependencies)
+
+2. **VELOCITY_BC_PROCESS_EDGES_KERNEL** (~762 lines):
+   - EDGE_LOOP: processes all cell edges (including INTERPOLATED edges)
+   - Parallelizable per-mesh (OMESH reads are safe after preprocessing)
+   - INTERPOLATED edges included because M%OMESH data is already synchronized
+
+3. **VELOCITY_BC_KERNEL** (now ~53 lines):
+   - Simplified to call preprocessing + process_edges + accounting
+   - Maintains backward compatibility
+   - Easier to understand and maintain
 
 ---
 
