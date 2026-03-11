@@ -1,6 +1,6 @@
 # WALL_BC Parallelization Implementation Plan
 
-## Status: Step 1 Complete - Kernel Extracted
+## Status: Steps 1-2 Complete - Kernel and Finalization Ready
 
 All prerequisite thread-safe conversions completed:
 - ✅ CALC_HVAC_BC (52 lines)
@@ -15,6 +15,14 @@ All prerequisite thread-safe conversions completed:
 - Skips cells with `HAS_INTERPOLATED_BC` or `HAS_BACK_MESH` flags
 - Includes SURFACE_HEAT_TRANSFER and SOLID_HEAT_TRANSFER calls
 - Thread-safe and ready for Hedgehog integration
+
+**Step 2 Completed**: WALL_BC_FINALIZE created (68 lines)
+- Location: `Source/wall.f90` lines 1527-1594
+- Signature: `WALL_BC_FINALIZE(NM,T,DT_BC,CALL_HT_1D)`
+- Handles wall cells with `HAS_BACK_MESH` (thin walls spanning meshes)
+- Handles thin wall lateral heat transfer (all thin walls)
+- Handles particle off-gassing via DEPOSIT_PARTICLE_MASS (CORRECTOR phase)
+- Sequential processing for cross-mesh dependencies
 
 ## Three-Phase Architecture
 

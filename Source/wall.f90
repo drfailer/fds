@@ -1527,6 +1527,75 @@ ENDIF
 END SUBROUTINE WALL_BC_PROCESS_CELLS_KERNEL
 
 
+!> \brief Finalize wall boundary conditions for cells with cross-mesh dependencies
+!> \param NM Mesh index
+!> \param T Current time
+!> \param DT_BC Heat transfer time step
+!> \param CALL_HT_1D Flag to call 1-D heat transfer
+!>
+!> This routine handles the remaining ~10% of cells that require sequential
+!> cross-mesh processing (HAS_BACK_MESH) and particle off-gassing (DEPOSIT_PARTICLE_MASS).
+
+SUBROUTINE WALL_BC_FINALIZE(NM,T,DT_BC,CALL_HT_1D)
+
+INTEGER, INTENT(IN) :: NM
+REAL(EB), INTENT(IN) :: T, DT_BC
+LOGICAL, INTENT(IN) :: CALL_HT_1D
+INTEGER :: IW, IP, ITW
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(SURFACE_TYPE), POINTER :: SF
+TYPE(LAGRANGIAN_PARTICLE_TYPE), POINTER :: LP
+TYPE(LAGRANGIAN_PARTICLE_CLASS_TYPE), POINTER :: LPC
+
+CALL POINT_TO_MESH(NM)
+
+! Process wall cells with BACK_MESH coupling (thin walls spanning meshes)
+! These cells were skipped in WALL_BC_PROCESS_CELLS_KERNEL
+WALL_FINALIZE_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS
+
+   WC => WALL(IW)
+
+   ! Only process cells with BACK_MESH coupling
+   IF (.NOT.WC%HAS_BACK_MESH) CYCLE WALL_FINALIZE_LOOP
+   IF (WC%BOUNDARY_TYPE==NULL_BOUNDARY) CYCLE WALL_FINALIZE_LOOP
+
+   SF => SURFACE(WC%SURF_INDEX)
+
+   ! Call SOLID_HEAT_TRANSFER for thermally-thick surfaces with BACK_MESH
+   IF (SF%THERMAL_BC_INDEX==THERMALLY_THICK .AND. CALL_HT_1D) THEN
+      CALL SOLID_HEAT_TRANSFER(NM,T,SF%HT_DIM*DT_BC,WALL_INDEX=IW)
+   ENDIF
+
+ENDDO WALL_FINALIZE_LOOP
+
+! Do lateral heat transfer in thin obstructions
+! These thin walls may span multiple meshes
+IF (CALL_HT_1D) THEN
+   DO ITW=1,N_THIN_WALL_CELLS
+      CALL SOLID_HEAT_TRANSFER(NM,T,3._EB*DT_BC,THIN_WALL_INDEX=ITW)
+   ENDDO
+ENDIF
+
+! Process particle off-gassing (DEPOSIT_PARTICLE_MASS)
+! This updates neighboring mesh via OMESH and must be sequential
+IF (SOLID_PARTICLES .AND. CORRECTOR) THEN
+
+   PARTICLE_FINALIZE_LOOP: DO IP=1,NLP
+
+      LP => LAGRANGIAN_PARTICLE(IP)
+      LPC => LAGRANGIAN_PARTICLE_CLASS(LP%CLASS_INDEX)
+
+      IF (LPC%SOLID_PARTICLE) THEN
+         CALL DEPOSIT_PARTICLE_MASS(LP,LPC)  ! Add particle off-gas to gas phase mesh
+      ENDIF
+
+   ENDDO PARTICLE_FINALIZE_LOOP
+
+ENDIF
+
+END SUBROUTINE WALL_BC_FINALIZE
+
+
 !> \brief Compute density, RHO_F, at non-iterpolated boundaries
 !> \param BC Boundary Coordinates derived type
 !> \param B1 Boundary Properties derived type
