@@ -528,24 +528,66 @@ private:
 };
 ```
 
-### Step 12: Wire into Main Graph
+### Step 12: Create Dedicated Sub-Graph and Wire into Main Graph
 
-Add to `fds_graph.h`:
+**IMPORTANT**: For complex routines, create a dedicated sub-graph wrapper. This wraps all components (orchestrator, kernel, collector) into a single named graph node, making it easier to trace back to the original Fortran routine in dot file visualizations.
+
+#### Create sub-graph header (`graph/wallbc_subgraph.h`):
 
 ```cpp
-// Create WallBC sub-graph components
-auto wallBCOrchSM = std::make_shared<hh::StateManager<1, MeshData, WallBCWork>>(
-    std::make_shared<WallBCOrchestrator>(nmeshes), "WallBCOrch");
-auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(kernelThreads);
-auto wallBCCollectorSM = std::make_shared<hh::StateManager<1, WallBCWork, MeshData>>(
-    std::make_shared<WallBCCollector>(nmeshes), "WallBCCollector");
+#ifndef WALLBC_SUBGRAPH_H
+#define WALLBC_SUBGRAPH_H
 
-// Wire sub-graph (replace sequential task)
-graph->edges(prevNode, wallBCOrchSM);
-graph->edges(wallBCOrchSM, wallBCKernelTask);
-graph->edges(wallBCKernelTask, wallBCCollectorSM);
-graph->edges(wallBCCollectorSM, nextNode);
+#include <hedgehog/hedgehog.h>
+#include <memory>
+#include "../data/mesh_data.h"
+#include "../data/wallbc_data.h"
+#include "../task/wallbc_kernel_task.h"
+#include "../state/wallbc_state.h"
+
+/// Build the WallBC sub-graph (Pattern B: complex routine parallelization).
+inline auto buildWallBCSubgraph(int nmeshes, size_t kernelThreads) {
+    using SubGraphType = hh::Graph<1, MeshData, MeshData>;
+    auto subgraph = std::make_shared<SubGraphType>("WallBC");  // ← Named graph
+
+    // Create components
+    auto wallBCOrchSM = std::make_shared<hh::StateManager<1, MeshData, WallBCWork>>(
+        std::make_shared<WallBCOrchestrator>(nmeshes), "WallBCOrch");
+    auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(kernelThreads);
+    auto wallBCCollectorSM = std::make_shared<hh::StateManager<1, WallBCWork, MeshData>>(
+        std::make_shared<WallBCCollector>(nmeshes), "WallBCCollector");
+
+    // Wire components within sub-graph
+    subgraph->inputs(wallBCOrchSM);
+    subgraph->edges(wallBCOrchSM, wallBCKernelTask);
+    subgraph->edges(wallBCKernelTask, wallBCCollectorSM);
+    subgraph->outputs(wallBCCollectorSM);
+
+    return subgraph;
+}
+
+#endif // WALLBC_SUBGRAPH_H
 ```
+
+#### Wire sub-graph into main graph (`fds_graph.h`):
+
+```cpp
+#include "wallbc_subgraph.h"
+
+// In buildFDSGraph():
+// Create WallBC sub-graph (Pattern B)
+auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+
+// Wire sub-graph (replace sequential CorrWallBCTask)
+graph->edges(prevNode, wallBCSubgraph);
+graph->edges(wallBCSubgraph, nextNode);
+```
+
+**Benefits of dedicated sub-graph**:
+- **Traceability**: "WallBC" appears as single node in dot file → easy to relate to Fortran WALL_BC routine
+- **Modularity**: Self-contained graph structure (like `changeTimeStepSubgraph`)
+- **Reusability**: Can be used in multiple places if needed
+- **Clarity**: Graph topology matches conceptual architecture
 
 ### Step 13: Testing Strategy
 
@@ -676,6 +718,7 @@ For routines with 80-90% parallelizable work:
 - [ ] Implement orchestrator (collect → compute globals → preprocess → dispatch)
 - [ ] Implement kernel task (call kernel, pass through work token)
 - [ ] Implement collector (gather → sort → finalize → emit)
-- [ ] Wire into main graph (replace sequential task)
+- [ ] **Create dedicated sub-graph wrapper (`graph/<routine>_subgraph.h`)**
+- [ ] Wire sub-graph into main graph (replace sequential task)
 - [ ] Test: 1-mesh byte-identical, multi-mesh byte-identical
 - [ ] Document: method, test results, lessons learned

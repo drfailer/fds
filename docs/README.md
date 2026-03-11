@@ -53,6 +53,7 @@ Complex routines with cross-mesh dependencies (Pattern B).
 - Sequential finalization (OMESH writes)
 - Global parameter computation
 - Flag-based cell filtering
+- **Dedicated sub-graph wrapper** (`graph/<routine>_subgraph.h`) for traceability
 
 ### [METHOD_MODULE_SPLIT.md](METHOD_MODULE_SPLIT.md)
 Decomposing large Fortran modules into focused sub-modules.

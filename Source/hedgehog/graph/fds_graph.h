@@ -48,6 +48,7 @@
 #include "../state/corr_particle_state.h"
 #include "../state/wallbc_state.h"
 #include "change_timestep_subgraph.h"
+#include "wallbc_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -191,14 +192,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto corrParticleCollectorSM = std::make_shared<hh::StateManager<1, CorrParticleWork, MeshData>>(
         std::make_shared<CorrParticleCollector>(nmeshes), "CorrParticleCollector");
 
-    // --- Create WallBC sub-graph components (Pattern B) ---
+    // --- Create WallBC sub-graph (Pattern B) ---
     // Sequential preprocessing (ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES) in orchestrator,
     // parallel WALL_BC_PROCESS_CELLS_KERNEL, sequential finalization (HAS_BACK_MESH, thin walls)
-    auto wallBCOrchSM = std::make_shared<hh::StateManager<1, MeshData, WallBCWork>>(
-        std::make_shared<WallBCOrchestrator>(nmeshes), "WallBCOrch");
-    auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(kernelThreads);
-    auto wallBCCollectorSM = std::make_shared<hh::StateManager<1, WallBCWork, MeshData>>(
-        std::make_shared<WallBCCollector>(nmeshes), "WallBCCollector");
+    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -383,10 +380,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(corrParticleCollectorSM, collector7SM);       // Collector -> MESH_EXCHANGE(7)
     graph->edges(collector7SM, meshExchange7);                // Do MESH_EXCHANGE(7)
     // WallBC sub-graph (Pattern B: sequential preprocessing + parallel kernel + sequential finalization)
-    graph->edges(meshExchange7, wallBCOrchSM);                // MeshExch -> WallBC Orchestrator
-    graph->edges(wallBCOrchSM, wallBCKernelTask);             // Orchestrator -> Kernel (parallel)
-    graph->edges(wallBCKernelTask, wallBCCollectorSM);        // Kernel -> Collector
-    graph->edges(wallBCCollectorSM, collector6aSM);           // Collector -> MESH_EXCHANGE(6)
+    graph->edges(meshExchange7, wallBCSubgraph);              // MeshExch -> WallBC sub-graph
+    graph->edges(wallBCSubgraph, collector6aSM);              // WallBC sub-graph -> MESH_EXCHANGE(6)
     graph->edges(collector6aSM, meshExchange6a);              // Do MESH_EXCHANGE(6)
     graph->edges(meshExchange6a, corrRadiation);
     graph->edges(corrRadiation, collector2SM);                // Collect for MESH_EXCHANGE(2)
