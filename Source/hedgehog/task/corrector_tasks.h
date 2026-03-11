@@ -159,23 +159,7 @@ public:
     }
 };
 
-/// Task C10: Match velocity + velocity BC + outputs (end of corrector)
-class CorrFinalTask : public hh::AbstractTask<1, MeshData, MeshData> {
-public:
-    explicit CorrFinalTask(size_t nThreads = 1)
-        : hh::AbstractTask<1, MeshData, MeshData>("CorrFinal", nThreads) {}
-
-    void execute(std::shared_ptr<MeshData> data) override {
-        fds_match_velocity(data->nm);
-        fds_velocity_bc(data->t, data->nm, 0);  // estimated=false
-        fds_update_global_outputs(data->t, data->dt, data->nm);
-        // DUMP_MESH_OUTPUTS moved to TimestepState (must happen after global UPDATE_CONTROLS)
-        this->addResult(data);
-    }
-
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>> copy() override {
-        return std::make_shared<CorrFinalTask>(this->numberThreads());
-    }
-};
+// CorrFinalTask replaced by CorrFinal sub-graph (Pattern B) in velocity_bc_subgraph.h
+// DUMP_MESH_OUTPUTS remains in TimestepState (must happen after global UPDATE_CONTROLS)
 
 #endif // CORRECTOR_TASKS_H

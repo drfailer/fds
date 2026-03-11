@@ -49,6 +49,7 @@
 #include "../state/wallbc_state.h"
 #include "change_timestep_subgraph.h"
 #include "wallbc_subgraph.h"
+#include "velocity_bc_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -77,7 +78,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // NOTE: predWallDiv replaced by pred wall div sub-graph (see below)
     // NOTE: divPart2Pred replaced by divergence part 2 sub-graph (see below)
     // NOTE: velPredictor replaced by velocity predictor sub-graph (see below)
-    auto predFinal       = std::make_shared<PredFinalTask>(1);
+    // NOTE: predFinal replaced by PredFinal sub-graph (Pattern B: preprocessing + parallel kernel + finalization)
 
     // --- Create corrector tasks (all sequential) ---
     // NOTE: corrStep1 replaced by corrector step 1 sub-graph (see below)
@@ -89,7 +90,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // NOTE: corrDivPart1 replaced by corr div part 1 sub-graph (see below)
     // NOTE: corrDivPart2 replaced by divergence part 2 sub-graph (see below)
     // NOTE: corrVelocity replaced by velocity corrector sub-graph (see below)
-    auto corrFinal       = std::make_shared<CorrFinalTask>(1);
+    // NOTE: corrFinal replaced by CorrFinal sub-graph (Pattern B: preprocessing + parallel kernel + finalization)
 
     // --- Create velocity predictor sub-graph components ---
     // Only the kernel task is parallelized; orchestrator and collector are always sequential
@@ -196,6 +197,16 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // Sequential preprocessing (ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES) in orchestrator,
     // parallel WALL_BC_PROCESS_CELLS_KERNEL, sequential finalization (HAS_BACK_MESH, thin walls)
     auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+
+    // --- Create PredFinal sub-graph (Pattern B) ---
+    // Sequential MATCH_VELOCITY + SYNTHETIC_TURBULENCE + VELOCITY_BC_PREPROCESSING,
+    // parallel VELOCITY_BC_PROCESS_EDGES_KERNEL, sequential CC_VELOCITY_BC
+    auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads);
+
+    // --- Create CorrFinal sub-graph (Pattern B) ---
+    // Sequential MATCH_VELOCITY + VELOCITY_BC_PREPROCESSING,
+    // parallel VELOCITY_BC_PROCESS_EDGES_KERNEL, sequential CC_VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS
+    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads);
 
     // --- Create barrier collector state managers + barrier tasks ---
 
@@ -349,8 +360,9 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);  // Do CHANGE_TIME_STEP_LOOP
     graph->edges(changeTimeStepSubgraph, collector3SM);               // Collect for MESH_EXCHANGE(3)
     graph->edges(collector3SM, meshExchange3);                 // Do MESH_EXCHANGE(3)
-    graph->edges(meshExchange3, predFinal);
-    graph->edges(predFinal, phaseTransCollectorSM);           // Collect for phase transition
+    // PredFinal sub-graph (Pattern B: MATCH_VELOCITY + SYNTH_TURB + preprocessing + parallel edges kernel + CC_VELOCITY_BC)
+    graph->edges(meshExchange3, predFinalSubgraph);
+    graph->edges(predFinalSubgraph, phaseTransCollectorSM);   // Collect for phase transition
     graph->edges(phaseTransCollectorSM, phaseTransTask);      // Do phase transition
     // Corrector step 1 sub-graph (parallel multi-mesh execution)
     graph->edges(phaseTransTask, corrStep1OrchSM);            // PhaseTrans -> CorrStep1 Orchestrator
@@ -406,10 +418,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(velCorrKernelTask, velCorrCollectorSM);      // Kernel → Collector
     graph->edges(velCorrCollectorSM, collector6bSM);          // Collector → MESH_EXCHANGE(6)
     graph->edges(collector6bSM, meshExchange6b);              // Do MESH_EXCHANGE(6)
-    graph->edges(meshExchange6b, corrFinal);
+    // CorrFinal sub-graph (Pattern B: MATCH_VELOCITY + preprocessing + parallel edges kernel + CC_VELOCITY_BC + outputs)
+    graph->edges(meshExchange6b, corrFinalSubgraph);
 
     // End of time step: corrFinal -> collector -> timestep task -> loop state -> cycle
-    graph->edges(corrFinal, timestepCollectorSM);
+    graph->edges(corrFinalSubgraph, timestepCollectorSM);
     graph->edges(timestepCollectorSM, timestepTask);
     graph->edges(timestepTask, timestepLoopSM);
 

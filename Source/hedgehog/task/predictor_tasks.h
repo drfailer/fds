@@ -109,22 +109,6 @@ public:
     }
 };
 
-/// Task 7: Match velocity + velocity BC (end of predictor)
-class PredFinalTask : public hh::AbstractTask<1, MeshData, MeshData> {
-public:
-    explicit PredFinalTask(size_t nThreads = 1)
-        : hh::AbstractTask<1, MeshData, MeshData>("PredFinal", nThreads) {}
-
-    void execute(std::shared_ptr<MeshData> data) override {
-        fds_match_velocity(data->nm);
-        fds_synthetic_turbulence(data->dt, data->t, data->nm);
-        fds_velocity_bc(data->t, data->nm, 1); // estimated=true for predictor end
-        this->addResult(data);
-    }
-
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>> copy() override {
-        return std::make_shared<PredFinalTask>(this->numberThreads());
-    }
-};
+// PredFinalTask replaced by PredFinal sub-graph (Pattern B) in velocity_bc_subgraph.h
 
 #endif // PREDICTOR_TASKS_H
