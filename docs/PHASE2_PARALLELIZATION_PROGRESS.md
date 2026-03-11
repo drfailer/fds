@@ -67,11 +67,12 @@ Each complex routine follows this pipeline:
   - [x] Extract VELOCITY_BC_PROCESS_EDGES_KERNEL (local edge processing, all edges)
   - [x] Modified VELOCITY_BC_KERNEL to call both components
   - [x] Test: full test suite ✅ (all 5 tests byte-identical)
-  - [ ] **NEXT**: Commit
+  - [x] Commit ✅ (638023d8f8)
 
 **Estimated effort**: 11-15 hours total (Phase 2 skipped)
+**Actual effort**: 3.5 hours total ✅
 
-**Blockers:** Must complete before PredFinal/CorrFinal refactoring
+**Blockers:** ~~Must complete before PredFinal/CorrFinal refactoring~~ ✅ **UNBLOCKED**
 
 **Current status**: Phase 4 ✅ complete (fds_hh build + tests successful)
 
@@ -227,12 +228,15 @@ Extracted VELOCITY_BC components:
 ### Completed (Phase 1)
 ✅ 12 sub-graphs (VelocityCorrector, VelocityPredictor, DivPart2, CorrStep1, DensityPred, CorrDivPart1, DivSetup, PredStep1, CorrCondens, PredWallDiv, CorrParticle, WallBC)
 
-### In Progress (Phase 2)
-🔄 VELOCITY_BC decomposition (Phase 3 ✅ complete, Phase 4 ready)
+### Completed (Phase 2)
+✅ VELOCITY_BC decomposition (All phases complete - 3.5 hours)
+  - Phase 1: CC_VELOCITY analysis ✅
+  - Phase 3: Thread-safe conversion ✅ (470df20aa7)
+  - Phase 4: Component extraction ✅ (638023d8f8)
 
-### Blocked
-⛔ PredFinal (blocked on VELOCITY_BC decomposition)
-⛔ CorrFinal (blocked on VELOCITY_BC decomposition)
+### Ready to Start (Phase 2)
+🟢 PredFinal (unblocked - VELOCITY_BC components ready)
+🟢 CorrFinal (unblocked - VELOCITY_BC components ready)
 
 ---
 
