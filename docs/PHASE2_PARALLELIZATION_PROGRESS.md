@@ -61,7 +61,7 @@ Each complex routine follows this pipeline:
   - [x] Use M for explicit accesses (M%WALL, M%U, M%V, etc.)
   - [x] Pass NM to callees when needed
   - [x] Test: full test suite (byte-identical)
-  - [ ] Commit
+  - [x] Commit ✅ (470df20aa7)
 - [ ] **Phase 4**: Extract VELOCITY_BC components
   - [ ] Extract VELOCITY_BC_PREPROCESSING (OMESH wall velocity reads)
   - [ ] Extract VELOCITY_BC_PROCESS_EDGES_KERNEL (local edge processing, excluding INTERPOLATED)
@@ -73,9 +73,9 @@ Each complex routine follows this pipeline:
 
 **Blockers:** Must complete before PredFinal/CorrFinal refactoring
 
-**Current status**: Phase 1 ✅ complete, Phase 3 ✅ complete
+**Current status**: Phase 3 ✅ complete, Phase 4 ready to start
 
-**Phase 3 substeps:**
+**Phase 3 substeps:** ✅ All complete
 - [x] Created VELOCITY_BC_CONVERSION_MAP.md with systematic substitution plan
 - [x] Created VELOCITY_BC_KERNEL with TYPE(MESH_TYPE) argument
   - Completed ~150 substitutions in 809-line routine
@@ -84,7 +84,7 @@ Each complex routine follows this pipeline:
 - [x] Convert old VELOCITY_BC to wrapper
 - [x] Compile test ✅ (successful)
 - [x] Full test suite ✅ (all 5 tests byte-identical)
-- [ ] **NEXT**: Commit
+- [x] Commit ✅ (470df20aa7)
 
 **Actual time for Phase 3:** ~1.5 hours (faster than estimated 2-3 hours due to sed automation)
 
@@ -94,6 +94,12 @@ Each complex routine follows this pipeline:
 - ✅ dancing_eddies_4mesh (5.60s) - byte-identical
 - ✅ multiple_reac_3mesh (6.14s) - byte-identical
 - ✅ species_props_5mesh (1.09s) - byte-identical
+
+**Phase 4 plan:**
+Extract VELOCITY_BC components for parallelization:
+- VELOCITY_BC_PREPROCESSING: OMESH wall velocity reads (sequential)
+- VELOCITY_BC_PROCESS_EDGES_KERNEL: Local edge processing (parallel)
+- VELOCITY_BC_FINALIZE: INTERPOLATED edges (sequential, if needed)
 
 ---
 
@@ -203,7 +209,7 @@ Each complex routine follows this pipeline:
 ✅ 12 sub-graphs (VelocityCorrector, VelocityPredictor, DivPart2, CorrStep1, DensityPred, CorrDivPart1, DivSetup, PredStep1, CorrCondens, PredWallDiv, CorrParticle, WallBC)
 
 ### In Progress (Phase 2)
-🔄 VELOCITY_BC decomposition (Phase 3 complete, test verification in progress)
+🔄 VELOCITY_BC decomposition (Phase 3 ✅ complete, Phase 4 ready)
 
 ### Blocked
 ⛔ PredFinal (blocked on VELOCITY_BC decomposition)
