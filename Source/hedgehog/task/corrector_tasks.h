@@ -92,22 +92,7 @@ public:
     }
 };
 
-/// Task C6: Radiation
-class CorrRadiationTask : public hh::AbstractTask<1, MeshData, MeshData> {
-public:
-    explicit CorrRadiationTask(size_t nThreads = 1)
-        : hh::AbstractTask<1, MeshData, MeshData>("CorrRadiation", nThreads) {}
-
-    void execute(std::shared_ptr<MeshData> data) override {
-        // Radiation iterations are handled internally; call once per mesh
-        fds_compute_radiation(data->t, data->nm, 1);
-        this->addResult(data);
-    }
-
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>> copy() override {
-        return std::make_shared<CorrRadiationTask>(this->numberThreads());
-    }
-};
+// CorrRadiationTask replaced by CorrRadiation sub-graph (Pattern A) in corr_radiation_subgraph.h
 
 /// Task C7: Combustion BC + divergence part 1
 class CorrDivPart1Task : public hh::AbstractTask<1, MeshData, MeshData> {

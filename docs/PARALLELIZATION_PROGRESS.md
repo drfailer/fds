@@ -26,7 +26,7 @@ Step-by-step procedures for parallelizing FDS routines:
    - Pattern B: Sequential pre/post + parallel kernel
 ```
 
-## Completed Sub-Graphs (14 sub-graphs)
+## Completed Sub-Graphs (15 sub-graphs)
 
 All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
@@ -55,6 +55,13 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 9. **Corrector Condensation**
    - Kernel: CONDENSATION_EVAPORATION_KERNEL (extracted from fire.f90)
    - Files: data/corr_condens_data.h, state/corr_condens_state.h, task/corr_condens_kernel_task.h
+
+15. **Corrector Radiation** (Pattern A with global accumulator handling)
+    - Kernel: COMPUTE_RADIATION_KERNEL (local pointer aliases, ~1200 lines including CONTAINS subroutines)
+    - Technique: Local pointer aliases shadow MESH_POINTERS module variables; CONTAINS subroutines (RADIATION_FVM, ADD_VOLUMETRIC_HEAT_SOURCE) inherit aliases through host association
+    - RAD_Q_SUM/KFST4_SUM: per-mesh partial sums returned via output parameters, accumulated in collector
+    - Files: data/corr_radiation_data.h, state/corr_radiation_state.h, task/corr_radiation_kernel_task.h, graph/corr_radiation_subgraph.h
+    - Replaced: CorrRadiationTask
 
 ### Pattern B: Sequential Pre/Post + Parallel Kernel
 
@@ -160,10 +167,9 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
 | Task | Routines | Blocker |
 |------|----------|---------|
-| CorrRadiationTask | COMPUTE_RADIATION | Complex iterative solver, low priority |
 | All barrier tasks | MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC | Inherently global/sequential |
 
-**Note**: PredFinal and CorrFinal have been decomposed into Pattern B sub-graphs (sub-graphs 13, 14). COMPUTE_RADIATION is a complex solver with internal state management — candidate for future decomposition.
+**Note**: All per-mesh computation tasks have been parallelized (15 sub-graphs). Only inherently global/sequential barrier tasks remain.
 
 ## Performance Profiling Results
 

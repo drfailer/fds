@@ -73,6 +73,9 @@ void fds_condensation(double dt, int nm);
 void fds_particle_mass_energy(double t, double dt, int nm);
 void fds_move_particles(double t, double dt, int nm);
 void fds_compute_radiation(double t, int nm, int rad_iter);
+void fds_compute_radiation_kernel(int nm, double t, int rad_iter,
+    double* rad_q_sum_out, double* kfst4_sum_out);
+void fds_accumulate_rad_sums(double rad_q_partial, double kfst4_partial);
 void fds_agglomeration(double dt, int nm);
 void fds_cc_end_step(double t, double dt, int diag);
 void fds_check_divergence(int nm);

@@ -300,6 +300,7 @@ All DEVC outputs must be byte-identical.
 | 7 | DivSetup | B | VELOCITY_FLUX_KERNEL (seq: VISCOSITY_BC) | Both (2 instances) |
 | 8 | PredFinal | B | VELOCITY_BC_PROCESS_EDGES_KERNEL (seq: MATCH_VELOCITY, SYNTH_TURB, VELOCITY_BC_PREPROCESSING; post: CC_VELOCITY_BC) | Pred |
 | 9 | CorrFinal | B | VELOCITY_BC_PROCESS_EDGES_KERNEL (seq: MATCH_VELOCITY, VELOCITY_BC_PREPROCESSING; post: CC_VELOCITY_BC, UPDATE_GLOBAL_OUTPUTS) | Corr |
+| 10 | CorrRadiation | A | COMPUTE_RADIATION_KERNEL (local pointer aliases, RAD_Q_SUM/KFST4_SUM via output params) | Corr |
 
 ## Files per Sub-Graph
 

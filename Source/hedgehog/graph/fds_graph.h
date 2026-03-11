@@ -50,6 +50,7 @@
 #include "change_timestep_subgraph.h"
 #include "wallbc_subgraph.h"
 #include "velocity_bc_subgraph.h"
+#include "corr_radiation_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -86,7 +87,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // NOTE: corrCondens replaced by corr condens sub-graph (see below)
     // NOTE: corrParticle replaced by corr particle sub-graph (see below)
     // NOTE: corrWallBC replaced by WallBC sub-graph (Pattern B: preprocessing + parallel kernel + finalization)
-    auto corrRadiation   = std::make_shared<CorrRadiationTask>(1);
+    // NOTE: corrRadiation replaced by CorrRadiation sub-graph (Pattern A: parallel kernel)
+    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
     // NOTE: corrDivPart1 replaced by corr div part 1 sub-graph (see below)
     // NOTE: corrDivPart2 replaced by divergence part 2 sub-graph (see below)
     // NOTE: corrVelocity replaced by velocity corrector sub-graph (see below)
@@ -395,8 +397,9 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->edges(meshExchange7, wallBCSubgraph);              // MeshExch -> WallBC sub-graph
     graph->edges(wallBCSubgraph, collector6aSM);              // WallBC sub-graph -> MESH_EXCHANGE(6)
     graph->edges(collector6aSM, meshExchange6a);              // Do MESH_EXCHANGE(6)
-    graph->edges(meshExchange6a, corrRadiation);
-    graph->edges(corrRadiation, collector2SM);                // Collect for MESH_EXCHANGE(2)
+    // CorrRadiation sub-graph (Pattern A: parallel kernel with global accumulator handling)
+    graph->edges(meshExchange6a, corrRadiationSubgraph);
+    graph->edges(corrRadiationSubgraph, collector2SM);        // Collect for MESH_EXCHANGE(2)
     graph->edges(collector2SM, meshExchange2);                // Do MESH_EXCHANGE(2)
     graph->edges(meshExchange2, corrInitDivCollectorSM);      // Collect for INIT_DIV
     graph->edges(corrInitDivCollectorSM, corrInitDivTask);    // Do INIT_DIV_INTEGRALS
