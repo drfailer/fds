@@ -287,3 +287,106 @@ Currently FDS uses MPI for multi-mesh (one process per mesh group). The Hedgehog
 | CCIB kernels (21 routines) | ccib_*_kernels.f90 | Called from CC_IBM orchestration paths |
 | Fire kernels (COMBUSTION_MODEL, etc.) | fire_kernels.f90 | Called from COMBUSTION_LOAD_BALANCED |
 | Pressure kernels (FFT, RHS, residuals) | pres_kernels.f90 | Called from PRESSURE_ITERATION |
+
+## Thread-Safe Routine Conversions (for future WALL_BC parallelization)
+
+### Completed Conversions (Index-Based Access Pattern)
+
+#### 1. ✅ CALC_HVAC_BC (wall.f90)  
+**Lines**: 52  
+**Approach**: Added explicit M and PREDICTOR_FLAG arguments  
+**Key change**: Replaced module-level `PBAR_P` with conditional `M%PBAR_S` or `M%PBAR`  
+**Call sites**: 2 (both in WALL_BC)  
+
+#### 2. ✅ HEAT_TRANSFER_COEFFICIENT (func.f90)  
+**Lines**: ~175  
+**Approach**: Index-based access (no pointers to ALLOCATABLE arrays)  
+**Signature**: `NM` → `M`, added explicit MESH_TYPE argument  
+**Key pattern**:  
+```fortran
+! Instead of:
+WC => M%WALL(WALL_INDEX)
+B1 => M%BOUNDARY_PROP1(WC%B1_INDEX)
+B1%TMP_F = ...
+
+! Use:
+B1_INDEX = M%WALL(WALL_INDEX)%B1_INDEX
+M%BOUNDARY_PROP1(B1_INDEX)%TMP_F = ...
+```
+**Call sites**: 15+ (wall.f90, dump.f90)  
+**Automated**: Used awk script to replace 17 pointer references  
+
+### In Progress: Large Routines
+
+#### 3. ⏸️ SURFACE_HEAT_TRANSFER (wall.f90)  
+**Lines**: 379  
+**Status**: Signature updated, module-level arrays prefixed with M%, pointer assignments need removal  
+**Challenge**: Fortran does not allow TARGET attribute in TYPE definitions → cannot use pointers to M% arrays  
+**Required approach**: Direct conditional access without pointers  
+**Estimated effort**: 4-6 hours for full no-pointer conversion  
+**Alternative**: Decompose into smaller case-specific kernels first  
+
+#### 4. ⏸️ CALCULATE_ZZ_F (wall.f90)  
+**Lines**: 413  
+**Status**: Same as SURFACE_HEAT_TRANSFER  
+**Challenge**: Same language limitation  
+**Estimated effort**: 4-6 hours  
+
+### Technical Limitation Discovered
+
+**Fortran TARGET Restriction**:
+```fortran
+! NOT ALLOWED:
+TYPE MESH_TYPE
+   REAL(EB), ALLOCATABLE, TARGET, DIMENSION(:,:,:) :: U  ! ERROR
+END TYPE
+```
+
+**Compiler error**: "Attribute at (1) is not allowed in a TYPE definition"
+
+**Impact**: Cannot use pointer assignment to ALLOCATABLE arrays without TARGET:
+```fortran
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU
+UU => M%U  ! ERROR: target is neither TARGET nor POINTER
+```
+
+**Solution**: Eliminate all pointer usage, use direct array access:
+```fortran
+! Before (with local pointers):
+IF (PREDICTOR_FLAG) THEN
+   UU => M%US
+ELSE
+   UU => M%U
+ENDIF
+UN = UU(II,JJ,KK)
+
+! After (direct access):
+IF (PREDICTOR_FLAG) THEN
+   UN = M%US(II,JJ,KK)
+ELSE
+   UN = M%U(II,JJ,KK)
+ENDIF
+```
+
+**Trade-off**: More verbose but eliminates thread-unsafe module-level pointers.
+
+### Documentation
+
+- **WALL_BC_CONVERSIONS_SUMMARY.md** — Details of completed conversions  
+- **WALL_BC_LARGE_ROUTINES_STATUS.md** — Challenge and options for large routines  
+- **METHOD_KERNEL_EXTRACTION.md** — Updated with index-based access pattern
+
+### Next Steps for WALL_BC Parallelization
+
+**Critical path** (from WALL_BC_DECOMPOSITION.md):
+1. ✅ Convert quick-win callees (CALC_HVAC_BC, HEAT_TRANSFER_COEFFICIENT)  
+2. ⏸️ Complete large routine conversions (SURFACE_HEAT_TRANSFER, CALCULATE_ZZ_F)  
+   - **Option A**: Full no-pointer conversion (4-6 hrs each)  
+   - **Option B**: Decompose by boundary condition case first (2-3 hrs per case)  
+3. Extract main WALL_BC loop into three phases:
+   - Phase 1: ASSIGN_GHOST_VALUE (sequential, OMESH reads)  
+   - Phase 2: WALL_BC_PROCESS_CELLS_KERNEL (parallel, 90% of cells)  
+   - Phase 3: Cross-mesh finalization (INTERPOLATED_BC, BACK_MESH, CONSUME_MASS)  
+
+**Estimated total to full WALL_BC parallelization**: 10-15 hours
+
