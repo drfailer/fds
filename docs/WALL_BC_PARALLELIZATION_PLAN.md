@@ -1,6 +1,6 @@
 # WALL_BC Parallelization Implementation Plan
 
-## Status: Steps 1-3 Complete - Three-Phase Architecture Implemented
+## Status: Steps 1-4 Complete - Hedgehog Sub-Graph Components Created
 
 All prerequisite thread-safe conversions completed:
 - ✅ CALC_HVAC_BC (52 lines)
@@ -33,6 +33,16 @@ All prerequisite thread-safe conversions completed:
 - Phase 2: `CALL WALL_BC_PROCESS_CELLS_KERNEL` (ready for Hedgehog parallelization)
 - Phase 3: `CALL WALL_BC_FINALIZE` (sequential cross-mesh processing)
 - Testing: ✅ Byte-identical results on dancing_eddies_1mesh_short (DEVC and HRR)
+
+**Step 4 Completed**: Hedgehog sub-graph components created
+- C wrapper: `fds_c_interface.f90` - C_FDS_WALL_BC_PROCESS_CELLS_KERNEL (RECURSIVE)
+- C declaration: `fds_fortran_interface.h` - fds_wall_bc_process_cells_kernel()
+- Work token: `data/wallbc_data.h` - WallBCWork struct
+- Orchestrator: `state/wallbc_state.h` - WallBCOrchestrator class
+- Collector: `state/wallbc_state.h` - WallBCCollector class
+- Kernel task: `task/wallbc_kernel_task.h` - WallBCKernelTask class
+- Testing: ✅ Compiles successfully, FDS runs correctly
+- Status: Components ready for graph integration (Step 5)
 
 ## Three-Phase Architecture
 
