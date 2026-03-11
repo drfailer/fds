@@ -126,38 +126,48 @@ Extracted VELOCITY_BC components:
 ### Priority 2: PredFinal (MATCH_VELOCITY + VELOCITY_BC + SYNTHETIC_TURBULENCE)
 **Time:** ~342 ms (4-mesh)
 **Parallelizable:** 75-80%
-**Effort:** Medium (depends on VELOCITY_BC decomposition)
+**Effort:** Medium (Fortran ✅ complete, C++ integration pending)
 
-**Tasks:**
-- [ ] Create PredFinal sub-graph components
-  - [ ] Orchestrator: MATCH_VELOCITY (cross-mesh synchronization)
-  - [ ] Kernel: SYNTHETIC_TURBULENCE + VELOCITY_BC_PROCESS_LOCAL_KERNEL
-  - [ ] Collector: VELOCITY_BC_FINALIZE (interpolated edges)
-- [ ] Create dedicated predfinal_subgraph.h
-- [ ] Integrate into predictor pipeline
+**Status:** Fortran refactoring complete, ready for Hedgehog C++ integration
+
+**Fortran components ready:**
+- [x] VELOCITY_BC_PREPROCESSING (sequential - OMESH reads)
+- [x] VELOCITY_BC_PROCESS_EDGES_KERNEL (parallel - main computation)
+- [ ] MATCH_VELOCITY (already exists - sequential cross-mesh sync)
+- [ ] SYNTHETIC_TURBULENCE (exists but needs thread-safe conversion for parallel execution)
+
+**Next: C++ Integration** (see `VELOCITY_BC_HEDGEHOG_INTEGRATION.md`)
+- [ ] Option A: Simple task-based integration (2-3 hours)
+- [ ] Option B: Dedicated sub-graph with Pattern B (4-6 hours)
 - [ ] Test and verify byte-identical
-- [ ] Commit
+- [ ] Profile performance (target: ~140ms, 2.4× faster)
+- [ ] Commit with performance results
 
-**Blockers:** Requires VELOCITY_BC decomposition
+**Blockers:** ~~Requires VELOCITY_BC decomposition~~ ✅ **UNBLOCKED** (Fortran work complete)
 
 ---
 
 ### Priority 3: CorrFinal (MATCH_VELOCITY + VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS)
 **Time:** ~385 ms (4-mesh)
 **Parallelizable:** 70-75%
-**Effort:** Medium (similar to PredFinal + output handling)
+**Effort:** Medium (Fortran ✅ complete, C++ integration pending)
 
-**Tasks:**
-- [ ] Create CorrFinal sub-graph components
-  - [ ] Orchestrator: MATCH_VELOCITY (cross-mesh synchronization)
-  - [ ] Kernel: VELOCITY_BC_PROCESS_LOCAL_KERNEL + UPDATE_GLOBAL_OUTPUTS (per-mesh accumulation)
-  - [ ] Collector: VELOCITY_BC_FINALIZE + global output reduction
-- [ ] Create dedicated corrfinal_subgraph.h
-- [ ] Integrate into corrector pipeline
+**Status:** Fortran refactoring complete, ready for Hedgehog C++ integration
+
+**Fortran components ready:**
+- [x] VELOCITY_BC_PREPROCESSING (sequential - OMESH reads)
+- [x] VELOCITY_BC_PROCESS_EDGES_KERNEL (parallel - main computation)
+- [ ] MATCH_VELOCITY (already exists - sequential cross-mesh sync)
+- [ ] UPDATE_GLOBAL_OUTPUTS (exists - needs analysis for parallelization)
+
+**Next: C++ Integration** (see `VELOCITY_BC_HEDGEHOG_INTEGRATION.md`)
+- [ ] Integrate with PredFinal or create separate sub-graph
+- [ ] Analyze UPDATE_GLOBAL_OUTPUTS for potential parallelization
 - [ ] Test and verify byte-identical
-- [ ] Commit
+- [ ] Profile performance (target: ~170ms, 2.3× faster)
+- [ ] Commit with performance results
 
-**Blockers:** Requires VELOCITY_BC decomposition
+**Blockers:** ~~Requires VELOCITY_BC decomposition~~ ✅ **UNBLOCKED** (Fortran work complete)
 
 ---
 
