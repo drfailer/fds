@@ -5,6 +5,7 @@
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
+#include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Orchestrator for PredFinal sub-graph.
@@ -45,9 +46,9 @@ private:
 /// Collector for PredFinal sub-graph (CC_IBM only).
 ///
 /// Gathers N kernel results, runs sequential CC_VELOCITY_BC,
-/// then emits N MeshData tokens downstream.
+/// then emits single BarrierData downstream.
 class PredFinalCCCollector
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractState<1, MeshData, BarrierData> {
 public:
     explicit PredFinalCCCollector(int nmeshes)
         : nmeshes_(nmeshes) {
@@ -67,12 +68,11 @@ public:
                 fds_cc_velocity_bc(md->t, md->nm, 1);  // applyToEstimated=1 (predictor)
             }
 
-            for (auto &md : results_) {
-                this->addResult(md);
-            }
-
-            results_.clear();
+            auto bd = std::make_shared<BarrierData>();
+            bd->meshes = std::move(results_);
+            results_ = {};
             results_.reserve(nmeshes_);
+            this->addResult(bd);
         }
     }
 
@@ -86,9 +86,9 @@ private:
 /// Gathers N kernel results, runs sequential finalization:
 ///   - CC_VELOCITY_BC (if CC_IBM active — handled internally by fds_cc_velocity_bc)
 ///   - UPDATE_GLOBAL_OUTPUTS (per-mesh output accumulation — always needed)
-/// Then emits N MeshData tokens downstream.
+/// Then emits single BarrierData downstream (avoids re-collection at graph boundary).
 class CorrFinalCollector
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractState<1, MeshData, BarrierData> {
 public:
     explicit CorrFinalCollector(int nmeshes)
         : nmeshes_(nmeshes) {
@@ -109,12 +109,11 @@ public:
                 fds_update_global_outputs(md->t, md->dt, md->nm);
             }
 
-            for (auto &md : results_) {
-                this->addResult(md);
-            }
-
-            results_.clear();
+            auto bd = std::make_shared<BarrierData>();
+            bd->meshes = std::move(results_);
+            results_ = {};
             results_.reserve(nmeshes_);
+            this->addResult(bd);
         }
     }
 

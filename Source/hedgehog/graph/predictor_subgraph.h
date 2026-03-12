@@ -23,10 +23,14 @@
 /// Build the Predictor sub-graph.
 ///
 /// Implements the full predictor phase of the FDS time-stepping loop:
-///   PredStep1 -> DensityPred -> MESH_EXCHANGE(1) -> PredDivSetup -> HVAC ->
-///   InitDivIntegrals -> WallBC -> PredWallDiv -> DivergenceExchange -> PredDivPart2 ->
+///   PredStep1 -> DensityPred -> MESH_EXCHANGE(1) -> PredDivSetup -> HVAC+InitDiv ->
+///   WallBC -> PredWallDiv -> DivergenceExchange -> PredDivPart2 ->
 ///   PressureIteration -> VelocityPredictor -> ChangeTimeStep ->
 ///   MESH_EXCHANGE(3) -> PredFinal -> PhaseTransition
+///
+/// Optimizations vs original graph:
+///   - HVAC + InitDivIntegrals merged into single barrier task (eliminates 1 collector + 1 task)
+///   - PredFinal outputs BarrierData directly (eliminates PhaseTransCollector)
 ///
 /// @param nmeshes Number of meshes
 /// @param tEnd Simulation end time (passed to ChangeTimeStep sub-graph)
@@ -63,7 +67,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(
         kernelThreads, /*skipCFL=*/ccIBM);
 
-    // PredFinal sub-graph (Pattern B)
+    // PredFinal sub-graph (Pattern B, outputs BarrierData)
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads);
 
     // ChangeTimeStep sub-graph (CFL retry loop)
@@ -75,13 +79,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(1)");
     auto meshExchange1 = std::make_shared<MeshExchangeTask>(1, /*ccDensity=*/ccIBM);
 
+    // Merged: HVAC + InitDivIntegrals (eliminates PredInitDivCollector + InitDivTask)
     auto predHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PredHvacCollector");
-    auto predHvacTask = std::make_shared<HvacTask>(1);
-
-    auto predInitDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PredInitDivCollector");
-    auto predInitDivTask = std::make_shared<InitDivIntegralsTask>();
+    auto hvacInitDivTask = std::make_shared<HvacInitDivTask>(1);
 
     auto predDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PredDivCollector");
@@ -98,8 +99,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(3)");
     auto meshExchange3 = std::make_shared<MeshExchangeTask>(3, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
 
-    auto phaseTransCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PhaseTransCollector");
+    // PhaseTransition receives BarrierData directly from PredFinal (no collector needed)
     auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
     // --- Wire the sub-graph ---
@@ -123,13 +123,13 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     } else {
         subgraph->edges(meshExchange1, predDivSetupKernelTask);
     }
+
+    // Merged HVAC+InitDiv (was: hvac -> collect -> initDiv)
     subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
-    subgraph->edges(predHvacCollectorSM, predHvacTask);
-    subgraph->edges(predHvacTask, predInitDivCollectorSM);
-    subgraph->edges(predInitDivCollectorSM, predInitDivTask);
+    subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
 
     // WallBC sub-graph (three-phase decomposition, reuses corrector pattern)
-    subgraph->edges(predInitDivTask, predWallBCSubgraph);
+    subgraph->edges(hvacInitDivTask, predWallBCSubgraph);
 
     // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 -> DivExchange
     subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
@@ -155,10 +155,9 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(changeTimeStepSubgraph, collector3SM);
     subgraph->edges(collector3SM, meshExchange3);
 
-    // PredFinal sub-graph + phase transition
+    // PredFinal (outputs BarrierData) -> PhaseTransition (no collector needed)
     subgraph->edges(meshExchange3, predFinalSubgraph);
-    subgraph->edges(predFinalSubgraph, phaseTransCollectorSM);
-    subgraph->edges(phaseTransCollectorSM, phaseTransTask);
+    subgraph->edges(predFinalSubgraph, phaseTransTask);
 
     subgraph->outputs(phaseTransTask);
 

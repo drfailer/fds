@@ -5,7 +5,6 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../state/collector_state.h"
 #include "../state/timestep_state.h"
 #include "../task/barrier_tasks.h"
 #include "predictor_subgraph.h"
@@ -15,6 +14,9 @@
 ///
 /// The graph implements the FDS time-stepping loop as a dataflow pipeline:
 ///   Predictor sub-graph -> Corrector sub-graph -> Timestep loop -> cycle back
+///
+/// The Corrector sub-graph outputs BarrierData directly (CorrFinal collector
+/// already gathers all meshes), so no external TimestepCollector is needed.
 ///
 /// @param nmeshes Number of meshes
 /// @param t Initial simulation time
@@ -32,8 +34,6 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, kernelThreads);
 
     // --- Create timestep loop components ---
-    auto timestepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "TimestepCollector");
     auto timestepTask = std::make_shared<TimestepTask>(tEnd);
     auto timestepLoopSM = std::make_shared<TimestepLoopStateManager>(
         std::make_shared<TimestepLoopState>(), "TimestepLoop");
@@ -46,9 +46,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     graph->inputs(predictorSubgraph);
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Corrector -> Timestep loop
-    graph->edges(correctorSubgraph, timestepCollectorSM);
-    graph->edges(timestepCollectorSM, timestepTask);
+    // Corrector (outputs BarrierData) -> Timestep loop (no collector needed)
+    graph->edges(correctorSubgraph, timestepTask);
     graph->edges(timestepTask, timestepLoopSM);
 
     // Cycle: TimestepLoop -> back to Predictor (MeshData)

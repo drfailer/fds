@@ -17,20 +17,24 @@
 
 /// MESH_EXCHANGE barrier task — replaces MeshBarrierState.
 ///
-/// Optional pre-exchange CC_IBM operations:
+/// Optional pre/post-exchange operations:
 /// - ccDensity: run CC_DENSITY(T,DT) before the exchange (after density loops)
 /// - ccEndStep: run CC_END_STEP(T,DT) before the exchange (after velocity pred/corr)
+/// - initDiv: run INITIALIZE_DIVERGENCE_INTEGRALS after the exchange
 class MeshExchangeTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
-    explicit MeshExchangeTask(int code, bool ccDensity = false, bool ccEndStep = false)
+    explicit MeshExchangeTask(int code, bool ccDensity = false,
+                              bool ccEndStep = false, bool initDiv = false)
         : hh::AbstractTask<1, BarrierData, MeshData>(
               "MeshExchange(" + std::to_string(code) + ")", 1),
-          code_(code), ccDensity_(ccDensity), ccEndStep_(ccEndStep) {}
+          code_(code), ccDensity_(ccDensity), ccEndStep_(ccEndStep),
+          initDiv_(initDiv) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
         if (ccDensity_) { fds_cc_density(data->t(), data->dt()); }
         if (ccEndStep_) { fds_cc_end_step(data->t(), data->dt(), 0); }
         fds_mesh_exchange(code_);
+        if (initDiv_) { fds_initialize_divergence_integrals(); }
         for (auto &md : data->meshes) { this->addResult(md); }
     }
 
@@ -38,6 +42,7 @@ private:
     int code_;
     bool ccDensity_;
     bool ccEndStep_;
+    bool initDiv_;
 };
 
 /// COMBUSTION_LOAD_BALANCED barrier task — replaces CombustionBarrierState.
@@ -52,6 +57,24 @@ public:
     }
 };
 
+/// Merged COMBUSTION + HVAC barrier task.
+/// Eliminates the intermediate collector between Combustion and HVAC.
+class CombustionHvacTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    explicit CombustionHvacTask(int first)
+        : hh::AbstractTask<1, BarrierData, MeshData>("Combustion+Hvac", 1),
+          first_(first) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        fds_combustion(data->t(), data->dt());
+        fds_hvac_calc(data->t(), data->dt(), first_);
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+
+private:
+    int first_;
+};
+
 /// HVAC_CALC barrier task — replaces HvacBarrierState.
 class HvacTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
@@ -61,6 +84,24 @@ public:
 
     void execute(std::shared_ptr<BarrierData> data) override {
         fds_hvac_calc(data->t(), data->dt(), first_);
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+
+private:
+    int first_;
+};
+
+/// Merged HVAC + INITIALIZE_DIVERGENCE_INTEGRALS barrier task.
+/// Eliminates the intermediate collector between HVAC and InitDiv.
+class HvacInitDivTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    explicit HvacInitDivTask(int first)
+        : hh::AbstractTask<1, BarrierData, MeshData>("Hvac+InitDiv", 1),
+          first_(first) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        fds_hvac_calc(data->t(), data->dt(), first_);
+        fds_initialize_divergence_integrals();
         for (auto &md : data->meshes) { this->addResult(md); }
     }
 

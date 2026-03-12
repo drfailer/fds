@@ -24,17 +24,23 @@
 /// Build the Corrector sub-graph.
 ///
 /// Implements the full corrector phase of the FDS time-stepping loop:
-///   CorrStep1 -> MESH_EXCHANGE(4) -> CorrDivSetup -> Combustion -> HVAC ->
+///   CorrStep1 -> MESH_EXCHANGE(4) -> CorrDivSetup -> Combustion+HVAC ->
 ///   CorrCondens -> CorrParticle -> MESH_EXCHANGE(7) -> WallBC ->
-///   MESH_EXCHANGE(6) -> CorrRadiation -> MESH_EXCHANGE(2) -> InitDivIntegrals ->
+///   MESH_EXCHANGE(6) -> CorrRadiation -> MESH_EXCHANGE(2)+InitDiv ->
 ///   CorrDivPart1 -> DivergenceExchange -> CorrDivPart2 -> PressureIteration ->
 ///   VelocityCorrector -> MESH_EXCHANGE(6) -> CorrFinal
+///
+/// Optimizations vs original graph:
+///   - Combustion + HVAC merged into single barrier task (eliminates 1 collector)
+///   - CorrRadiation outputs BarrierData directly (eliminates Collector(2))
+///   - MeshExchange(2) includes InitDivIntegrals (eliminates 1 collector + 1 task)
+///   - CorrFinal outputs BarrierData directly (eliminates TimestepCollector in parent)
 ///
 /// @param nmeshes Number of meshes
 /// @param kernelThreads Number of threads for parallel kernel tasks
 /// @return Shared pointer to the constructed sub-graph
 inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Corrector");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("Corrector");
 
     // --- Kernel tasks (MeshData -> MeshData, no orchestrator/collector needed) ---
 
@@ -69,13 +75,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
         std::make_shared<CollectorState>(nmeshes), "Collector(4)");
     auto meshExchange4 = std::make_shared<MeshExchangeTask>(4, /*ccDensity=*/ccIBM);
 
+    // Merged: Combustion + HVAC (eliminates CorrHvacCollector)
     auto combustionCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "CombustionCollector");
-    auto combustionTask = std::make_shared<CombustionTask>();
-
-    auto corrHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrHvacCollector");
-    auto corrHvacTask = std::make_shared<HvacTask>(1);
+    auto combustionHvacTask = std::make_shared<CombustionHvacTask>(1);
 
     auto collector7SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(7)");
@@ -85,13 +88,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
         std::make_shared<CollectorState>(nmeshes), "Collector(6a)");
     auto meshExchange6a = std::make_shared<MeshExchangeTask>(6);
 
-    auto collector2SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(2)");
-    auto meshExchange2 = std::make_shared<MeshExchangeTask>(2);
-
-    auto corrInitDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrInitDivCollector");
-    auto corrInitDivTask = std::make_shared<InitDivIntegralsTask>();
+    // Merged: MeshExchange(2) + InitDivIntegrals (eliminates CorrInitDivCollector + InitDivTask)
+    // CorrRadiation outputs BarrierData directly (eliminates Collector(2))
+    auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, /*ccDensity=*/false,
+                                                             /*ccEndStep=*/false, /*initDiv=*/true);
 
     auto corrDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "CorrDivCollector");
@@ -122,13 +122,13 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     } else {
         subgraph->edges(meshExchange4, corrDivSetupKernelTask);
     }
+
+    // Merged Combustion+HVAC (was: combustion -> collect -> hvac)
     subgraph->edges(corrDivSetupKernelTask, combustionCollectorSM);
-    subgraph->edges(combustionCollectorSM, combustionTask);
-    subgraph->edges(combustionTask, corrHvacCollectorSM);
-    subgraph->edges(corrHvacCollectorSM, corrHvacTask);
+    subgraph->edges(combustionCollectorSM, combustionHvacTask);
 
     // CorrCondens -> CorrParticle: orchestrator (particle ops) -> parallel kernel
-    subgraph->edges(corrHvacTask, corrCondensKernelTask);
+    subgraph->edges(combustionHvacTask, corrCondensKernelTask);
     subgraph->edges(corrCondensKernelTask, corrParticleOrchSM);
     subgraph->edges(corrParticleOrchSM, corrParticleKernelTask);
     subgraph->edges(corrParticleKernelTask, collector7SM);
@@ -139,15 +139,14 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     subgraph->edges(wallBCSubgraph, collector6aSM);
     subgraph->edges(collector6aSM, meshExchange6a);
 
-    // CorrRadiation sub-graph
+    // CorrRadiation sub-graph (outputs BarrierData directly)
     subgraph->edges(meshExchange6a, corrRadiationSubgraph);
-    subgraph->edges(corrRadiationSubgraph, collector2SM);
-    subgraph->edges(collector2SM, meshExchange2);
-    subgraph->edges(meshExchange2, corrInitDivCollectorSM);
-    subgraph->edges(corrInitDivCollectorSM, corrInitDivTask);
+
+    // MeshExchange(2) + InitDivIntegrals merged (CorrRadiation -> BarrierData -> MeshExchange2+InitDiv)
+    subgraph->edges(corrRadiationSubgraph, meshExchange2);
 
     // CorrDivPart1 -> DivExchange
-    subgraph->edges(corrInitDivTask, corrDivP1KernelTask);
+    subgraph->edges(meshExchange2, corrDivP1KernelTask);
     subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
     subgraph->edges(corrDivCollectorSM, corrDivExchangeTask);
 
@@ -172,7 +171,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     }
     subgraph->edges(collector6bSM, meshExchange6b);
 
-    // CorrFinal sub-graph
+    // CorrFinal sub-graph (outputs BarrierData directly — no external collector needed)
     subgraph->edges(meshExchange6b, corrFinalSubgraph);
 
     subgraph->outputs(corrFinalSubgraph);
