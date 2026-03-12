@@ -48,6 +48,8 @@ void fds_velocity_bc(double t, int nm, int estimated);
 
 // Thread-safe kernel wrappers (bypass orchestration, call kernels directly)
 void fds_velocity_predictor_kernel(int nm, double t, double dt);
+void fds_velocity_predictor_kernel_only(int nm, double dt);
+void fds_check_stability_kernel_only(int nm, double t, double dt);
 void fds_velocity_corrector_kernel(int nm, double t, double dt);
 void fds_check_divergence_kernel(int nm);
 void fds_divergence_part_2_kernel(int nm, double dt);
@@ -70,6 +72,7 @@ void fds_velocity_bc_process_edges_kernel(int nm, double t, int apply_to_estimat
 void fds_synthetic_turbulence_if_enabled(double dt, double t, int nm);
 void fds_cc_velocity_bc(double t, int nm, int estimated);
 void fds_cc_project_velocity(int nm, double dt, int store_flag);
+void fds_wall_velocity_no_gradh(int nm, double dt, int store_flag);
 
 // Corrector phase per-mesh subroutines
 void fds_combustion_bc(int nm);

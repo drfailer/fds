@@ -37,6 +37,10 @@ int main(int argc, char *argv[]) {
     int upper_mesh_index = fds_get_upper_mesh_index();
     int local_nmeshes = upper_mesh_index - lower_mesh_index + 1;
 
+    // Clamp initial DT to T_END (matches main.f90 top-of-MAIN_LOOP logic).
+    // Without this, simulations where initial DT > T_END overshoot on the first step.
+    dt = fds_adjust_dt(t, dt);
+
     std::cout << "[FDS-HH] Initialization complete." << std::endl;
     std::cout << "[FDS-HH] Total meshes=" << nmeshes
               << " Local meshes=" << local_nmeshes

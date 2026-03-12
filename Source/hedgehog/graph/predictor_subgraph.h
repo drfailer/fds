@@ -58,8 +58,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
-    // VelocityPredictor: parallel kernel (+ CC_PROJECT_VELOCITY collector if CC_IBM)
-    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(kernelThreads);
+    // VelocityPredictor: parallel kernel (+ CC post-processing collector if CC_IBM)
+    // For CC_IBM: skip CFL check in kernel (runs later in collector after CC_PROJECT_VELOCITY)
+    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(
+        kernelThreads, /*skipCFL=*/ccIBM);
 
     // PredFinal sub-graph (Pattern B)
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads);

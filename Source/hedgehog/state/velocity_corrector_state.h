@@ -7,10 +7,13 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator for CC_PROJECT_VELOCITY(STORE) before velocity corrector kernel (CC_IBM only).
+/// Orchestrator for CC_IBM pre-processing before velocity corrector kernel.
 ///
-/// Collects all N mesh tokens, runs sequential CC_PROJECT_VELOCITY(STORE=TRUE),
-/// then dispatches N MeshData tokens for parallel kernel execution.
+/// Collects all N mesh tokens, then for each mesh runs:
+///   1. CC_PROJECT_VELOCITY(STORE=TRUE) — store projected velocities
+///   2. WALL_VELOCITY_NO_GRADH(STORE=TRUE) — store wall velocities for sparse solvers
+///
+/// This matches velo.f90 VELOCITY_CORRECTOR (lines 646-656).
 class VelocityCorrectorCCOrchestrator
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
@@ -25,6 +28,7 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 1);  // STORE=.TRUE.
+                fds_wall_velocity_no_gradh(md->nm, md->dt, 1);  // STORE=.TRUE.
             }
 
             for (auto &md : collected_) {
@@ -41,10 +45,13 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector for CC_PROJECT_VELOCITY after velocity corrector kernel (CC_IBM only).
+/// Collector for CC_IBM post-processing after velocity corrector kernel.
 ///
-/// Gathers all N kernel results, runs sequential CC_PROJECT_VELOCITY(STORE=FALSE),
-/// then emits N MeshData tokens.
+/// Gathers all N kernel results, then for each mesh runs:
+///   1. CC_PROJECT_VELOCITY(STORE=FALSE) — apply projected velocities
+///   2. WALL_VELOCITY_NO_GRADH(STORE=FALSE) — restore wall velocities for sparse solvers
+///
+/// This matches velo.f90 VELOCITY_CORRECTOR (lines 660-670).
 class VelocityCorrectorCCCollector
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
@@ -62,6 +69,7 @@ public:
 
             for (auto &md : results_) {
                 fds_cc_project_velocity(md->nm, md->dt, 0);  // STORE=.FALSE.
+                fds_wall_velocity_no_gradh(md->nm, md->dt, 0);  // STORE=.FALSE.
             }
 
             for (auto &md : results_) {
