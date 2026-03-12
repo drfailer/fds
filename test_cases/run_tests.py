@@ -70,6 +70,32 @@ TEST_CASES = {
         'description': '5-mesh Species Properties',
         'compare_files': ['_devc.csv']
     },
+    'shunn3_32_cc': {
+        'input': 'shunn3_32_cc_short.fds',
+        'chid': 'shunn3_32_cc_short',
+        'meshes': 1,
+        'description': '1-mesh Shunn3 MMS CC_IBM (32x1x32)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
+    'two_spheres_cc': {
+        'input': 'two_spheres.fds',
+        'chid': 'two_spheres',
+        'meshes': 1,
+        'description': '1-mesh Two Spheres CC_IBM (65x32x32)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
+    'sphere_helium_1mesh_cc': {
+        'input': 'sphere_helium_1mesh.fds',
+        'chid': 'sphere_helium_1mesh',
+        'meshes': 1,
+        'description': '1-mesh Sphere Helium CC_IBM (64^3)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 300
+    },
+    # NOTE: sphere_helium_3meshes (3-mesh CC_IBM) segfaults in DIVERGENCE_PART_2_KERNEL ->
+    # GET_LINKED_VELOCITIES -> CC_RESTORE_UVW_UNLINKED. Needs investigation before adding.
 }
 
 class TestRunner:
@@ -314,8 +340,9 @@ class TestRunner:
         }
 
         # Run FDS
+        test_timeout = test_config.get('timeout', 60)
         self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
-        success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir)
+        success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir, timeout=test_timeout)
         result['run_time'] = elapsed
 
         if not success:
@@ -338,7 +365,7 @@ class TestRunner:
 
         return result
 
-    def generate_gold(self, test_name: str, test_config: Dict, use_original: bool = True) -> bool:
+    def generate_gold(self, test_name: str, test_config: Dict, exe_override: Path = None) -> bool:
         """Generate gold files for a test case."""
         self.log(f"\n{'='*60}")
         self.log(f"Generating gold files for: {test_name}")
@@ -350,20 +377,14 @@ class TestRunner:
         gold_subdir.mkdir(exist_ok=True)
 
         # Choose which FDS to use
-        if use_original:
-            if FDS_ORIG is None or not self.check_executable(FDS_ORIG, "fds6"):
-                self.log("fds6 not found in PATH, using fds_hh", "WARN")
-                exe = FDS_HH
-            else:
-                exe = FDS_ORIG
-        else:
-            exe = FDS_HH
+        exe = exe_override if exe_override else self.fds_exe
 
         self.log(f"Using: {exe.name}", "INFO")
 
         # Run FDS in gold directory
+        test_timeout = test_config.get('timeout', 60)
         self.log(f"Running FDS...", "RUN")
-        success, elapsed = self.run_fds(input_file, chid, exe, gold_subdir)
+        success, elapsed = self.run_fds(input_file, chid, exe, gold_subdir, timeout=test_timeout)
 
         if not success:
             self.log(f"Failed to generate gold files", "FAIL")
@@ -405,8 +426,6 @@ def main():
     parser = argparse.ArgumentParser(description='Run FDS Hedgehog tests')
     parser.add_argument('--generate-gold', action='store_true',
                         help='Generate gold files instead of running tests')
-    parser.add_argument('--use-hedgehog-gold', action='store_true',
-                        help='Use fds_hh instead of original FDS for gold generation')
     parser.add_argument('--test', '-t', action='append',
                         help='Run specific test(s) only')
     parser.add_argument('--tolerance', type=float, default=1e-10,
@@ -439,12 +458,16 @@ def main():
         tests = TEST_CASES
 
     if args.generate_gold:
-        # Generate gold files
-        print("Generating gold files...")
-        use_original = not args.use_hedgehog_gold
+        # Generate gold files using the selected executable
+        print(f"Generating gold files using: {fds_exe}")
+
+        # Check executable
+        if not runner.check_executable(fds_exe, fds_exe.name):
+            print(f"\nExecutable not found: {fds_exe}")
+            return 1
 
         for test_name, test_config in tests.items():
-            success = runner.generate_gold(test_name, test_config, use_original)
+            success = runner.generate_gold(test_name, test_config)
             if not success:
                 print(f"Failed to generate gold for {test_name}")
                 return 1
