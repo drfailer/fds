@@ -5,7 +5,6 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../data/velocity_corrector_data.h"
 #include "../state/collector_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/corr_particle_state.h"
@@ -46,9 +45,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
 
     // --- Sub-graphs with orchestrators (sequential pre-processing required) ---
 
-    // CorrDivSetup: sequential CC_VELOCITY_BC -> parallel kernel
-    auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
+    // CorrDivSetup: parallel kernel (+ sequential CC_VELOCITY_BC if CC_IBM)
+    bool ccIBM = fds_is_cc_ibm() != 0;
     auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
     // CorrParticle: sequential MASS_ENERGY + MOVE -> parallel MOMENTUM kernel
@@ -56,12 +54,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
         std::make_shared<CorrParticleOrchestrator>(nmeshes), "CorrParticleOrch");
     auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
 
-    // VelocityCorrector: CC_PROJECT_VELOCITY(STORE) -> parallel kernel -> CC_PROJECT_VELOCITY(PROJECT)
-    auto velCorrOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityCorrectorWork>>(
-        std::make_shared<VelocityCorrectorOrchestrator>(nmeshes), "VelCorrOrch");
+    // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
     auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
-    auto velCorrCollectorSM = std::make_shared<hh::StateManager<1, VelocityCorrectorWork, MeshData>>(
-        std::make_shared<VelocityCorrectorCollector>(nmeshes), "VelCorrCollector");
 
     // --- Named sub-graphs ---
 
@@ -119,9 +113,15 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     subgraph->edges(corrStep1KernelTask, collector4SM);
     subgraph->edges(collector4SM, meshExchange4);
 
-    // CorrDivSetup: orchestrator (CC_VELOCITY_BC) -> parallel kernel -> Combustion -> HVAC
-    subgraph->edges(meshExchange4, corrDivSetupOrchSM);
-    subgraph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);
+    // CorrDivSetup: parallel kernel (with optional CC_VELOCITY_BC orchestrator if CC_IBM)
+    if (ccIBM) {
+        auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
+        subgraph->edges(meshExchange4, corrDivSetupOrchSM);
+        subgraph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);
+    } else {
+        subgraph->edges(meshExchange4, corrDivSetupKernelTask);
+    }
     subgraph->edges(corrDivSetupKernelTask, combustionCollectorSM);
     subgraph->edges(combustionCollectorSM, combustionTask);
     subgraph->edges(combustionTask, corrHvacCollectorSM);
@@ -156,11 +156,20 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
     subgraph->edges(corrPressureCollectorSM, corrPressureTask);
 
-    // VelocityCorrector (keeps orch/collector for CC_PROJECT_VELOCITY)
-    subgraph->edges(corrPressureTask, velCorrOrchSM);
-    subgraph->edges(velCorrOrchSM, velCorrKernelTask);
-    subgraph->edges(velCorrKernelTask, velCorrCollectorSM);
-    subgraph->edges(velCorrCollectorSM, collector6bSM);
+    // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
+    if (ccIBM) {
+        auto velCorrCCOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<VelocityCorrectorCCOrchestrator>(nmeshes), "VelCorrCCOrch");
+        auto velCorrCCCollSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<VelocityCorrectorCCCollector>(nmeshes), "VelCorrCCCollector");
+        subgraph->edges(corrPressureTask, velCorrCCOrchSM);
+        subgraph->edges(velCorrCCOrchSM, velCorrKernelTask);
+        subgraph->edges(velCorrKernelTask, velCorrCCCollSM);
+        subgraph->edges(velCorrCCCollSM, collector6bSM);
+    } else {
+        subgraph->edges(corrPressureTask, velCorrKernelTask);
+        subgraph->edges(velCorrKernelTask, collector6bSM);
+    }
     subgraph->edges(collector6bSM, meshExchange6b);
 
     // CorrFinal sub-graph

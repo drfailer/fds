@@ -5,7 +5,6 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../data/velocity_predictor_data.h"
 #include "../state/collector_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
@@ -46,9 +45,8 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // DensityPred: parallel DENSITY_KERNEL
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
 
-    // PredDivSetup: sequential CC_VELOCITY_BC -> parallel VELOCITY_FLUX_KERNEL
-    auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
+    // PredDivSetup: parallel VELOCITY_FLUX_KERNEL (+ sequential CC_VELOCITY_BC if CC_IBM)
+    bool ccIBM = fds_is_cc_ibm() != 0;
     auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
     // WallBC sub-graph (three-phase: preprocessing -> parallel kernel -> finalize)
@@ -60,12 +58,8 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
-    // VelocityPredictor: parallel kernel + CC_PROJECT_VELOCITY
-    auto velPredOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityPredictorWork>>(
-        std::make_shared<VelocityPredictorOrchestrator>(nmeshes), "VelPredOrch");
+    // VelocityPredictor: parallel kernel (+ CC_PROJECT_VELOCITY collector if CC_IBM)
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(kernelThreads);
-    auto velPredCollectorSM = std::make_shared<hh::StateManager<1, VelocityPredictorWork, MeshData>>(
-        std::make_shared<VelocityPredictorCollector>(nmeshes), "VelPredCollector");
 
     // PredFinal sub-graph (Pattern B)
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads);
@@ -118,9 +112,15 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(densPredKernelTask, collector1SM);
     subgraph->edges(collector1SM, meshExchange1);
 
-    // PredDivSetup: orchestrator (CC_VELOCITY_BC) -> parallel kernel -> HVAC
-    subgraph->edges(meshExchange1, predDivSetupOrchSM);
-    subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
+    // PredDivSetup: parallel kernel (with optional CC_VELOCITY_BC orchestrator if CC_IBM)
+    if (ccIBM) {
+        auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
+        subgraph->edges(meshExchange1, predDivSetupOrchSM);
+        subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
+    } else {
+        subgraph->edges(meshExchange1, predDivSetupKernelTask);
+    }
     subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
     subgraph->edges(predHvacCollectorSM, predHvacTask);
     subgraph->edges(predHvacTask, predInitDivCollectorSM);
@@ -139,11 +139,16 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
     subgraph->edges(predPressureCollectorSM, predPressureTask);
 
-    // VelocityPredictor (keeps orch/collector for CC_PROJECT_VELOCITY)
-    subgraph->edges(predPressureTask, velPredOrchSM);
-    subgraph->edges(velPredOrchSM, velPredKernelTask);
-    subgraph->edges(velPredKernelTask, velPredCollectorSM);
-    subgraph->edges(velPredCollectorSM, changeTimeStepCollectorSM);
+    // VelocityPredictor: parallel kernel (+ CC_PROJECT_VELOCITY collector if CC_IBM)
+    subgraph->edges(predPressureTask, velPredKernelTask);
+    if (ccIBM) {
+        auto velPredCCSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<VelocityPredictorCCCollector>(nmeshes), "VelPredCCCollector");
+        subgraph->edges(velPredKernelTask, velPredCCSM);
+        subgraph->edges(velPredCCSM, changeTimeStepCollectorSM);
+    } else {
+        subgraph->edges(velPredKernelTask, changeTimeStepCollectorSM);
+    }
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
     subgraph->edges(changeTimeStepSubgraph, collector3SM);
     subgraph->edges(collector3SM, meshExchange3);

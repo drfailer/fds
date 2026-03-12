@@ -4,71 +4,61 @@
 #include <hedgehog/hedgehog.h>
 #include <memory>
 #include "../data/mesh_data.h"
-#include "../data/velocity_bc_data.h"
 #include "../task/velocity_bc_edges_task.h"
 #include "../state/velocity_bc_state.h"
 
-/// Build the PredFinal sub-graph (Pattern B: complex routine parallelization).
+/// Build the PredFinal sub-graph.
 ///
-/// Three-phase architecture:
+/// Architecture:
 ///   1. Sequential preprocessing (PredFinalOrchestrator):
 ///      - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow BC — uses RANDOM_NUMBER)
 ///
-///   2. Parallel kernel execution (VelocityBCEdgesTask):
-///      - MATCH_VELOCITY_KERNEL (cross-mesh velocity interpolation, thread-safe via M%)
-///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities, thread-safe via M%)
-///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe via M%)
+///   2. Parallel kernel execution (VelocityBCEdgesTask, applyToEstimated=1):
+///      - MATCH_VELOCITY_KERNEL, VELOCITY_BC_PREPROCESSING, VELOCITY_BC_PROCESS_EDGES_KERNEL
 ///
-///   3. Sequential finalization (PredFinalCollector):
-///      - CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM active)
-///
-/// Replaces the sequential PredFinalTask.
+///   3. CC_IBM only: Sequential finalization (PredFinalCCCollector):
+///      - CC_VELOCITY_BC (cut-cell velocity BC)
 inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
-    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityBCWork>>(
+    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredFinalOrchestrator>(nmeshes), "PredFinalOrch");
-    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads);
-    auto collectorSM = std::make_shared<hh::StateManager<1, VelocityBCWork, MeshData>>(
-        std::make_shared<PredFinalCollector>(nmeshes), "PredFinalCollector");
+    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
 
     subgraph->inputs(orchSM);
     subgraph->edges(orchSM, kernelTask);
-    subgraph->edges(kernelTask, collectorSM);
-    subgraph->outputs(collectorSM);
+
+    if (fds_is_cc_ibm()) {
+        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<PredFinalCCCollector>(nmeshes), "PredFinalCCCollector");
+        subgraph->edges(kernelTask, collectorSM);
+        subgraph->outputs(collectorSM);
+    } else {
+        subgraph->outputs(kernelTask);
+    }
 
     return subgraph;
 }
 
-/// Build the CorrFinal sub-graph (Pattern B: complex routine parallelization).
+/// Build the CorrFinal sub-graph.
 ///
-/// Three-phase architecture:
-///   1. Sequential preprocessing (CorrFinalOrchestrator):
-///      - (no sequential preprocessing remains — all moved to parallel kernel)
+/// Architecture:
+///   1. Parallel kernel execution (VelocityBCEdgesTask, applyToEstimated=0):
+///      - MATCH_VELOCITY_KERNEL, VELOCITY_BC_PREPROCESSING, VELOCITY_BC_PROCESS_EDGES_KERNEL
 ///
-///   2. Parallel kernel execution (VelocityBCEdgesTask):
-///      - MATCH_VELOCITY_KERNEL (cross-mesh velocity interpolation, thread-safe via M%)
-///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities, thread-safe via M%)
-///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe via M%)
-///
-///   3. Sequential finalization (CorrFinalCollector):
-///      - CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM active)
+///   2. Sequential finalization (CorrFinalCollector):
+///      - CC_VELOCITY_BC (if CC_IBM active — no-op otherwise)
 ///      - UPDATE_GLOBAL_OUTPUTS (per-mesh output accumulation)
-///
-/// Replaces the sequential CorrFinalTask.
 inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 
-    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityBCWork>>(
-        std::make_shared<CorrFinalOrchestrator>(nmeshes), "CorrFinalOrch");
-    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads);
-    auto collectorSM = std::make_shared<hh::StateManager<1, VelocityBCWork, MeshData>>(
+    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/0);
+    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<CorrFinalCollector>(nmeshes), "CorrFinalCollector");
 
-    subgraph->inputs(orchSM);
-    subgraph->edges(orchSM, kernelTask);
+    subgraph->inputs(kernelTask);
     subgraph->edges(kernelTask, collectorSM);
     subgraph->outputs(collectorSM);
 

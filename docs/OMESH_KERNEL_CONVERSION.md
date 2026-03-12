@@ -234,19 +234,20 @@ These follow an identical pattern: loop over `N_EXTERNAL_WALL_CELLS`, read from 
 ### 4.1 CC_VELOCITY_BC
 
 - **File**: `ccib_velocity.f90:2609–3699` (~1090 lines)
-- **Currently sequential in**: DivSetup orchestrators, PredFinal/CorrFinal collectors
+- **Currently sequential in**: DivSetup orchestrators (CC_IBM only), PredFinal/CorrFinal collectors (CC_IBM only)
 - **Pattern**: Large CC_IBM routine, uses POINT_TO_MESH extensively, accesses `CUT_FACE`, `CC_EDGE`, many module-level pointers
-- **Why analysis needed**: Size (~1090 lines), CC_IBM-specific data structures, unclear if all CUT_FACE accesses are per-mesh or cross-mesh
+- **Module pointers used**: US, VS, WS, U, V, W, ZZS, ZZ, RHOS, RHO, CUT_FACE, CUT_EDGE, CC_RCEDGE, CC_IBEDGE, EDGE, CELL, MU, TMP, DX, DY, DZ, IBAR, JBAR, KBAR, IBP1, JBP1, KBP1, FCVAR, DRAG_UVWMAX
+- **CONTAINS subroutines** (4): CC_CUTEDGE_DUIDXJ_TAU_OMG, CC_RCEDGE_DUIDXJ, CC_RCEDGE_TAU_OMG, CC_EDGE_TAU_OMG
 
 #### Parallelizability audit
-- [ ] Map all data accesses (CUT_FACE, CC_EDGE, VERTVAR, etc.) — per-mesh or global?
-- [ ] Check for OMESH access patterns
-- [ ] Check for writes to MESHES(NOM) data
-- [ ] Check subroutine calls: WALL_MODEL, GET_VISCOSITY, GET_LINKED_VELOCITIES
-- [ ] May need decomposition into per-mesh kernel + cross-mesh sequential portion
-- [ ] **Verdict**: ___
+- [x] All data accesses (CUT_FACE, CC_EDGE, CC_RCEDGE, CC_IBEDGE, FCVAR) are per-mesh via POINT_TO_MESH
+- [x] No OMESH access (no cross-mesh data reads)
+- [x] No writes to MESHES(NOM) or other mesh data
+- [x] Subroutine calls (WALL_MODEL, GET_VISCOSITY) are pure/thread-safe
+- [x] No global counters or accumulators
+- [x] **Verdict**: PARALLELIZABLE after kernel conversion (POINT_TO_MESH is the only obstacle)
 
-#### Status: NOT STARTED
+#### Status: DEFERRED — Parallelizable in principle, but requires ~1090 line kernel conversion using Pattern 3 (local pointer alias shadowing). For non-CC_IBM runs, the call is a complete no-op (guarded by `IF (CC_IBM)`). DivSetup orchestrators and PredFinal/CorrFinal collectors conditionally eliminated for non-CC_IBM via `fds_is_cc_ibm()` check at graph construction time.
 
 ---
 
@@ -256,36 +257,33 @@ These follow an identical pattern: loop over `N_EXTERNAL_WALL_CELLS`, read from 
 - **Currently sequential in**: CorrFinal collector
 - **Calls**:
   - `UPDATE_HRR(DT,NM)`: writes to `Q_DOT` (global array), `M_DOT` (global array), `Q_DOT_SUM`/`M_DOT_SUM` (global accumulators), `ENTHALPY_SUM(NM)` (per-mesh slot)
-  - `UPDATE_MASS(DT,NM)`: likely similar global accumulator writes
+  - `UPDATE_MASS(DT,NM)`: similar global accumulator pattern
   - `UPDATE_FIRE_SPREAD_OUTPUTS(T,DT,NM)`: per-mesh fire spread data
-  - `UPDATE_DEVICES_1(T,DT,NM)`: device state updates (~530 lines, complex)
+  - `UPDATE_DEVICES_1(T,DT,NM)`: device state updates (~530 lines), writes to `DEVICE%PRIOR_STATE` (global DEVC array)
 
 #### Parallelizability audit
-- [ ] `Q_DOT`, `M_DOT` — global arrays written from all meshes → **race condition**
-- [ ] `Q_DOT_SUM`, `M_DOT_SUM` — global accumulators → **race condition**
-- [ ] `ENTHALPY_SUM(NM)` — per-mesh, safe
-- [ ] `UPDATE_DEVICES_1` — check for global DEVC state writes
-- [ ] Possible approach: per-mesh partial sums accumulated in collector (like CorrRadiation RAD_Q_SUM pattern)
-- [ ] **Verdict**: ___
+- [x] `Q_DOT`, `M_DOT` — global arrays written by all meshes → **race condition**
+- [x] `Q_DOT_SUM`, `M_DOT_SUM` — global accumulators → **race condition**
+- [x] `ENTHALPY_SUM(NM)` — per-mesh, safe
+- [x] `UPDATE_DEVICES_1` — writes to `DEVICE%PRIOR_STATE`, `DEVICE%SMOOTHED_VALUE` (global DEVC array) → **race condition**
+- [x] **Verdict**: MUST REMAIN SEQUENTIAL — global accumulators and device state mutations
 
-#### Status: NOT STARTED
+#### Status: MUST REMAIN SEQUENTIAL — Kept in CorrFinal collector. Cannot be parallelized due to global Q_DOT/M_DOT accumulators and DEVICE state writes. A partial-sums approach (like CorrRadiation RAD_Q_SUM) is theoretically possible for Q_DOT/M_DOT but not for DEVICE state.
 
 ---
 
 ### 4.3 CC_MATCH_VELOCITY
 
 - **File**: `ccib_velocity.f90:1921–2500` (~580 lines)
-- **Currently called by**: MATCH_VELOCITY (dispatches to CC_MATCH_VELOCITY when CC_IBM is active)
-- **Pattern**: CC_IBM version of MATCH_VELOCITY, uses POINT_TO_MESH, reads OMESH
-- **Same analysis needed as regular MATCH_VELOCITY** plus CC_IBM-specific CUT_FACE handling
+- **Currently called by**: `fds_match_velocity_kernel` C wrapper (dispatches to CC_MATCH_VELOCITY when CC_IBM is active, otherwise calls MATCH_VELOCITY_KERNEL)
+- **Pattern**: CC_IBM version of MATCH_VELOCITY, uses POINT_TO_MESH, reads OMESH, accesses CUT_FACE
 
 #### Parallelizability audit
-- [ ] Check OMESH access patterns (likely same as MATCH_VELOCITY)
-- [ ] Check CUT_FACE writes — per-mesh or cross-mesh?
-- [ ] Check for CFO%VEL_LNK_OMESH / CFO%VELS_OMESH writes
-- [ ] **Verdict**: ___
+- [x] OMESH access patterns: reads `M%OMESH(NOM)%` data (per-mesh local copy, safe)
+- [x] CUT_FACE writes: writes to `MESHES(NOM)%CUT_FACE(ICF)%VELS_OMESH` and `%VEL_OMESH` and `%VEL_LNK_OMESH` — **cross-mesh writes to neighbor's CUT_FACE data**
+- [x] **Verdict**: MUST REMAIN SEQUENTIAL — cross-mesh CUT_FACE writes (two threads processing different meshes could write to the same neighbor's CUT_FACE simultaneously)
 
-#### Status: NOT STARTED
+#### Status: MUST REMAIN SEQUENTIAL — Kept sequential in `fds_match_velocity_kernel` C wrapper (dispatched via POINT_TO_MESH for CC_IBM). Cross-mesh `MESHES(NOM)%CUT_FACE` writes prevent parallelization. The non-CC_IBM path (MATCH_VELOCITY_KERNEL) is already parallel.
 
 ---
 
@@ -366,14 +364,31 @@ Reused corrector's `buildWallBCSubgraph` in predictor pipeline. Removed PredWall
 
 **Impact achieved**: Predictor pipeline no longer has any monolithic sequential WALL_BC call. Both predictor and corrector use the same three-phase WallBC sub-graph.
 
+### Phase 5: Group 4 deep analysis + conditional graph construction — ✅ COMPLETE
+
+**Audit results**:
+- CC_VELOCITY_BC: PARALLELIZABLE in principle (POINT_TO_MESH only obstacle), but ~1090 line kernel conversion deferred. For non-CC_IBM, call is a complete no-op.
+- UPDATE_GLOBAL_OUTPUTS: MUST REMAIN SEQUENTIAL (global Q_DOT/M_DOT accumulators, DEVICE state)
+- CC_MATCH_VELOCITY: MUST REMAIN SEQUENTIAL (cross-mesh MESHES(NOM)%CUT_FACE writes)
+
+**Conditional graph construction**: Added `fds_is_cc_ibm()` C interface to query CC_IBM flag at graph construction time. For non-CC_IBM runs, the following synchronization barriers are eliminated:
+- DivSetup orchestrators (pred+corr): MeshExchange dispatches directly to parallel kernel task
+- VelocityPredictor orchestrator+collector: PressureIteration dispatches directly to parallel kernel task
+- VelocityCorrector orchestrator+collector: PressureIteration dispatches directly to parallel kernel task
+- PredFinal collector: kernel task outputs directly (no CC_VELOCITY_BC post-processing)
+
+**Data type cleanup**: Eliminated VelocityPredictorWork, VelocityCorrectorWork, VelocityBCWork intermediate types. All kernel tasks now use MeshData → MeshData directly. VelocityBCEdgesTask takes `applyToEstimated` as constructor parameter.
+
+**Impact achieved**: For non-CC_IBM runs (standard FDS cases), 7 unnecessary synchronization barriers removed. Only inherently global barriers remain (MESH_EXCHANGE, PRESSURE_ITERATION, HVAC, COMBUSTION, INSERT_ALL_PARTICLES, MOVE_PARTICLES, WALL_BC_FINALIZE, UPDATE_GLOBAL_OUTPUTS, SYNTHETIC_TURBULENCE).
+
 ---
 
 ## Summary
 
-| Group | Routines | Lines | Expected Outcome |
-|-------|----------|-------|------------------|
-| 1 (simple OMESH) | VISCOSITY_BC, COMBUSTION_BC, ASSIGN_GHOST_VALUE | ~218 | Merge into parallel kernels |
-| 2 (larger OMESH) | MATCH_VELOCITY, VELOCITY_BC_PREPROCESSING, WALL_BC_PREPROCESSING | ~365 | Remove orchestrator barriers |
-| 3 (POINT_TO_MESH only) | SET_BAROCLINIC_FALSE, AGGLOMERATION, SYNTHETIC_TURBULENCE | ~334 | Merge into parallel kernels |
-| 4 (deep analysis) | CC_VELOCITY_BC, UPDATE_GLOBAL_OUTPUTS, CC_MATCH_VELOCITY | ~1690 | TBD after audit |
-| 5 (genuinely sequential) | WALL_BC_FINALIZE, INSERT_ALL_PARTICLES, MOVE_PARTICLES | ~3388 | No conversion |
+| Group | Routines | Lines | Outcome |
+|-------|----------|-------|---------|
+| 1 (simple OMESH) | VISCOSITY_BC, COMBUSTION_BC, ASSIGN_GHOST_VALUE | ~218 | ✅ Merged into parallel kernels |
+| 2 (larger OMESH) | MATCH_VELOCITY, VELOCITY_BC_PREPROCESSING, WALL_BC_PREPROCESSING | ~365 | ✅ Removed orchestrator barriers |
+| 3 (POINT_TO_MESH only) | SET_BAROCLINIC_FALSE, AGGLOMERATION, SYNTHETIC_TURBULENCE | ~334 | ✅ Groups 3.1+3.2 parallel; 3.3 deferred (RANDOM_NUMBER) |
+| 4 (deep analysis) | CC_VELOCITY_BC, UPDATE_GLOBAL_OUTPUTS, CC_MATCH_VELOCITY | ~1690 | ✅ Audited: CC_VELOCITY_BC deferred (parallelizable but large), others sequential. Non-CC_IBM barriers eliminated. |
+| 5 (genuinely sequential) | WALL_BC_FINALIZE, INSERT_ALL_PARTICLES, MOVE_PARTICLES | ~3388 | No conversion (cross-mesh writes) |

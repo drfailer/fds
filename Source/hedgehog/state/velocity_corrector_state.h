@@ -5,23 +5,17 @@
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
-#include "../data/velocity_corrector_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator state for velocity corrector sub-graph.
+/// Orchestrator for CC_PROJECT_VELOCITY(STORE) before velocity corrector kernel (CC_IBM only).
 ///
-/// This state collects all N mesh tokens at the start of the velocity
-/// corrector sub-graph and dispatches parallel work tokens for kernel
-/// execution. Sequential pre-processing (e.g., CC_IBM setup) can be
-/// performed here before dispatching.
-///
-/// Flow: Collects N MeshData → Emits N VelocityCorrectorWork
-class VelocityCorrectorOrchestrator
-    : public hh::AbstractState<1, MeshData, VelocityCorrectorWork> {
+/// Collects all N mesh tokens, runs sequential CC_PROJECT_VELOCITY(STORE=TRUE),
+/// then dispatches N MeshData tokens for parallel kernel execution.
+class VelocityCorrectorCCOrchestrator
+    : public hh::AbstractState<1, MeshData, MeshData> {
 public:
-    explicit VelocityCorrectorOrchestrator(int nmeshes)
-        : hh::AbstractState<1, MeshData, VelocityCorrectorWork>(),
-          nmeshes_(nmeshes) {
+    explicit VelocityCorrectorCCOrchestrator(int nmeshes)
+        : nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
@@ -29,18 +23,12 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // All mesh tokens collected - ready to dispatch parallel work
-
-            // Sequential pre-processing: CC_IBM velocity store
             for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 1);  // STORE=.TRUE.
             }
 
-            // Emit work tokens for parallel kernel execution
             for (auto &md : collected_) {
-                auto work = std::make_shared<VelocityCorrectorWork>(
-                    md->nm, md->t, md->dt, md);
-                this->addResult(work);
+                this->addResult(md);
             }
 
             collected_.clear();
@@ -53,38 +41,31 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector state for velocity corrector sub-graph.
+/// Collector for CC_PROJECT_VELOCITY after velocity corrector kernel (CC_IBM only).
 ///
-/// This state gathers all N kernel execution results and performs any
-/// sequential post-processing (e.g., global diagnostics, reductions)
-/// before emitting MeshData tokens to continue the graph flow.
-///
-/// Flow: Collects N VelocityCorrectorWork → Emits N MeshData
-class VelocityCorrectorCollector
-    : public hh::AbstractState<1, VelocityCorrectorWork, MeshData> {
+/// Gathers all N kernel results, runs sequential CC_PROJECT_VELOCITY(STORE=FALSE),
+/// then emits N MeshData tokens.
+class VelocityCorrectorCCCollector
+    : public hh::AbstractState<1, MeshData, MeshData> {
 public:
-    explicit VelocityCorrectorCollector(int nmeshes)
-        : hh::AbstractState<1, VelocityCorrectorWork, MeshData>(),
-          nmeshes_(nmeshes) {
+    explicit VelocityCorrectorCCCollector(int nmeshes)
+        : nmeshes_(nmeshes) {
         results_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<VelocityCorrectorWork> work) override {
-        results_.push_back(work);
+    void execute(std::shared_ptr<MeshData> data) override {
+        results_.push_back(data);
 
         if (static_cast<int>(results_.size()) == nmeshes_) {
-            // Sort by mesh index to guarantee deterministic ordering
             std::sort(results_.begin(), results_.end(),
                       [](const auto &a, const auto &b) { return a->nm < b->nm; });
 
-            // Sequential post-processing: CC_IBM velocity projection
-            for (auto &w : results_) {
-                fds_cc_project_velocity(w->nm, w->dt, 0);  // STORE=.FALSE.
+            for (auto &md : results_) {
+                fds_cc_project_velocity(md->nm, md->dt, 0);  // STORE=.FALSE.
             }
 
-            // Emit original MeshData tokens to continue graph flow
-            for (auto &w : results_) {
-                this->addResult(w->originalMeshData);
+            for (auto &md : results_) {
+                this->addResult(md);
             }
 
             results_.clear();
@@ -94,7 +75,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<VelocityCorrectorWork>> results_;
+    std::vector<std::shared_ptr<MeshData>> results_;
 };
 
 #endif // VELOCITY_CORRECTOR_STATE_H

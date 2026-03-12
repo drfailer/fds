@@ -20,6 +20,7 @@ double fds_get_t_end();
 int fds_get_nmeshes();
 int fds_get_lower_mesh_index();
 int fds_get_upper_mesh_index();
+int fds_is_cc_ibm();
 void fds_zero_q_m_dot();
 double fds_adjust_dt(double t, double dt);
 

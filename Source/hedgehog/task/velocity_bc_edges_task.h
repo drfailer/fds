@@ -2,32 +2,38 @@
 #define VELOCITY_BC_EDGES_TASK_H
 
 #include <hedgehog/hedgehog.h>
-#include "../data/velocity_bc_data.h"
+#include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Parallel task that calls MATCH_VELOCITY_KERNEL + VELOCITY_BC_PREPROCESSING +
 /// VELOCITY_BC_PROCESS_EDGES_KERNEL for one mesh.
 /// All three routines are thread-safe: explicit M% access, no POINT_TO_MESH.
+///
+/// @param applyToEstimated 1 for predictor (estimated vars), 0 for corrector (actual vars)
 class VelocityBCEdgesTask
-    : public hh::AbstractTask<1, VelocityBCWork, VelocityBCWork> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    explicit VelocityBCEdgesTask(size_t numThreads)
-        : hh::AbstractTask<1, VelocityBCWork, VelocityBCWork>(
-              "VelocityBCEdges", numThreads) {}
+    VelocityBCEdgesTask(size_t numThreads, int applyToEstimated)
+        : hh::AbstractTask<1, MeshData, MeshData>(
+              "VelocityBCEdges", numThreads),
+          applyToEstimated_(applyToEstimated) {}
 
-    void execute(std::shared_ptr<VelocityBCWork> work) override {
-        fds_match_velocity_kernel(work->nm, work->applyToEstimated);
+    void execute(std::shared_ptr<MeshData> data) override {
+        fds_match_velocity_kernel(data->nm, applyToEstimated_);
         fds_velocity_bc_preprocessing(
-            work->nm, work->t, work->applyToEstimated);
+            data->nm, data->t, applyToEstimated_);
         fds_velocity_bc_process_edges_kernel(
-            work->nm, work->t, work->applyToEstimated);
-        this->addResult(work);
+            data->nm, data->t, applyToEstimated_);
+        this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, VelocityBCWork, VelocityBCWork>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
     copy() override {
-        return std::make_shared<VelocityBCEdgesTask>(this->numberThreads());
+        return std::make_shared<VelocityBCEdgesTask>(this->numberThreads(), applyToEstimated_);
     }
+
+private:
+    int applyToEstimated_;
 };
 
 #endif // VELOCITY_BC_EDGES_TASK_H
