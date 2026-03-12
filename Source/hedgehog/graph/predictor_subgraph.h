@@ -5,12 +5,8 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../data/pred_step1_data.h"
-#include "../data/div_setup_data.h"
-#include "../data/pred_wall_div_data.h"
 #include "../data/velocity_predictor_data.h"
 #include "../state/collector_state.h"
-#include "../state/mesh_barrier_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/pred_wall_div_state.h"
@@ -42,33 +38,25 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Kernel sub-graph components ---
 
-    // PredStep1: sequential INSERT_ALL_PARTICLES + parallel kernels
-    auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, PredStep1Work>>(
+    // PredStep1: sequential INSERT_ALL_PARTICLES -> parallel kernels
+    auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(kernelThreads);
-    auto predStep1CollectorSM = std::make_shared<hh::StateManager<1, PredStep1Work, MeshData>>(
-        std::make_shared<PredStep1Collector>(nmeshes), "PredStep1Collector");
-    auto predStep1BarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PassthroughBarrierState>(nmeshes), "PredStep1Barrier");
 
-    // DensityPred: parallel DENSITY_KERNEL (direct MeshData -> MeshData)
+    // DensityPred: parallel DENSITY_KERNEL
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
 
-    // PredDivSetup: sequential CC_VELOCITY_BC + parallel VELOCITY_FLUX_KERNEL
-    auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, DivSetupWork>>(
+    // PredDivSetup: sequential CC_VELOCITY_BC -> parallel VELOCITY_FLUX_KERNEL
+    auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
     auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
-    auto predDivSetupCollectorSM = std::make_shared<hh::StateManager<1, DivSetupWork, MeshData>>(
-        std::make_shared<DivSetupCollector>(nmeshes), "PredDivSetupCollector");
 
-    // PredWallDiv: sequential WALL_BC + parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
-    auto predWallDivOrchSM = std::make_shared<hh::StateManager<1, MeshData, PredWallDivWork>>(
+    // PredWallDiv: sequential WALL_BC -> parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
+    auto predWallDivOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredWallDivOrchestrator>(nmeshes), "PredWallDivOrch");
     auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
-    auto predWallDivCollectorSM = std::make_shared<hh::StateManager<1, PredWallDivWork, MeshData>>(
-        std::make_shared<PredWallDivCollector>(nmeshes), "PredWallDivCollector");
 
-    // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL (direct MeshData -> MeshData)
+    // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
     // VelocityPredictor: parallel kernel + CC_PROJECT_VELOCITY
@@ -121,38 +109,34 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     subgraph->inputs(predStep1OrchSM);
 
-    // PredStep1 sub-graph (keeps orchestrator for INSERT_ALL_PARTICLES)
+    // PredStep1: orchestrator (INSERT_ALL_PARTICLES) -> parallel kernel -> DensityPred
     subgraph->edges(predStep1OrchSM, predStep1KernelTask);
-    subgraph->edges(predStep1KernelTask, predStep1CollectorSM);
-    subgraph->edges(predStep1CollectorSM, predStep1BarrierSM);
+    subgraph->edges(predStep1KernelTask, densPredKernelTask);
 
-    // DensityPred: direct MeshData -> MeshData task (no orchestrator/collector)
-    subgraph->edges(predStep1BarrierSM, densPredKernelTask);
+    // DensityPred -> MESH_EXCHANGE(1)
     subgraph->edges(densPredKernelTask, collector1SM);
     subgraph->edges(collector1SM, meshExchange1);
 
-    // PredDivSetup sub-graph (keeps orchestrator for CC_VELOCITY_BC)
+    // PredDivSetup: orchestrator (CC_VELOCITY_BC) -> parallel kernel -> HVAC
     subgraph->edges(meshExchange1, predDivSetupOrchSM);
     subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
-    subgraph->edges(predDivSetupKernelTask, predDivSetupCollectorSM);
-    subgraph->edges(predDivSetupCollectorSM, predHvacCollectorSM);
+    subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
     subgraph->edges(predHvacCollectorSM, predHvacTask);
     subgraph->edges(predHvacTask, predInitDivCollectorSM);
     subgraph->edges(predInitDivCollectorSM, predInitDivTask);
 
-    // PredWallDiv sub-graph (keeps orchestrator for WALL_BC)
+    // PredWallDiv: orchestrator (WALL_BC) -> parallel kernel -> DivExchange
     subgraph->edges(predInitDivTask, predWallDivOrchSM);
     subgraph->edges(predWallDivOrchSM, predWallDivKernelTask);
-    subgraph->edges(predWallDivKernelTask, predWallDivCollectorSM);
-    subgraph->edges(predWallDivCollectorSM, predDivCollectorSM);
+    subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
     subgraph->edges(predDivCollectorSM, predDivExchangeTask);
 
-    // PredDivPart2: direct MeshData -> MeshData task (no orchestrator/collector)
+    // PredDivPart2 -> Pressure
     subgraph->edges(predDivExchangeTask, predDivP2KernelTask);
     subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
     subgraph->edges(predPressureCollectorSM, predPressureTask);
 
-    // VelocityPredictor sub-graph (keeps orch/collector for CC_PROJECT_VELOCITY)
+    // VelocityPredictor (keeps orch/collector for CC_PROJECT_VELOCITY)
     subgraph->edges(predPressureTask, velPredOrchSM);
     subgraph->edges(velPredOrchSM, velPredKernelTask);
     subgraph->edges(velPredKernelTask, velPredCollectorSM);

@@ -5,11 +5,8 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../data/div_setup_data.h"
-#include "../data/corr_particle_data.h"
 #include "../data/velocity_corrector_data.h"
 #include "../state/collector_state.h"
-#include "../state/mesh_barrier_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/corr_particle_state.h"
 #include "../state/velocity_corrector_state.h"
@@ -42,48 +39,34 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
 
     // --- Kernel tasks (MeshData -> MeshData, no orchestrator/collector needed) ---
 
-    // CorrStep1: parallel VISCOSITY + MASS_FD + DENSITY kernels
     auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(kernelThreads);
-
-    // CorrDivSetup: sequential CC_VELOCITY_BC + parallel VELOCITY_FLUX_KERNEL
-    auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, DivSetupWork>>(
-        std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
-    auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
-    auto corrDivSetupCollectorSM = std::make_shared<hh::StateManager<1, DivSetupWork, MeshData>>(
-        std::make_shared<DivSetupCollector>(nmeshes), "CorrDivSetupCollector");
-
-    // CorrCondens: parallel CONDENSATION_EVAPORATION_KERNEL
     auto corrCondensKernelTask = std::make_shared<CorrCondensKernelTask>(kernelThreads);
-    auto corrCondensBarrierSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PassthroughBarrierState>(nmeshes), "CorrCondensBarrier");
-
-    // CorrParticle: sequential MASS_ENERGY + MOVE + parallel MOMENTUM kernel
-    auto corrParticleOrchSM = std::make_shared<hh::StateManager<1, MeshData, CorrParticleWork>>(
-        std::make_shared<CorrParticleOrchestrator>(nmeshes), "CorrParticleOrch");
-    auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
-    auto corrParticleCollectorSM = std::make_shared<hh::StateManager<1, CorrParticleWork, MeshData>>(
-        std::make_shared<CorrParticleCollector>(nmeshes), "CorrParticleCollector");
-
-    // WallBC sub-graph (Pattern B)
-    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
-
-    // CorrRadiation sub-graph (Pattern A with global accumulators)
-    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
-
-    // CorrDivPart1: parallel COMBUSTION_BC_KERNEL + DIVERGENCE_PART_1_KERNEL
     auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(kernelThreads);
-
-    // CorrDivPart2: parallel DIVERGENCE_PART_2_KERNEL
     auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
-    // VelocityCorrector: CC_PROJECT_VELOCITY(STORE) + parallel kernel + CC_PROJECT_VELOCITY(PROJECT)
+    // --- Sub-graphs with orchestrators (sequential pre-processing required) ---
+
+    // CorrDivSetup: sequential CC_VELOCITY_BC -> parallel kernel
+    auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
+    auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
+
+    // CorrParticle: sequential MASS_ENERGY + MOVE -> parallel MOMENTUM kernel
+    auto corrParticleOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<CorrParticleOrchestrator>(nmeshes), "CorrParticleOrch");
+    auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
+
+    // VelocityCorrector: CC_PROJECT_VELOCITY(STORE) -> parallel kernel -> CC_PROJECT_VELOCITY(PROJECT)
     auto velCorrOrchSM = std::make_shared<hh::StateManager<1, MeshData, VelocityCorrectorWork>>(
         std::make_shared<VelocityCorrectorOrchestrator>(nmeshes), "VelCorrOrch");
     auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
     auto velCorrCollectorSM = std::make_shared<hh::StateManager<1, VelocityCorrectorWork, MeshData>>(
         std::make_shared<VelocityCorrectorCollector>(nmeshes), "VelCorrCollector");
 
-    // CorrFinal sub-graph (Pattern B)
+    // --- Named sub-graphs ---
+
+    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
     auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads);
 
     // --- Barrier tasks ---
@@ -132,28 +115,23 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
 
     subgraph->inputs(corrStep1KernelTask);
 
-    // CorrStep1: direct MeshData -> MeshData task (no orchestrator/collector)
+    // CorrStep1 -> MESH_EXCHANGE(4)
     subgraph->edges(corrStep1KernelTask, collector4SM);
     subgraph->edges(collector4SM, meshExchange4);
 
-    // CorrDivSetup sub-graph (keeps orchestrator for CC_VELOCITY_BC)
+    // CorrDivSetup: orchestrator (CC_VELOCITY_BC) -> parallel kernel -> Combustion -> HVAC
     subgraph->edges(meshExchange4, corrDivSetupOrchSM);
     subgraph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);
-    subgraph->edges(corrDivSetupKernelTask, corrDivSetupCollectorSM);
-    subgraph->edges(corrDivSetupCollectorSM, combustionCollectorSM);
+    subgraph->edges(corrDivSetupKernelTask, combustionCollectorSM);
     subgraph->edges(combustionCollectorSM, combustionTask);
     subgraph->edges(combustionTask, corrHvacCollectorSM);
     subgraph->edges(corrHvacCollectorSM, corrHvacTask);
 
-    // CorrCondens: direct MeshData -> MeshData task (no orchestrator/collector)
+    // CorrCondens -> CorrParticle: orchestrator (particle ops) -> parallel kernel
     subgraph->edges(corrHvacTask, corrCondensKernelTask);
-    subgraph->edges(corrCondensKernelTask, corrCondensBarrierSM);
-
-    // CorrParticle sub-graph (keeps orchestrator for sequential particle ops)
-    subgraph->edges(corrCondensBarrierSM, corrParticleOrchSM);
+    subgraph->edges(corrCondensKernelTask, corrParticleOrchSM);
     subgraph->edges(corrParticleOrchSM, corrParticleKernelTask);
-    subgraph->edges(corrParticleKernelTask, corrParticleCollectorSM);
-    subgraph->edges(corrParticleCollectorSM, collector7SM);
+    subgraph->edges(corrParticleKernelTask, collector7SM);
     subgraph->edges(collector7SM, meshExchange7);
 
     // WallBC sub-graph
@@ -168,17 +146,17 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
     subgraph->edges(meshExchange2, corrInitDivCollectorSM);
     subgraph->edges(corrInitDivCollectorSM, corrInitDivTask);
 
-    // CorrDivPart1: direct MeshData -> MeshData task (no orchestrator/collector)
+    // CorrDivPart1 -> DivExchange
     subgraph->edges(corrInitDivTask, corrDivP1KernelTask);
     subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
     subgraph->edges(corrDivCollectorSM, corrDivExchangeTask);
 
-    // CorrDivPart2: direct MeshData -> MeshData task (no orchestrator/collector)
+    // CorrDivPart2 -> Pressure
     subgraph->edges(corrDivExchangeTask, corrDivP2KernelTask);
     subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
     subgraph->edges(corrPressureCollectorSM, corrPressureTask);
 
-    // VelocityCorrector sub-graph (keeps orch/collector for CC_PROJECT_VELOCITY)
+    // VelocityCorrector (keeps orch/collector for CC_PROJECT_VELOCITY)
     subgraph->edges(corrPressureTask, velCorrOrchSM);
     subgraph->edges(velCorrOrchSM, velCorrKernelTask);
     subgraph->edges(velCorrKernelTask, velCorrCollectorSM);
