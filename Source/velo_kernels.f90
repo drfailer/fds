@@ -8,13 +8,14 @@ USE PRECISION_PARAMETERS
 USE GLOBAL_CONSTANTS
 USE MESH_VARIABLES, ONLY: MESH_TYPE
 USE TYPES, ONLY: WALL_TYPE,BOUNDARY_COORD_TYPE,BOUNDARY_PROP1_TYPE,BOUNDARY_PROP2_TYPE,SURFACE_TYPE,SURFACE, &
-                 RAMPS_TYPE,RAMPS,OMESH_TYPE,VENTS_TYPE,EDGE_TYPE
+                 RAMPS_TYPE,RAMPS,OMESH_TYPE,VENTS_TYPE,EDGE_TYPE,EXTERNAL_WALL_TYPE
 
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
 PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_CORRECTOR_KERNEL,VELOCITY_FLUX_KERNEL, &
-       COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL
+       COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
+       MATCH_VELOCITY_KERNEL
 
 CONTAINS
 
@@ -2225,5 +2226,353 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
 ENDDO EDGE_LOOP
 END SUBROUTINE VELOCITY_BC_PROCESS_EDGES_KERNEL
 
+
+!> \brief Thread-safe kernel version of VISCOSITY_BC.
+!> Fills ghost cells of MU, KRES, D/DS from neighboring mesh OMESH data.
+!> \param M Mesh data structure
+!> \param NM Mesh number
+!> \param APPLY_TO_ESTIMATED_VARIABLES Use estimated (starred) variables
+
+SUBROUTINE VISCOSITY_BC_KERNEL(M,NM,APPLY_TO_ESTIMATED_VARIABLES)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+LOGICAL, INTENT(IN) :: APPLY_TO_ESTIMATED_VARIABLES
+REAL(EB) :: MU_OTHER,DP_OTHER,KRES_OTHER
+INTEGER :: II,JJ,KK,IW,IIO,JJO,KKO,NOM,N_INT_CELLS
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+
+WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
+   WC =>M%WALL(IW)
+   EWC=>M%EXTERNAL_WALL(IW)
+   IF (EWC%NOM==0) CYCLE WALL_LOOP
+   BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+   II  = BC%II
+   JJ  = BC%JJ
+   KK  = BC%KK
+   NOM = EWC%NOM
+   MU_OTHER   = 0._EB
+   DP_OTHER   = 0._EB
+   KRES_OTHER = 0._EB
+   DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+      DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+         DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+            MU_OTHER = MU_OTHER + M%OMESH(NOM)%MU(IIO,JJO,KKO)
+            KRES_OTHER = KRES_OTHER + M%OMESH(NOM)%KRES(IIO,JJO,KKO)
+            IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
+               DP_OTHER = DP_OTHER + M%OMESH(NOM)%DS(IIO,JJO,KKO)
+            ELSE
+               DP_OTHER = DP_OTHER + M%OMESH(NOM)%D(IIO,JJO,KKO)
+            ENDIF
+         ENDDO
+      ENDDO
+   ENDDO
+   N_INT_CELLS = (EWC%IIO_MAX-EWC%IIO_MIN+1) * (EWC%JJO_MAX-EWC%JJO_MIN+1) * (EWC%KKO_MAX-EWC%KKO_MIN+1)
+   MU_OTHER = MU_OTHER/REAL(N_INT_CELLS,EB)
+   KRES_OTHER = KRES_OTHER/REAL(N_INT_CELLS,EB)
+   DP_OTHER = DP_OTHER/REAL(N_INT_CELLS,EB)
+   M%MU(II,JJ,KK) = MU_OTHER
+   M%KRES(II,JJ,KK) = KRES_OTHER
+   IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
+      M%DS(II,JJ,KK) = DP_OTHER
+   ELSE
+      M%D(II,JJ,KK) = DP_OTHER
+   ENDIF
+ENDDO WALL_LOOP
+
+END SUBROUTINE VISCOSITY_BC_KERNEL
+
+
+!> \brief Thread-safe kernel version of MATCH_VELOCITY.
+!> Forces normal component of velocity to match at interpolated boundaries.
+!> Handles non-CC_IBM case only; CC_IBM dispatches to CC_MATCH_VELOCITY at wrapper level.
+!> \param M Mesh data structure
+!> \param NM Mesh number
+!> \param PREDICTOR_FLAG .TRUE. for predictor phase, .FALSE. for corrector
+
+SUBROUTINE MATCH_VELOCITY_KERNEL(M,NM,PREDICTOR_FLAG)
+
+USE COMPLEX_GEOMETRY, ONLY : CC_IDCF
+USE MESH_VARIABLES, ONLY: MESHES
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+LOGICAL, INTENT(IN) :: PREDICTOR_FLAG
+
+INTEGER  :: NOM,II,JJ,KK,IOR,IW,IIO,JJO,KKO
+REAL(EB) :: DA_OTHER,UU_OTHER,VV_OTHER,WW_OTHER,NOM_CELLS
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW,OM_UU,OM_VV,OM_WW
+TYPE(OMESH_TYPE), POINTER :: OM
+TYPE(MESH_TYPE), POINTER :: M2
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+
+INTEGER  :: ICF
+REAL(EB) :: AU,AU1,AV,AV1,AW,AW1
+
+! Point to the appropriate velocity field
+
+IF (PREDICTOR_FLAG) THEN
+   UU => M%US
+   VV => M%VS
+   WW => M%WS
+ELSE
+   UU => M%U
+   VV => M%V
+   WW => M%W
+ENDIF
+
+! Loop over all external wall cells and force adjacent normal
+! components of velocity at interpolated boundaries to match.
+
+EXTERNAL_WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
+
+   WC=>M%WALL(IW)
+   EWC=>M%EXTERNAL_WALL(IW)
+   EWC%BOUNDARY_TYPE_PREVIOUS = WC%BOUNDARY_TYPE
+
+   IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP
+
+   BC =>M%BOUNDARY_COORD(WC%BC_INDEX)
+   II  = BC%II
+   JJ  = BC%JJ
+   KK  = BC%KK
+   IOR = BC%IOR
+   NOM = EWC%NOM
+   OM => M%OMESH(NOM)
+   M2 => MESHES(NOM)
+
+   ! Determine the area of the interpolated cell face
+
+   DA_OTHER = 0._EB
+
+   SELECT CASE(ABS(IOR))
+      CASE(1)
+         IF (PREDICTOR_FLAG) OM_UU => OM%US
+         IF (.NOT.PREDICTOR_FLAG) OM_UU => OM%U
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DY(JJO)*M2%DZ(KKO)
+               ENDDO
+            ENDDO
+         ENDDO
+      CASE(2)
+         IF (PREDICTOR_FLAG) OM_VV => OM%VS
+         IF (.NOT.PREDICTOR_FLAG) OM_VV => OM%V
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DX(IIO)*M2%DZ(KKO)
+               ENDDO
+            ENDDO
+         ENDDO
+      CASE(3)
+         IF (PREDICTOR_FLAG) OM_WW => OM%WS
+         IF (.NOT.PREDICTOR_FLAG) OM_WW => OM%W
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DX(IIO)*M2%DY(JJO)
+               ENDDO
+            ENDDO
+         ENDDO
+   END SELECT
+
+   ! Determine the normal component of velocity from the other mesh
+
+   SELECT CASE(IOR)
+
+      CASE( 1)
+
+         UU_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  UU_OTHER = UU_OTHER + OM_UU(IIO,JJO,KKO) &
+                     *M2%DY(JJO)*M2%DZ(KKO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_UU(IIO,JJO,KKO) = &
+                     0.5_EB*(OM_UU(IIO,JJO,KKO)+UU(0,JJ,KK))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = UU(0,JJ,KK)
+         UU(0,JJ,KK) = 0.5_EB*(UU(0,JJ,KK) + UU_OTHER)
+
+      CASE(-1)
+
+         UU_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  UU_OTHER = UU_OTHER + &
+                     OM_UU(IIO-1,JJO,KKO) &
+                     *M2%DY(JJO)*M2%DZ(KKO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_UU(IIO-1,JJO,KKO) = &
+                     0.5_EB*(OM_UU(IIO-1,JJO,KKO) &
+                     +UU(M%IBAR,JJ,KK))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = UU(M%IBAR,JJ,KK)
+         UU(M%IBAR,JJ,KK) = &
+            0.5_EB*(UU(M%IBAR,JJ,KK) + UU_OTHER)
+
+      CASE( 2)
+
+         VV_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  VV_OTHER = VV_OTHER + OM_VV(IIO,JJO,KKO) &
+                     *M2%DX(IIO)*M2%DZ(KKO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_VV(IIO,JJO,KKO) = &
+                     0.5_EB*(OM_VV(IIO,JJO,KKO)+VV(II,0,KK))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = VV(II,0,KK)
+         VV(II,0,KK) = 0.5_EB*(VV(II,0,KK) + VV_OTHER)
+
+      CASE(-2)
+
+         VV_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  VV_OTHER = VV_OTHER + &
+                     OM_VV(IIO,JJO-1,KKO) &
+                     *M2%DX(IIO)*M2%DZ(KKO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_VV(IIO,JJO-1,KKO) = &
+                     0.5_EB*(OM_VV(IIO,JJO-1,KKO) &
+                     +VV(II,M%JBAR,KK))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = VV(II,M%JBAR,KK)
+         VV(II,M%JBAR,KK) = &
+            0.5_EB*(VV(II,M%JBAR,KK) + VV_OTHER)
+
+      CASE( 3)
+
+         WW_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  WW_OTHER = WW_OTHER + OM_WW(IIO,JJO,KKO) &
+                     *M2%DX(IIO)*M2%DY(JJO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_WW(IIO,JJO,KKO) = &
+                     0.5_EB*(OM_WW(IIO,JJO,KKO)+WW(II,JJ,0))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = WW(II,JJ,0)
+         WW(II,JJ,0) = 0.5_EB*(WW(II,JJ,0) + WW_OTHER)
+
+      CASE(-3)
+
+         WW_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  WW_OTHER = WW_OTHER + &
+                     OM_WW(IIO,JJO,KKO-1) &
+                     *M2%DX(IIO)*M2%DY(JJO)/DA_OTHER
+                  IF (EWC%AREA_RATIO>0.9_EB) &
+                     OM_WW(IIO,JJO,KKO-1) = &
+                     0.5_EB*(OM_WW(IIO,JJO,KKO-1) &
+                     +WW(II,JJ,M%KBAR))
+               ENDDO
+            ENDDO
+         ENDDO
+         M%UVW_SAVE(IW) = WW(II,JJ,M%KBAR)
+         WW(II,JJ,M%KBAR) = &
+            0.5_EB*(WW(II,JJ,M%KBAR) + WW_OTHER)
+
+   END SELECT
+
+   ! Save velocity components at the ghost cell midpoint
+
+   M%U_GHOST(IW) = 0._EB
+   M%V_GHOST(IW) = 0._EB
+   M%W_GHOST(IW) = 0._EB
+
+   IF (PREDICTOR_FLAG) OM_UU => OM%US
+   IF (.NOT.PREDICTOR_FLAG) OM_UU => OM%U
+   IF (PREDICTOR_FLAG) OM_VV => OM%VS
+   IF (.NOT.PREDICTOR_FLAG) OM_VV => OM%V
+   IF (PREDICTOR_FLAG) OM_WW => OM%WS
+   IF (.NOT.PREDICTOR_FLAG) OM_WW => OM%W
+
+   IF (CC_IBM) THEN
+      DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+         DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+            DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+               AU =1._EB
+               ICF=M2%FCVAR(IIO  ,JJO,KKO,CC_IDCF,IAXIS)
+               IF(ICF>0) AU =M2%CUT_FACE(ICF)%ALPHA_CF
+               AU1=1._EB
+               ICF=M2%FCVAR(IIO-1,JJO,KKO,CC_IDCF,IAXIS)
+               IF(ICF>0) AU1=M2%CUT_FACE(ICF)%ALPHA_CF
+               AV =1._EB
+               ICF=M2%FCVAR(IIO,JJO  ,KKO,CC_IDCF,JAXIS)
+               IF(ICF>0) AV =M2%CUT_FACE(ICF)%ALPHA_CF
+               AV1=1._EB
+               ICF=M2%FCVAR(IIO,JJO-1,KKO,CC_IDCF,JAXIS)
+               IF(ICF>0) AV1=M2%CUT_FACE(ICF)%ALPHA_CF
+               AW =1._EB
+               ICF=M2%FCVAR(IIO,JJO,KKO  ,CC_IDCF,KAXIS)
+               IF(ICF>0) AW =M2%CUT_FACE(ICF)%ALPHA_CF
+               AW1=1._EB
+               ICF=M2%FCVAR(IIO,JJO,KKO-1,CC_IDCF,KAXIS)
+               IF(ICF>0) AW1=M2%CUT_FACE(ICF)%ALPHA_CF
+               M%U_GHOST(IW) = M%U_GHOST(IW) + &
+                  (OM_UU(IIO,JJO,KKO) &
+                  +OM_UU(IIO-1,JJO,KKO))/(AU+AU1)
+               M%V_GHOST(IW) = M%V_GHOST(IW) + &
+                  (OM_VV(IIO,JJO,KKO) &
+                  +OM_VV(IIO,JJO-1,KKO))/(AV+AV1)
+               M%W_GHOST(IW) = M%W_GHOST(IW) + &
+                  (OM_WW(IIO,JJO,KKO) &
+                  +OM_WW(IIO,JJO,KKO-1))/(AW+AW1)
+            ENDDO
+         ENDDO
+      ENDDO
+   ELSE
+      DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+         DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+            DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+               M%U_GHOST(IW) = M%U_GHOST(IW) + &
+                  0.5_EB*(OM_UU(IIO,JJO,KKO) &
+                  +OM_UU(IIO-1,JJO,KKO))
+               M%V_GHOST(IW) = M%V_GHOST(IW) + &
+                  0.5_EB*(OM_VV(IIO,JJO,KKO) &
+                  +OM_VV(IIO,JJO-1,KKO))
+               M%W_GHOST(IW) = M%W_GHOST(IW) + &
+                  0.5_EB*(OM_WW(IIO,JJO,KKO) &
+                  +OM_WW(IIO,JJO,KKO-1))
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+   NOM_CELLS = REAL((EWC%IIO_MAX-EWC%IIO_MIN+1) &
+      *(EWC%JJO_MAX-EWC%JJO_MIN+1) &
+      *(EWC%KKO_MAX-EWC%KKO_MIN+1),EB)
+   M%U_GHOST(IW) = M%U_GHOST(IW)/NOM_CELLS
+   M%V_GHOST(IW) = M%V_GHOST(IW)/NOM_CELLS
+   M%W_GHOST(IW) = M%W_GHOST(IW)/NOM_CELLS
+
+ENDDO EXTERNAL_WALL_LOOP
+
+END SUBROUTINE MATCH_VELOCITY_KERNEL
 
 END MODULE VELO_KERNELS

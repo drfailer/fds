@@ -5,9 +5,9 @@
 #include "../data/velocity_bc_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Parallel task that calls VELOCITY_BC_PROCESS_EDGES_KERNEL.
-/// Processes all edge boundary conditions for one mesh.
-/// Thread-safe: uses explicit M% access, no POINT_TO_MESH.
+/// Parallel task that calls MATCH_VELOCITY_KERNEL + VELOCITY_BC_PREPROCESSING +
+/// VELOCITY_BC_PROCESS_EDGES_KERNEL for one mesh.
+/// All three routines are thread-safe: explicit M% access, no POINT_TO_MESH.
 class VelocityBCEdgesTask
     : public hh::AbstractTask<1, VelocityBCWork, VelocityBCWork> {
 public:
@@ -16,6 +16,9 @@ public:
               "VelocityBCEdges", numThreads) {}
 
     void execute(std::shared_ptr<VelocityBCWork> work) override {
+        fds_match_velocity_kernel(work->nm, work->applyToEstimated);
+        fds_velocity_bc_preprocessing(
+            work->nm, work->t, work->applyToEstimated);
         fds_velocity_bc_process_edges_kernel(
             work->nm, work->t, work->applyToEstimated);
         this->addResult(work);

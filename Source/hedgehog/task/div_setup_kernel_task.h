@@ -15,8 +15,12 @@ public:
               "DivSetupKernel", numThreads) {}
 
     void execute(std::shared_ptr<DivSetupWork> work) override {
+        fds_set_baroclinic_false(work->nm);
+        fds_viscosity_bc_kernel(work->nm, work->estimated);
         fds_velocity_flux_kernel(work->nm, work->t, work->dt,
                                  work->estimated);
+        if (work->estimated)
+            fds_agglomeration(work->dt, work->nm);
         this->addResult(work);
     }
 

@@ -5,8 +5,9 @@
 #include "../data/wallbc_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Parallel task that calls WALL_BC_PROCESS_CELLS_KERNEL.
-/// Processes ~90% of wall cells without cross-mesh dependencies.
+/// Parallel task that calls WALL_BC_PREPROCESSING_KERNEL + WALL_BC_PROCESS_CELLS_KERNEL.
+/// Preprocessing (ghost value assignment, near-surface gas variables, heat transfer coeff)
+/// and cell processing (~90% of wall cells) are both thread-safe per-mesh operations.
 /// Each thread processes one mesh independently.
 class WallBCKernelTask
     : public hh::AbstractTask<1, WallBCWork, WallBCWork> {
@@ -16,8 +17,10 @@ public:
               "WallBCKernel", numThreads) {}
 
     void execute(std::shared_ptr<WallBCWork> work) override {
-        // Call WALL_BC_PROCESS_CELLS_KERNEL - processes cells without
-        // HAS_INTERPOLATED_BC or HAS_BACK_MESH flags
+        // Thread-safe preprocessing: ASSIGN_GHOST_VALUE_KERNEL + NEAR_SURFACE_GAS_VARIABLES + HTC
+        fds_wall_bc_preprocessing_kernel(
+            work->nm, work->t, work->dt_bc, work->call_ht_1d);
+        // Process ~90% of wall cells (no cross-mesh dependencies)
         fds_wall_bc_process_cells_kernel(
             work->nm, work->t, work->dt, work->dt_bc, work->call_ht_1d);
         this->addResult(work);

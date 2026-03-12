@@ -9,8 +9,8 @@
 #include "../fds_fortran_interface.h"
 
 /// Orchestrator state for corrector divergence part 1 sub-graph.
-/// Runs sequential COMBUSTION_BC (cross-mesh dependency: reads OMESH%Q)
-/// on each mesh before dispatching parallel DIVERGENCE_PART_1_KERNEL work.
+/// COMBUSTION_BC has been moved to the parallel kernel task (COMBUSTION_BC_KERNEL).
+/// Dispatches parallel COMBUSTION_BC_KERNEL + DIVERGENCE_PART_1_KERNEL work directly.
 class CorrDivPart1Orchestrator
     : public hh::AbstractState<1, MeshData, CorrDivPart1Work> {
 public:
@@ -24,12 +24,7 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential pre-processing: COMBUSTION_BC reads OMESH(NOM)%Q
-            for (auto &md : collected_) {
-                fds_combustion_bc(md->nm);
-            }
-
-            // Dispatch parallel kernel work
+            // Dispatch parallel kernel work (includes COMBUSTION_BC_KERNEL + DIVERGENCE_PART_1_KERNEL)
             for (auto &md : collected_) {
                 auto work = std::make_shared<CorrDivPart1Work>(
                     md->nm, md->t, md->dt, md);

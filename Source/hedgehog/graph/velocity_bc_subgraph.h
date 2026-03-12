@@ -12,13 +12,12 @@
 ///
 /// Three-phase architecture:
 ///   1. Sequential preprocessing (PredFinalOrchestrator):
-///      - MATCH_VELOCITY (cross-mesh velocity interpolation)
-///      - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow BC)
-///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities)
+///      - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow BC — uses RANDOM_NUMBER)
 ///
 ///   2. Parallel kernel execution (VelocityBCEdgesTask):
-///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions)
-///      - Thread-safe: uses explicit M% access
+///      - MATCH_VELOCITY_KERNEL (cross-mesh velocity interpolation, thread-safe via M%)
+///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities, thread-safe via M%)
+///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe via M%)
 ///
 ///   3. Sequential finalization (PredFinalCollector):
 ///      - CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM active)
@@ -46,12 +45,12 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
 ///
 /// Three-phase architecture:
 ///   1. Sequential preprocessing (CorrFinalOrchestrator):
-///      - MATCH_VELOCITY (cross-mesh velocity interpolation)
-///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities)
+///      - (no sequential preprocessing remains — all moved to parallel kernel)
 ///
 ///   2. Parallel kernel execution (VelocityBCEdgesTask):
-///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions)
-///      - Thread-safe: uses explicit M% access
+///      - MATCH_VELOCITY_KERNEL (cross-mesh velocity interpolation, thread-safe via M%)
+///      - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities, thread-safe via M%)
+///      - VELOCITY_BC_PROCESS_EDGES_KERNEL (all edge boundary conditions, thread-safe via M%)
 ///
 ///   3. Sequential finalization (CorrFinalCollector):
 ///      - CC_VELOCITY_BC (cut-cell velocity BC if CC_IBM active)

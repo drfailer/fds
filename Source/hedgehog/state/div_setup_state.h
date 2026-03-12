@@ -9,7 +9,8 @@
 #include "../fds_fortran_interface.h"
 
 /// Orchestrator state for predictor div setup sub-graph.
-/// Sequential pre-processing: SET_BAROCLINIC_FALSE + VISCOSITY_BC (reads OMESH).
+/// Sequential pre-processing: CC_VELOCITY_BC (if CC_IBM).
+/// SET_BAROCLINIC_FALSE, VISCOSITY_BC, AGGLOMERATION moved to parallel kernel task.
 class PredDivSetupOrchestrator
     : public hh::AbstractState<1, MeshData, DivSetupWork> {
 public:
@@ -23,11 +24,9 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential pre-processing (cross-mesh dependencies)
+            // Sequential pre-processing (only CC_IBM remains)
             for (auto &md : collected_) {
-                fds_set_baroclinic_false(md->nm);
-                fds_viscosity_bc(md->nm, 0);  // estimated=false
-                fds_cc_velocity_bc(md->t, md->nm, 0);  // CC_IBM: sequential OMESH access
+                fds_cc_velocity_bc(md->t, md->nm, 0);  // CC_IBM: sequential (pending conversion)
             }
 
             // Dispatch parallel kernel work
@@ -48,8 +47,8 @@ private:
 };
 
 /// Orchestrator state for corrector div setup sub-graph.
-/// Sequential pre-processing: SET_BAROCLINIC_FALSE + VISCOSITY_BC (reads OMESH)
-/// + AGGLOMERATION.
+/// Sequential pre-processing: CC_VELOCITY_BC (if CC_IBM).
+/// SET_BAROCLINIC_FALSE, VISCOSITY_BC, AGGLOMERATION moved to parallel kernel task.
 class CorrDivSetupOrchestrator
     : public hh::AbstractState<1, MeshData, DivSetupWork> {
 public:
@@ -63,12 +62,9 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential pre-processing (cross-mesh dependencies)
+            // Sequential pre-processing (only CC_IBM remains)
             for (auto &md : collected_) {
-                fds_set_baroclinic_false(md->nm);
-                fds_viscosity_bc(md->nm, 1);  // estimated=true
-                fds_cc_velocity_bc(md->t, md->nm, 1);  // CC_IBM: sequential OMESH access
-                fds_agglomeration(md->dt, md->nm);
+                fds_cc_velocity_bc(md->t, md->nm, 1);  // CC_IBM: sequential (pending conversion)
             }
 
             // Dispatch parallel kernel work

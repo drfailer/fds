@@ -15,6 +15,7 @@ public:
               "CorrDivPart1Kernel", numThreads) {}
 
     void execute(std::shared_ptr<CorrDivPart1Work> work) override {
+        fds_combustion_bc_kernel(work->nm);
         fds_divergence_part_1_kernel(work->nm, work->t, work->dt);
         this->addResult(work);
     }

@@ -8,12 +8,14 @@
 #include "../data/wallbc_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator state for WallBC sub-graph (Pattern B - Sequential Pre-Processing).
+/// Orchestrator state for WallBC sub-graph.
 ///
-/// Collects all N mesh tokens, runs sequential preprocessing, then dispatches parallel work.
-/// Preprocessing includes ASSIGN_GHOST_VALUE (cross-mesh reads) and NEAR_SURFACE_GAS_VARIABLES setup.
+/// Collects all N mesh tokens, computes global DT_BC/CALL_HT_1D state,
+/// then dispatches parallel work. Per-mesh preprocessing (ASSIGN_GHOST_VALUE_KERNEL,
+/// NEAR_SURFACE_GAS_VARIABLES, HEAT_TRANSFER_COEFFICIENT) has been moved to the
+/// parallel kernel task.
 ///
-/// Flow: Collects N MeshData -> Sequential preprocessing -> Emits N WallBCWork
+/// Flow: Collects N MeshData -> Compute global state -> Emits N WallBCWork
 class WallBCOrchestrator
     : public hh::AbstractState<1, MeshData, WallBCWork> {
 public:
@@ -36,12 +38,7 @@ public:
                 fds_update_bc_clock(collected_[0]->t);
             }
 
-            // Sequential preprocessing: ASSIGN_GHOST_VALUE, NEAR_SURFACE_GAS_VARIABLES, HEAT_TRANS_COEF
-            for (auto &md : collected_) {
-                fds_wall_bc_preprocessing(md->nm, md->t, dt_bc, call_ht_1d);
-            }
-
-            // Dispatch parallel work for WALL_BC_PROCESS_CELLS_KERNEL
+            // Dispatch parallel work (preprocessing + cell processing in kernel task)
             for (auto &md : collected_) {
                 auto work = std::make_shared<WallBCWork>(
                     md->nm, md->t, md->dt, dt_bc, call_ht_1d, md);

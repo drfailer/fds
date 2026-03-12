@@ -720,10 +720,6 @@ TYPE(WALL_TYPE), POINTER :: WC
 TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
 TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
 
-! Assign local names to variables
-
-CALL POINT_TO_MESH(NM)
-
 ! Point to the appropriate velocity field
 
 IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
@@ -738,9 +734,9 @@ ENDIF
 
 ! Transfer from neighboring mesh the normal component of velocity that is one grid cell beyond external boundary
 
-WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
+WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
    WC =>M%WALL(IW)
-   EWC=>EXTERNAL_WALL(IW)
+   EWC=>M%EXTERNAL_WALL(IW)
    IF (EWC%NOM==0) CYCLE WALL_LOOP
    IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
       OM_UU => M%OMESH(EWC%NOM)%US

@@ -11,10 +11,11 @@
 /// Orchestrator for PredFinal sub-graph (Pattern B - Sequential Pre-Processing).
 ///
 /// Collects N mesh tokens, runs sequential preprocessing for each mesh:
-///   - MATCH_VELOCITY (cross-mesh interpolation)
-///   - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow)
-///   - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities)
-/// Then dispatches N VelocityBCWork tokens for parallel edge processing.
+///   - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow — uses RANDOM_NUMBER, kept sequential)
+/// Then dispatches N VelocityBCWork tokens for parallel processing:
+///   - MATCH_VELOCITY_KERNEL (thread-safe cross-mesh interpolation via M%)
+///   - VELOCITY_BC_PREPROCESSING (thread-safe OMESH reads via M%)
+///   - VELOCITY_BC_PROCESS_EDGES_KERNEL (edge boundary conditions)
 class PredFinalOrchestrator
     : public hh::AbstractState<1, MeshData, VelocityBCWork> {
 public:
@@ -28,14 +29,12 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential preprocessing for each mesh
+            // Sequential: SYNTHETIC_TURBULENCE only (RANDOM_NUMBER not thread-safe)
             for (auto &md : collected_) {
-                fds_match_velocity(md->nm);
                 fds_synthetic_turbulence_if_enabled(md->dt, md->t, md->nm);
-                fds_velocity_bc_preprocessing(md->nm, md->t, /*estimated=*/1);
             }
 
-            // Dispatch parallel work
+            // Dispatch parallel work (match_velocity + preprocessing + edges)
             for (auto &md : collected_) {
                 auto work = std::make_shared<VelocityBCWork>(
                     md->nm, md->t, md->dt, /*estimated=*/1, md);
@@ -96,10 +95,11 @@ private:
 
 /// Orchestrator for CorrFinal sub-graph (Pattern B - Sequential Pre-Processing).
 ///
-/// Collects N mesh tokens, runs sequential preprocessing for each mesh:
-///   - MATCH_VELOCITY (cross-mesh interpolation)
-///   - VELOCITY_BC_PREPROCESSING (OMESH reads for wall boundary velocities)
-/// Then dispatches N VelocityBCWork tokens for parallel edge processing.
+/// Collects N mesh tokens, then dispatches N VelocityBCWork tokens for parallel processing:
+///   - MATCH_VELOCITY_KERNEL (thread-safe cross-mesh interpolation via M%)
+///   - VELOCITY_BC_PREPROCESSING (thread-safe OMESH reads via M%)
+///   - VELOCITY_BC_PROCESS_EDGES_KERNEL (edge boundary conditions)
+/// No sequential preprocessing remains in the corrector orchestrator.
 class CorrFinalOrchestrator
     : public hh::AbstractState<1, MeshData, VelocityBCWork> {
 public:
@@ -113,13 +113,7 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential preprocessing for each mesh
-            for (auto &md : collected_) {
-                fds_match_velocity(md->nm);
-                fds_velocity_bc_preprocessing(md->nm, md->t, /*estimated=*/0);
-            }
-
-            // Dispatch parallel work
+            // Dispatch parallel work (match_velocity + preprocessing + edges)
             for (auto &md : collected_) {
                 auto work = std::make_shared<VelocityBCWork>(
                     md->nm, md->t, md->dt, /*estimated=*/0, md);
