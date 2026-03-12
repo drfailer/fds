@@ -1,7 +1,6 @@
 #ifndef VELOCITY_PREDICTOR_STATE_H
 #define VELOCITY_PREDICTOR_STATE_H
 
-#include <algorithm>
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
@@ -20,35 +19,35 @@ class VelocityPredictorCCCollector
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
     explicit VelocityPredictorCCCollector(int nmeshes)
-        : nmeshes_(nmeshes) {
-        results_.reserve(nmeshes);
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<MeshData> data) override {
-        results_.push_back(data);
+        collected_[data->nm - nmOffset_] = data;
+        ++count_;
 
-        if (static_cast<int>(results_.size()) == nmeshes_) {
-            std::sort(results_.begin(), results_.end(),
-                      [](const auto &a, const auto &b) { return a->nm < b->nm; });
-
-            for (auto &md : results_) {
+        if (count_ == nmeshes_) {
+            for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 0);  // STORE=.FALSE.
                 fds_wall_velocity_no_gradh(md->nm, md->dt, 0);  // STORE=.FALSE.
                 fds_check_stability_kernel_only(md->nm, md->t + md->dt, md->dt);
             }
 
-            for (auto &md : results_) {
+            for (auto &md : collected_) {
                 this->addResult(md);
             }
 
-            results_.clear();
-            results_.reserve(nmeshes_);
+            std::fill(collected_.begin(), collected_.end(), nullptr);
+            count_ = 0;
         }
     }
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> results_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 #endif // VELOCITY_PREDICTOR_STATE_H

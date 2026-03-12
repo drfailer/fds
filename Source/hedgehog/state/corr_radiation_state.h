@@ -7,7 +7,6 @@
 #include "../data/corr_radiation_data.h"
 #include "../fds_fortran_interface.h"
 
-#include <algorithm>
 #include <vector>
 
 // Orchestrator: collects N MeshData tokens, dispatches parallel radiation work.
@@ -37,39 +36,41 @@ private:
 
 // Collector: gathers N CorrRadiationWork results, accumulates global
 // RAD_Q_SUM/KFST4_SUM, sorts by nm, emits single BarrierData.
+//
+// Uses direct indexed placement (nm - offset) to avoid sorting.
 class CorrRadiationCollector
     : public hh::AbstractState<1, CorrRadiationWork, BarrierData> {
 public:
     explicit CorrRadiationCollector(int nmeshes)
-        : nmeshes_(nmeshes) { results_.reserve(nmeshes); }
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
 
     void execute(std::shared_ptr<CorrRadiationWork> work) override {
-        results_.push_back(work);
-        if (static_cast<int>(results_.size()) == nmeshes_) {
+        collected_[work->nm - nmOffset_] = work;
+        ++count_;
+        if (count_ == nmeshes_) {
             // Accumulate per-mesh partial sums into global variables
-            for (auto &w : results_) {
+            for (auto &w : collected_) {
                 fds_accumulate_rad_sums(
                     w->radQSumPartial, w->kfst4SumPartial);
             }
-            // Sort by mesh index for deterministic ordering
-            std::sort(results_.begin(), results_.end(),
-                      [](const auto &a, const auto &b) {
-                          return a->nm < b->nm;
-                      });
             auto bd = std::make_shared<BarrierData>();
             bd->meshes.reserve(nmeshes_);
-            for (auto &w : results_) {
+            for (auto &w : collected_) {
                 bd->meshes.push_back(w->originalMeshData);
             }
             this->addResult(bd);
-            results_.clear();
-            results_.reserve(nmeshes_);
+            std::fill(collected_.begin(), collected_.end(), nullptr);
+            count_ = 0;
         }
     }
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<CorrRadiationWork>> results_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<CorrRadiationWork>> collected_;
 };
 
 #endif // CORR_RADIATION_STATE_H

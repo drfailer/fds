@@ -1,7 +1,6 @@
 #ifndef VELOCITY_BC_STATE_H
 #define VELOCITY_BC_STATE_H
 
-#include <algorithm>
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
@@ -51,34 +50,32 @@ class PredFinalCCCollector
     : public hh::AbstractState<1, MeshData, BarrierData> {
 public:
     explicit PredFinalCCCollector(int nmeshes)
-        : nmeshes_(nmeshes) {
-        results_.reserve(nmeshes);
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<MeshData> data) override {
-        results_.push_back(data);
+        collected_[data->nm - nmOffset_] = data;
+        ++count_;
 
-        if (static_cast<int>(results_.size()) == nmeshes_) {
-            std::sort(results_.begin(), results_.end(),
-                      [](const auto &a, const auto &b) {
-                          return a->nm < b->nm;
-                      });
-
-            for (auto &md : results_) {
+        if (count_ == nmeshes_) {
+            for (auto &md : collected_) {
                 fds_cc_velocity_bc(md->t, md->nm, 1);  // applyToEstimated=1 (predictor)
             }
 
             auto bd = std::make_shared<BarrierData>();
-            bd->meshes = std::move(results_);
-            results_ = {};
-            results_.reserve(nmeshes_);
+            bd->meshes = std::move(collected_);
+            collected_.resize(nmeshes_, nullptr);
+            count_ = 0;
             this->addResult(bd);
         }
     }
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> results_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 /// Collector for CorrFinal sub-graph.
@@ -91,35 +88,33 @@ class CorrFinalCollector
     : public hh::AbstractState<1, MeshData, BarrierData> {
 public:
     explicit CorrFinalCollector(int nmeshes)
-        : nmeshes_(nmeshes) {
-        results_.reserve(nmeshes);
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<MeshData> data) override {
-        results_.push_back(data);
+        collected_[data->nm - nmOffset_] = data;
+        ++count_;
 
-        if (static_cast<int>(results_.size()) == nmeshes_) {
-            std::sort(results_.begin(), results_.end(),
-                      [](const auto &a, const auto &b) {
-                          return a->nm < b->nm;
-                      });
-
-            for (auto &md : results_) {
+        if (count_ == nmeshes_) {
+            for (auto &md : collected_) {
                 fds_cc_velocity_bc(md->t, md->nm, 0);  // applyToEstimated=0 (corrector)
                 fds_update_global_outputs(md->t, md->dt, md->nm);
             }
 
             auto bd = std::make_shared<BarrierData>();
-            bd->meshes = std::move(results_);
-            results_ = {};
-            results_.reserve(nmeshes_);
+            bd->meshes = std::move(collected_);
+            collected_.resize(nmeshes_, nullptr);
+            count_ = 0;
             this->addResult(bd);
         }
     }
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> results_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 #endif // VELOCITY_BC_STATE_H

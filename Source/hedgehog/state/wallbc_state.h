@@ -1,7 +1,6 @@
 #ifndef WALLBC_STATE_H
 #define WALLBC_STATE_H
 
-#include <algorithm>
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
@@ -57,9 +56,11 @@ private:
 
 /// Collector state for WallBC sub-graph (Pattern B - Sequential Post-Processing).
 ///
-/// Gathers all N kernel results, runs sequential finalization, sorts by mesh index,
-/// and emits MeshData tokens downstream.
+/// Gathers all N kernel results, runs sequential finalization, and emits
+/// MeshData tokens downstream.
 /// Finalization includes HAS_BACK_MESH processing, thin wall heat transfer, and particle off-gassing.
+///
+/// Meshes are placed directly at their correct position using NM as the index.
 ///
 /// Flow: Collects N WallBCWork -> Sequential finalization -> Emits N MeshData
 class WallBCCollector
@@ -67,37 +68,34 @@ class WallBCCollector
 public:
     explicit WallBCCollector(int nmeshes)
         : hh::AbstractState<1, WallBCWork, MeshData>(),
-          nmeshes_(nmeshes) {
-        results_.reserve(nmeshes);
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<WallBCWork> work) override {
-        results_.push_back(work);
+        collected_[work->nm - nmOffset_] = work;
+        ++count_;
 
-        if (static_cast<int>(results_.size()) == nmeshes_) {
-            // Sort by mesh index for deterministic ordering
-            std::sort(results_.begin(), results_.end(),
-                      [](const auto &a, const auto &b) {
-                          return a->nm < b->nm;
-                      });
-
+        if (count_ == nmeshes_) {
             // Sequential finalization: HAS_BACK_MESH cells, thin walls, particle off-gassing
-            for (auto &w : results_) {
+            for (auto &w : collected_) {
                 fds_wall_bc_finalize(w->nm, w->t, w->dt_bc, w->call_ht_1d);
             }
 
-            for (auto &w : results_) {
+            for (auto &w : collected_) {
                 this->addResult(w->originalMeshData);
             }
 
-            results_.clear();
-            results_.reserve(nmeshes_);
+            std::fill(collected_.begin(), collected_.end(), nullptr);
+            count_ = 0;
         }
     }
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<WallBCWork>> results_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<WallBCWork>> collected_;
 };
 
 #endif // WALLBC_STATE_H
