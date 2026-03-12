@@ -67,7 +67,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
 
     auto collector4SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(4)");
-    auto meshExchange4 = std::make_shared<MeshExchangeTask>(4);
+    auto meshExchange4 = std::make_shared<MeshExchangeTask>(4, /*ccDensity=*/ccIBM);
 
     auto combustionCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "CombustionCollector");
@@ -103,7 +103,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads) {
 
     auto collector6bSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(6b)");
-    auto meshExchange6b = std::make_shared<MeshExchangeTask>(6);
+    auto meshExchange6b = std::make_shared<MeshExchangeTask>(6, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
 
     // --- Wire the sub-graph ---
 

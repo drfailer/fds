@@ -73,7 +73,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     auto collector1SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(1)");
-    auto meshExchange1 = std::make_shared<MeshExchangeTask>(1);
+    auto meshExchange1 = std::make_shared<MeshExchangeTask>(1, /*ccDensity=*/ccIBM);
 
     auto predHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PredHvacCollector");
@@ -96,7 +96,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     auto collector3SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(3)");
-    auto meshExchange3 = std::make_shared<MeshExchangeTask>(3);
+    auto meshExchange3 = std::make_shared<MeshExchangeTask>(3, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
 
     auto phaseTransCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PhaseTransCollector");

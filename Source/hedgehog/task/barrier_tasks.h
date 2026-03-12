@@ -16,20 +16,28 @@
 // ---------------------------------------------------------------------------
 
 /// MESH_EXCHANGE barrier task — replaces MeshBarrierState.
+///
+/// Optional pre-exchange CC_IBM operations:
+/// - ccDensity: run CC_DENSITY(T,DT) before the exchange (after density loops)
+/// - ccEndStep: run CC_END_STEP(T,DT) before the exchange (after velocity pred/corr)
 class MeshExchangeTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
-    explicit MeshExchangeTask(int code)
+    explicit MeshExchangeTask(int code, bool ccDensity = false, bool ccEndStep = false)
         : hh::AbstractTask<1, BarrierData, MeshData>(
               "MeshExchange(" + std::to_string(code) + ")", 1),
-          code_(code) {}
+          code_(code), ccDensity_(ccDensity), ccEndStep_(ccEndStep) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
+        if (ccDensity_) { fds_cc_density(data->t(), data->dt()); }
+        if (ccEndStep_) { fds_cc_end_step(data->t(), data->dt(), 0); }
         fds_mesh_exchange(code_);
         for (auto &md : data->meshes) { this->addResult(md); }
     }
 
 private:
     int code_;
+    bool ccDensity_;
+    bool ccEndStep_;
 };
 
 /// COMBUSTION_LOAD_BALANCED barrier task — replaces CombustionBarrierState.
@@ -126,7 +134,6 @@ public:
         t += dt;
         fds_zero_q_m_dot();
         fds_create_or_remove_obstructions(t, dt);
-        fds_cc_end_step(t, dt, 0);
 
         for (auto &md : data->meshes) {
             md->t = t;
@@ -224,7 +231,6 @@ public:
         double t = data->t();
         double dt = data->dt();
 
-        fds_cc_end_step(t, dt, 0);
         fds_set_diagnostics(icyc_, t, dt);
         fds_exchange_global_outputs(t, dt);
         fds_update_controls(t, dt);
