@@ -333,8 +333,10 @@ In the **predictor** phase (`PredWallDiv`), the monolithic `WALL_BC(T,DT,NM)` is
 
 ### Action Item
 
-- [ ] Replace `fds_wall_bc(md->t, md->dt, md->nm)` in PredWallDivOrchestrator with the three-phase decomposition
-- [ ] Share the same kernel task and sub-graph pattern as the corrector WallBC
+- [x] Replace `fds_wall_bc(md->t, md->dt, md->nm)` in PredWallDivOrchestrator with the three-phase decomposition
+- [x] Share the same kernel task and sub-graph pattern as the corrector WallBC
+
+#### Status: COMPLETE — Reused corrector's WallBC sub-graph (`buildWallBCSubgraph`) in predictor pipeline. Removed PredWallDivOrchestrator (was only calling monolithic WALL_BC). `fds_check_call_ht_1d` correctly returns 0 during predictor (checks CORRECTOR flag). Verified byte-identical (1–5 mesh)
 
 ---
 
@@ -358,9 +360,11 @@ SET_BAROCLINIC_FALSE and CALC_AGGLOMERATION moved to parallel DivSetupKernelTask
 
 **Impact achieved**: DivSetup orchestrators (pred+corr) reduced to only CC_VELOCITY_BC sequential call (CC_IBM-specific, Group 4).
 
-### Phase 4: Predictor WALL_BC decomposition
+### Phase 4: Predictor WALL_BC decomposition — ✅ COMPLETE
 
-Apply the corrector's three-phase pattern to the predictor.
+Reused corrector's `buildWallBCSubgraph` in predictor pipeline. Removed PredWallDivOrchestrator (only existed to call monolithic `fds_wall_bc`). Predictor WALL_BC now runs ~90% of wall cells in parallel via WallBCKernelTask.
+
+**Impact achieved**: Predictor pipeline no longer has any monolithic sequential WALL_BC call. Both predictor and corrector use the same three-phase WallBC sub-graph.
 
 ---
 

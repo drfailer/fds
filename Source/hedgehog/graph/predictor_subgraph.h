@@ -9,7 +9,6 @@
 #include "../state/collector_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/pred_wall_div_state.h"
 #include "../state/velocity_predictor_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
@@ -20,12 +19,13 @@
 #include "../task/velocity_predictor_kernel_task.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
+#include "wallbc_subgraph.h"
 
 /// Build the Predictor sub-graph.
 ///
 /// Implements the full predictor phase of the FDS time-stepping loop:
 ///   PredStep1 -> DensityPred -> MESH_EXCHANGE(1) -> PredDivSetup -> HVAC ->
-///   InitDivIntegrals -> PredWallDiv -> DivergenceExchange -> PredDivPart2 ->
+///   InitDivIntegrals -> WallBC -> PredWallDiv -> DivergenceExchange -> PredDivPart2 ->
 ///   PressureIteration -> VelocityPredictor -> ChangeTimeStep ->
 ///   MESH_EXCHANGE(3) -> PredFinal -> PhaseTransition
 ///
@@ -51,9 +51,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
     auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
-    // PredWallDiv: sequential WALL_BC -> parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
-    auto predWallDivOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PredWallDivOrchestrator>(nmeshes), "PredWallDivOrch");
+    // WallBC sub-graph (three-phase: preprocessing -> parallel kernel -> finalize)
+    auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+
+    // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
     auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
 
     // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
@@ -125,9 +126,11 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(predHvacTask, predInitDivCollectorSM);
     subgraph->edges(predInitDivCollectorSM, predInitDivTask);
 
-    // PredWallDiv: orchestrator (WALL_BC) -> parallel kernel -> DivExchange
-    subgraph->edges(predInitDivTask, predWallDivOrchSM);
-    subgraph->edges(predWallDivOrchSM, predWallDivKernelTask);
+    // WallBC sub-graph (three-phase decomposition, reuses corrector pattern)
+    subgraph->edges(predInitDivTask, predWallBCSubgraph);
+
+    // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 -> DivExchange
+    subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
     subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
     subgraph->edges(predDivCollectorSM, predDivExchangeTask);
 
