@@ -92,4 +92,34 @@ public:
     }
 };
 
+/// Collector that gathers N MeshData tokens after parallel retry kernel
+/// processing and reconstructs a RetrySequenceData for the pipeline.
+class RetryMomentumDivCollector
+    : public hh::AbstractState<1, MeshData, RetrySequenceData> {
+public:
+    explicit RetryMomentumDivCollector(int nmeshes)
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        ++count_;
+
+        if (count_ == nmeshes_) {
+            auto retryData = std::make_shared<RetrySequenceData>(
+                collected_, collected_[0]->t, collected_[0]->dt, 0, false);
+            collected_.resize(nmeshes_, nullptr);
+            count_ = 0;
+            this->addResult(retryData);
+        }
+    }
+
+private:
+    int nmeshes_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
+};
+
 #endif // CHANGE_TIMESTEP_STATE_H
