@@ -8,11 +8,11 @@
 /// Bundles WALL_BC_PROCESS_CELLS_KERNEL (processes ~90% of wall cells
 /// without cross-mesh dependencies).
 struct WallBCWork {
-    int nm;         ///< Mesh index
-    double t;       ///< Simulation time
-    double dt;      ///< Time step
-    double dt_bc;   ///< Boundary condition time step
-    int call_ht_1d; ///< Flag to call 1-D heat transfer (0=false, 1=true)
+    int nm;             ///< Mesh index
+    double t;           ///< Simulation time
+    double dt;          ///< Time step
+    double dt_bc;       ///< Boundary condition time step (Fortran-computed)
+    int call_ht_1d;     ///< Flag to call 1-D heat transfer (0=false, 1=true)
 
     /// Preserve original MeshData for downstream routing
     std::shared_ptr<MeshData> originalMeshData;

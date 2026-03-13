@@ -17,7 +17,7 @@
 #include "graph/fds_graph.h"
 
 int main(int argc, char *argv[]) {
-    double t = 0.0, dt = 0.0, tEnd = 0.0;
+    double t_init = 0.0, dt_init = 0.0;
     int nmeshes = 0;
 
     // Step 0: Pass the input file name to Fortran before initialization.
@@ -29,17 +29,18 @@ int main(int argc, char *argv[]) {
 
     // Step 1: Run the entire Fortran initialization sequence.
     // This initializes MPI, reads the input file, sets up meshes, etc.
-    fds_initialize_all(&t, &dt, &nmeshes);
+    fds_initialize_all(&t_init, &dt_init, &nmeshes);
 
     // Get the end time and mesh indices for this MPI process
-    tEnd = fds_get_t_end();
+    double tEnd = fds_get_t_end();
     int lower_mesh_index = fds_get_lower_mesh_index();
     int upper_mesh_index = fds_get_upper_mesh_index();
     int local_nmeshes = upper_mesh_index - lower_mesh_index + 1;
 
     // Clamp initial DT to T_END (matches main.f90 top-of-MAIN_LOOP logic).
     // Without this, simulations where initial DT > T_END overshoot on the first step.
-    dt = fds_adjust_dt(t, dt);
+    double t = t_init;
+    double dt = fds_adjust_dt(t_init, dt_init);
 
     std::cout << "[FDS-HH] Initialization complete." << std::endl;
     std::cout << "[FDS-HH] Total meshes=" << nmeshes

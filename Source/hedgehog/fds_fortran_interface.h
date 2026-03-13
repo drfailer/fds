@@ -118,7 +118,9 @@ void fds_set_baroclinic_false(int nm);
 
 // WALL_BC helper functions
 double fds_compute_wall_bc_dt_bc(double t);
+void fds_increment_wall_counter();
 int fds_check_call_ht_1d();
+void fds_reset_wall_counter();
 void fds_update_bc_clock(double t);
 
 } // extern "C"

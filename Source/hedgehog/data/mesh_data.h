@@ -6,11 +6,11 @@
 /// Token type flowing through the Hedgehog dataflow graph.
 /// Each token represents one mesh at a given point in the time-stepping pipeline.
 struct MeshData {
-    int nm;        ///< Mesh index (1-based, Fortran convention)
-    double t;      ///< Current simulation time
-    double dt;     ///< Current time step
-    int phase;     ///< 0 = predictor, 1 = corrector
-    bool firstPass; ///< True on first pass through CHANGE_TIME_STEP_LOOP, false on CFL retry
+    int nm;            ///< Mesh index (1-based, Fortran convention)
+    double t;          ///< Current simulation time
+    double dt;         ///< Current time step
+    int phase;         ///< 0 = predictor, 1 = corrector
+    bool firstPass;    ///< True on first pass through CHANGE_TIME_STEP_LOOP, false on CFL retry
 
     MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true) {}
     MeshData(int nm_, double t_, double dt_, int phase_)

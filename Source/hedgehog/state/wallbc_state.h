@@ -28,13 +28,19 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Compute dt_bc and call_ht_1d from global Fortran state (same for all meshes)
-            double dt_bc = fds_compute_wall_bc_dt_bc(collected_[0]->t);
-            int call_ht_1d = fds_check_call_ht_1d();
+            double dt_bc = 0.0;
+            int call_ht_1d = 0;
 
-            // If calling 1-D heat transfer, update BC_CLOCK
-            if (call_ht_1d) {
-                fds_update_bc_clock(collected_[0]->t);
+            // CALL_HT_1D only fires during the corrector phase (wall.f90:94)
+            // WALL_COUNTER is only incremented before the corrector WALL_BC (main.f90:868)
+            if (collected_[0]->phase == 1) { // corrector
+                dt_bc = fds_compute_wall_bc_dt_bc(collected_[0]->t);
+                fds_increment_wall_counter();
+                call_ht_1d = fds_check_call_ht_1d();
+
+                if (call_ht_1d) {
+                    fds_update_bc_clock(collected_[0]->t);
+                }
             }
 
             // Dispatch parallel work (preprocessing + cell processing in kernel task)
@@ -80,6 +86,10 @@ public:
             // Sequential finalization: HAS_BACK_MESH cells, thin walls, particle off-gassing
             for (auto &w : collected_) {
                 fds_wall_bc_finalize(w->nm, w->t, w->dt_bc, w->call_ht_1d);
+            }
+            // Reset WALL_COUNTER after WALL_BC loop (main.f90:872) — corrector only
+            if (collected_[0]->originalMeshData->phase == 1) {
+                fds_reset_wall_counter();
             }
 
             for (auto &w : collected_) {

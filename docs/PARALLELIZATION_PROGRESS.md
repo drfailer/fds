@@ -173,56 +173,55 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
 ## Performance Profiling Results
 
-**Test case**: dancing_eddies, 27 timesteps (from Hedgehog graph dot file)
+**Test case**: dancing_eddies_4mesh, 27 timesteps (from Hedgehog graph dot file)
 
-### 1-Mesh Baseline (kernelThreads=1, total 6.298s)
-
-| Category | Time | % |
-|----------|------|---|
-| Parallel kernels | 2873 ms | 45.6% |
-| Sequential tasks | 2135 ms | 33.9% |
-| Orchestrator pre-proc | 428 ms | 6.8% |
-| Barriers/exchanges | 357 ms | 5.7% |
-| Overhead | 505 ms | 8.0% |
-
-### 4-Mesh Parallel (kernelThreads=4, total 4.690s)
+### Final Profile (15 sub-graphs + CC_IBM, kernelThreads=4, total 3.739s)
 
 | Category | Time | % |
 |----------|------|---|
-| Parallel kernels | 1277 ms | 27.2% |
-| Sequential tasks | 1838 ms | 39.2% |
-| Orchestrator pre-proc | 454 ms | 9.7% |
-| Barriers/exchanges | 345 ms | 7.4% |
-| Overhead | 776 ms | 16.5% |
+| Parallel kernels | 2301 ms | 61.5% |
+| Sequential barriers | 885 ms | 23.7% |
+| Overhead | 553 ms | 14.8% |
 
-### Kernel Parallel Speedup
+### Parallel Kernels (wall-clock contribution, max thread)
 
-4 meshes, 4 threads vs expected 4× sequential:
+| Kernel | Max D+E (ms) |
+|--------|-------------|
+| CorrDivPart1Kernel x4 | 294 |
+| PredWallDivKernel x4 | 286 |
+| CorrRadiationKernel x4 | 251 |
+| WallBCKernel x4 (corr) | 225 |
+| WallBCKernel x4 (pred) | 212 |
+| CorrStep1Kernel x4 | 193 |
+| VelocityBCEdges x4 (pred) | 170 |
+| PredStep1Kernel x4 | 165 |
+| VelocityBCEdges x4 (corr) | 157 |
+| DivSetupKernel x4 (pred) | 146 |
+| DivSetupKernel x4 (corr) | 122 |
+| Other small kernels | ~80 |
+| **Total parallel** | **~2301** |
 
-| Kernel | Expected (4×1m) | Actual (4m) | Speedup |
-|--------|-----------------|-------------|---------|
-| PredWallDivKernel | 2549 ms | 279 ms | 9.1× |
-| CorrDivPart1Kernel | 2507 ms | 284 ms | 8.8× |
-| CorrStep1Kernel | 1610 ms | 192 ms | 8.4× |
-| DivSetupKernel (pred) | 1362 ms | 148 ms | 9.2× |
-| DivSetupKernel (corr) | 1205 ms | 146 ms | 8.2× |
-| PredStep1Kernel | 1180 ms | 150 ms | 7.9× |
-| **ALL KERNELS** | **11492 ms** | **1277 ms** | **9.0×** |
+### Sequential Barriers (inherently global)
 
-**Super-linear speedup** (9× from 4 threads) is due to better cache utilization on smaller per-mesh domains.
+| Task | Time (ms) | Notes |
+|------|----------|-------|
+| TimestepCompute | 334 | Outputs, diagnostics, I/O |
+| PressureIteration (pred) | 148 | Global Poisson solver |
+| PressureIteration (corr) | 125 | Global Poisson solver |
+| ChangeTimeStep subgraph | 133 | CFL retry pipeline |
+| MeshExchanges (all) | 70 | Inter-mesh communication |
+| CorrFinalCollector | 38 | UPDATE_GLOBAL_OUTPUTS |
+| Other barriers | 37 | PhaseTransition, InitDiv, etc. |
+| **Total sequential** | **~885** |
 
-### Sequential Bottlenecks (4-mesh)
+### Speedup Evolution
 
-| Task | Time | Notes |
-|------|------|-------|
-| CorrRadiation | 356 ms | Complex iterative solver (future target) |
-| TimestepCompute | 349 ms | Outputs, diagnostics |
-| PressureIteration (2×) | 302 ms | Global Poisson solver |
+| Phase | Total Time | Sequential % | Improvement |
+|-------|-----------|-------------|-------------|
+| Phase 1 (12 sub-graphs) | 4.690s | 39.2% | Baseline |
+| Phase 2 (15 sub-graphs + CC_IBM) | 3.739s | 23.7% | **-20% total, -52% sequential** |
 
-**Previous bottlenecks eliminated**:
-- CorrWallBC (was 406 ms) → now WallBC sub-graph (preprocessing + parallel kernel + finalization)
-- PredFinal (was 342 ms) → now PredFinal sub-graph (Pattern B: MATCH_VELOCITY + preprocessing + parallel VELOCITY_BC_PROCESS_EDGES_KERNEL + CC_VELOCITY_BC)
-- CorrFinal (was 385 ms) → now CorrFinal sub-graph (Pattern B: MATCH_VELOCITY + preprocessing + parallel VELOCITY_BC_PROCESS_EDGES_KERNEL + CC_VELOCITY_BC + outputs)
+**Amdahl's law**: With 24% sequential, max theoretical speedup ≈ 1/(0.24 + 0.76/N) for N threads.
 
 ## CC_IBM Integration
 
@@ -239,6 +238,16 @@ All parallelized sub-graphs include CC_IBM (cut-cell immersed boundary) processi
 - DIVERGENCE_PART_1/2_KERNEL, COMPUTE_VISCOSITY_KERNEL, DENSITY_KERNEL all include CC_IBM routines
 
 All verified byte-identical on CC_IBM test cases.
+
+**CC_IBM barriers** (conditional, only active when CC_IBM=.TRUE.):
+- CC_DENSITY: pre-exchange hook on MeshExchange(1) and MeshExchange(4)
+- CC_END_STEP: pre-exchange hook on MeshExchange(3) and MeshExchange(6b)
+- CC_VELOCITY_BC: in DivSetup orchestrators and PredFinal/CorrFinal collectors
+
+**CC_IBM test cases** (3 additional tests):
+- shunn3_32_cc: 1-mesh Shunn3 MMS (tolerance 1e-5, HYPRE version difference)
+- two_spheres_cc: 1-mesh Two Spheres (tolerance 1e-4, minor numerical difference)
+- sphere_helium_1mesh_cc: 1-mesh Sphere Helium (byte-identical)
 
 ## Future Work
 
@@ -258,34 +267,47 @@ Current sequential fraction reduced from ~39% to ~25% with PredFinal/CorrFinal d
 
 ### 2. Advanced Optimization
 
-**Pipeline parallelism**: Overlap predictor/corrector of different meshes (requires decoupling barriers)
+**Relaxed barriers**: Not all meshes share boundaries. A finer-grained dependency graph
+could let non-neighboring meshes proceed through MESH_EXCHANGE without waiting for each other.
 
 **NUMA-aware mesh assignment**: Pin meshes to NUMA nodes for memory locality
 
-**Asynchronous MESH_EXCHANGE**: Start communication early, overlap with computation
+**Asynchronous MESH_EXCHANGE**: Post MPI sends/receives early, overlap with computation on
+meshes that don't need the exchanged data yet (only beneficial in multi-rank MPI mode)
+
+**Note**: Pipeline parallelism between predictor and corrector of different timesteps is NOT
+feasible — the corrector writes to (U,V,W,RHO) which the next predictor reads, creating a
+hard data dependency. Intra-phase mesh parallelism (already implemented) is the correct
+approach for the predictor-corrector scheme.
 
 ## Test Suite
 
 **Test runner**: `test_cases/run_tests.py`
 
-**Test cases** (all byte-identical):
-- dancing_eddies_1mesh (1 mesh)
-- dancing_eddies_2mesh (2 meshes, embedded)
-- multiple_reac_3mesh (3 meshes)
-- dancing_eddies_4mesh (4 meshes)
-- species_props_5mesh (5 meshes)
+**Build**: `cd build_hh && cmake --build . --target fds_hh -j$(nproc)`
 
-**Verification**: `python3 test_cases/run_tests.py -v`
+**Test cases** (8 total):
+- dancing_eddies_1mesh (1 mesh) — byte-identical
+- dancing_eddies_2mesh (2 meshes, embedded) — byte-identical
+- multiple_reac_3mesh (3 meshes) — byte-identical
+- dancing_eddies_4mesh (4 meshes) — byte-identical
+- species_props_5mesh (5 meshes) — byte-identical
+- shunn3_32_cc (1 mesh, CC_IBM) — tolerance 1e-5
+- two_spheres_cc (1 mesh, CC_IBM) — tolerance 1e-4
+- sphere_helium_1mesh_cc (1 mesh, CC_IBM) — byte-identical
+
+**Verification**: `cd test_cases && python3 run_tests.py -v`
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 14
-- **Graph nodes replaced**: 17 (some tasks appear in both predictor/corrector)
+- **Sub-graphs created**: 15
+- **Graph nodes replaced**: 18 (some tasks appear in both predictor/corrector)
 - **Kernels extracted**: 14 new kernels + utilizing ~30 existing kernels
 - **Thread-safe conversions**: 1800+ lines converted (including ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
-- **Test coverage**: 5 test cases, 1-5 meshes, all byte-identical
-- **Speedup achieved**: 9× on parallel kernels (4 meshes, 4 threads)
-- **Sequential fraction**: reduced from ~39% to ~25% (PredFinal + CorrFinal decomposed)
+- **Test coverage**: 8 test cases (5 standard + 3 CC_IBM), 1-5 meshes
+- **Overall speedup**: 20% total time reduction (4.690s → 3.739s on 4-mesh)
+- **Sequential fraction**: reduced from 39% to 24%
+- **Parallel fraction**: increased from 27% to 62%
 
 ## Documentation Index
 
