@@ -99,6 +99,9 @@ TYPE MESH_TYPE
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: TMP_0       !< Ambient temperature profile, \f$ \overline{T}_0(z) \f$ (K)
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: D_PBAR_DT   !< \f$ (\partial \overline{p}_m/\partial t)^n \f$
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: D_PBAR_DT_S !< \f$ (\partial \overline{p}_m/\partial t)^* \f$
+   REAL(EB), ALLOCATABLE, DIMENSION(:) :: D_SUM_LOC   !< Per-mesh contribution to divergence sum (DSUM)
+   REAL(EB), ALLOCATABLE, DIMENSION(:) :: P_SUM_LOC   !< Per-mesh contribution to pressure sum (PSUM)
+   REAL(EB), ALLOCATABLE, DIMENSION(:) :: U_SUM_LOC   !< Per-mesh contribution to velocity sum (USUM)
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: U_LEAK
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: U_WIND      !< Component of wind in x direction
    REAL(EB), ALLOCATABLE, DIMENSION(:) :: V_WIND      !< Component of wind in y direction

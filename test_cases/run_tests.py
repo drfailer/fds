@@ -98,6 +98,40 @@ TEST_CASES = {
     },
     # NOTE: sphere_helium_3meshes (3-mesh CC_IBM) segfaults in DIVERGENCE_PART_2_KERNEL ->
     # GET_LINKED_VELOCITIES -> CC_RESTORE_UVW_UNLINKED. Needs investigation before adding.
+
+    # --- Phase 3 coverage: particle, combustion, pressure solver ---
+    'bucket_test_1_short': {
+        'input': 'bucket_test_1_short.fds',
+        'chid': 'bucket_test_1_short',
+        'meshes': 4,
+        'description': '4-mesh Sprinkler particles (shortened)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
+    'activate_sprinklers': {
+        'input': 'activate_sprinklers.fds',
+        'chid': 'activate_sprinklers',
+        'meshes': 1,
+        'description': '1-mesh Sprinkler activation/deactivation controls',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
+    'fire_const_gamma_2mesh': {
+        'input': 'fire_const_gamma_2mesh.fds',
+        'chid': 'fire_const_gamma_2mesh',
+        'meshes': 2,
+        'description': '2-mesh Fire with constant specific heat ratio (no radiation)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
+    'dancing_eddies_ulmat': {
+        'input': 'dancing_eddies_ulmat.fds',
+        'chid': 'dancing_eddies_ulmat',
+        'meshes': 4,
+        'description': '4-mesh Dancing Eddies ULMAT pressure solver',
+        'compare_files': ['_devc.csv'],
+        'timeout': 60
+    },
 }
 
 class TestRunner:

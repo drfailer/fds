@@ -1830,10 +1830,20 @@ END SUBROUTINE INITIALIZE_DIVERGENCE_INTEGRALS
 
 SUBROUTINE EXCHANGE_DIVERGENCE_INFO
 
-INTEGER :: IPZ
+INTEGER :: IPZ, NM
 REAL(EB) :: TNOW
 
 TNOW = CURRENT_TIME()
+
+! Sum per-mesh contributions into global arrays (thread-safe accumulation)
+DSUM = 0._EB
+PSUM = 0._EB
+USUM = 0._EB
+DO NM = LOWER_MESH_INDEX, UPPER_MESH_INDEX
+   DSUM(:) = DSUM(:) + MESHES(NM)%D_SUM_LOC(:)
+   PSUM(:) = PSUM(:) + MESHES(NM)%P_SUM_LOC(:)
+   USUM(:) = USUM(:) + MESHES(NM)%U_SUM_LOC(:)
+ENDDO
 
 ! Sum up the divergence integrals and zone connection matrix over the MPI processes
 

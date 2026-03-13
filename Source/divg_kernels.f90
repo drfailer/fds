@@ -695,6 +695,11 @@ IF (CC_IBM) CALL CC_DIVERGENCE_PART_1(T,DT,NM)
 
 IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
 
+   ! Accumulate into per-mesh local arrays (thread-safe: no global writes)
+   M%D_SUM_LOC = 0._EB
+   M%P_SUM_LOC = 0._EB
+   M%U_SUM_LOC = 0._EB
+
    R_PFCT = 1._EB
    DO K=1,M%KBAR
       DO J=1,M%JBAR
@@ -705,21 +710,21 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
             IF (IPZ<1) CYCLE
             IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
             VC = M%DX(I)*M%RC(I)*VC1
-            DSUM(IPZ) = DSUM(IPZ) + VC*DP(I,J,K)
+            M%D_SUM_LOC(IPZ) = M%D_SUM_LOC(IPZ) + VC*DP(I,J,K)
             IF (CC_IBM) THEN
                R_PFCT = 1._EB
                IF (M%CCVAR(I,J,K,CC_CGSC) == CC_SOLID) THEN
                   CYCLE
                ELSEIF(M%CCVAR(I,J,K,CC_CGSC) == CC_CUTCFE) THEN
                   CALL ADD_CUTCELL_PSUM(M,I,J,K, &
-                     PBAR_P(K,IPZ),PSUM(IPZ)); CYCLE
+                     PBAR_P(K,IPZ),M%P_SUM_LOC(IPZ)); CYCLE
                ELSEIF(M%CCVAR(I,J,K,CC_UNKZ) > 0) THEN
                   CALL ADD_LINKEDCELL_PSUM(M,I,J,K, &
                      VC,PBAR_P(K,IPZ),RTRM(I,J,K), &
-                     PSUM(IPZ)); CYCLE
+                     M%P_SUM_LOC(IPZ)); CYCLE
                ENDIF
             ENDIF
-            PSUM(IPZ) = PSUM(IPZ) + VC*(M%R_PBAR(K,IPZ)*R_PFCT-RTRM(I,J,K))
+            M%P_SUM_LOC(IPZ) = M%P_SUM_LOC(IPZ) + VC*(M%R_PBAR(K,IPZ)*R_PFCT-RTRM(I,J,K))
          ENDDO
       ENDDO
    ENDDO
@@ -734,8 +739,8 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
       IPZ = B1%PRESSURE_ZONE
       IF (IPZ<1) CYCLE WALL_LOOP4
       IF (WC%BOUNDARY_TYPE/=SOLID_BOUNDARY) CYCLE WALL_LOOP4
-      IF (PREDICTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL_S*B1%AREA
-      IF (CORRECTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL  *B1%AREA
+      IF (PREDICTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL_S*B1%AREA
+      IF (CORRECTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL  *B1%AREA
    ENDDO WALL_LOOP4
 
 
@@ -745,8 +750,8 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
       B1 => M%BOUNDARY_PROP1(CFA%B1_INDEX)
       IPZ = B1%PRESSURE_ZONE
       IF (IPZ<1) CYCLE CFACE_LOOP
-      IF (PREDICTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL_S*B1%AREA
-      IF (CORRECTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL  *B1%AREA
+      IF (PREDICTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL_S*B1%AREA
+      IF (CORRECTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL  *B1%AREA
    ENDDO CFACE_LOOP
 
 
