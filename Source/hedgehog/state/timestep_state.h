@@ -2,20 +2,20 @@
 #define TIMESTEP_STATE_H
 
 #include <hedgehog/hedgehog.h>
+#include <memory>
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../fds_fortran_interface.h"
 
 /// Pure data-flow state for the time-stepping cycle.
 ///
-/// Receives a BarrierData from TimestepTask (which has already performed all
-/// computation: outputs, diagnostics, stop check, DT adjustment).  Checks the
-/// done flag: if true, the simulation is finished - emits BarrierData to graph
-/// output for termination.  If false, re-emits the individual MeshData tokens
-/// with updated phase/DT for the next predictor step.
-///
-/// ICYC timing: TimestepTask increments ICYC and stores the new value in
-/// BarrierData::newIcyc.  This state only routes tokens.
+/// Receives a BarrierData from TimestepDumpCollector (which has already
+/// performed all dump I/O, diagnostics, stop check, and DT adjustment).
+/// Checks the done flag: if true, the simulation is finished - emits
+/// BarrierData to graph output for termination.  If false, re-emits the
+/// individual MeshData tokens with updated phase/DT for the next predictor
+/// step.
 class TimestepLoopState : public hh::AbstractState<1, BarrierData, MeshData, BarrierData> {
 public:
     TimestepLoopState()
@@ -64,6 +64,66 @@ public:
         this->state()->unlock();
         return ret;
     }
+};
+
+/// Collects N MeshData tokens after per-mesh dump I/O, then runs
+/// global finalization (DUMP_GLOBAL_OUTPUTS, WRITE_STRINGS, WRITE_DIAGNOSTICS,
+/// STOP_CHECK) and decides whether the simulation is done.
+///
+/// Emits BarrierData with done/newDt/newIcyc for the downstream
+/// TimestepLoopState to route.
+class TimestepDumpCollector : public hh::AbstractState<1, MeshData, BarrierData> {
+public:
+    explicit TimestepDumpCollector(int nmeshes, double tEnd,
+                                   std::shared_ptr<int> icyc)
+        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        ++count_;
+
+        if (count_ == nmeshes_) {
+            double t = collected_[0]->t;
+            double dt = collected_[0]->dt;
+
+            // Global finalization (must run after all per-mesh dumps)
+            fds_dump_global_outputs(t, dt);
+            fds_write_strings(t, dt);
+            fds_write_diagnostics(t, dt);
+            fds_stop_check(1, t, dt);
+
+            auto bd = std::make_shared<BarrierData>();
+            int stopStatus = fds_get_stop_status();
+
+            if (t >= tEnd_ || stopStatus != 0) {
+                bd->done = true;
+            } else {
+                bd->done = false;
+                fds_set_predictor(1);
+                fds_set_first_pass(1);
+                bd->newDt = fds_adjust_dt(t, dt);
+                (*icyc_)++;
+                fds_set_icyc(*icyc_);
+                bd->newIcyc = *icyc_;
+            }
+
+            bd->meshes = std::move(collected_);
+            collected_.resize(nmeshes_, nullptr);
+            count_ = 0;
+            this->addResult(bd);
+        }
+    }
+
+private:
+    int nmeshes_;
+    double tEnd_;
+    std::shared_ptr<int> icyc_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 /// Simple sink state for graph termination.
