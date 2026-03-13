@@ -244,7 +244,7 @@ def clean_work_dir(work_dir: Path, chid: str):
     """Remove non-essential output files, keeping only CSVs."""
     for pattern in ['*.sf', '*.sf.bnd', '*.smv', '*.out', '*.fds', '*_git.txt',
                     '*.s3d', '*.s3d.bnd', '*.xyz', '*.be', '*.ge', '*.iso',
-                    '*.prt5', '*.restart', '*.dot', '*.q', '*.szz',
+                    '*.prt5', '*.restart', '*.q', '*.szz',
                     '*.fed', '*.end']:
         for f in work_dir.glob(pattern):
             f.unlink()
