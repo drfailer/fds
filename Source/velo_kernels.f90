@@ -8,14 +8,14 @@ USE PRECISION_PARAMETERS
 USE GLOBAL_CONSTANTS
 USE MESH_VARIABLES, ONLY: MESH_TYPE
 USE TYPES, ONLY: WALL_TYPE,BOUNDARY_COORD_TYPE,BOUNDARY_PROP1_TYPE,BOUNDARY_PROP2_TYPE,SURFACE_TYPE,SURFACE, &
-                 RAMPS_TYPE,RAMPS,OMESH_TYPE,VENTS_TYPE,EDGE_TYPE,EXTERNAL_WALL_TYPE
+                 RAMPS_TYPE,RAMPS,OMESH_TYPE,VENTS_TYPE,EDGE_TYPE,EXTERNAL_WALL_TYPE,OBSTRUCTION_TYPE
 
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
 PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_CORRECTOR_KERNEL,VELOCITY_FLUX_KERNEL, &
        COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
-       MATCH_VELOCITY_KERNEL
+       MATCH_VELOCITY_KERNEL,NO_FLUX_KERNEL,MATCH_VELOCITY_FLUX_KERNEL
 
 CONTAINS
 
@@ -2574,5 +2574,375 @@ EXTERNAL_WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
 ENDDO EXTERNAL_WALL_LOOP
 
 END SUBROUTINE MATCH_VELOCITY_KERNEL
+
+
+!> \brief Apply no-flux boundary conditions for pressure solver.
+!> \details Sets velocity flux (FVX/FVY/FVZ) at solid boundaries and fills exterior ghost cells with H/HS from OMESH.
+!> Thread-safe kernel version of NO_FLUX (velo.f90).
+!> \param M Mesh data structure
+!> \param DT Time step (s)
+
+SUBROUTINE NO_FLUX_KERNEL(M,DT)
+
+USE MESH_VARIABLES, ONLY: MESHES
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+REAL(EB), INTENT(IN) :: DT
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP,OM_HP
+REAL(EB) :: RFODT,H_OTHER,DUUDT,DVVDT,DWWDT,UN,DHFCT
+INTEGER  :: IC2,IC1,N,I,J,K,IW,II,JJ,KK,IOR,N_INT_CELLS,IIO,JJO,KKO,NOM
+TYPE(OBSTRUCTION_TYPE), POINTER :: OB
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+TYPE(BOUNDARY_PROP1_TYPE), POINTER :: B1
+
+IF (SOLID_PHASE_ONLY .OR. FREEZE_VELOCITY) RETURN
+
+RFODT = RELAXATION_FACTOR/DT
+
+IF (PREDICTOR) THEN
+   HP => M%H
+ELSE
+   HP => M%HS
+ENDIF
+
+! Fill in exterior cells of mesh with values of HP from neighboring meshes
+
+DO IW=1,M%N_EXTERNAL_WALL_CELLS
+   EWC=>M%EXTERNAL_WALL(IW)
+   NOM =EWC%NOM
+   IF (NOM==0) CYCLE
+   WC=>M%WALL(IW)
+   IF (PREDICTOR) THEN
+      OM_HP=>M%OMESH(NOM)%H
+   ELSE
+      OM_HP=>M%OMESH(NOM)%HS
+   ENDIF
+   BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+   II = BC%II
+   JJ = BC%JJ
+   KK = BC%KK
+   H_OTHER = 0._EB
+   DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+      DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+         DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+            H_OTHER = H_OTHER + OM_HP(IIO,JJO,KKO)
+         ENDDO
+      ENDDO
+   ENDDO
+   N_INT_CELLS = (EWC%IIO_MAX-EWC%IIO_MIN+1) * (EWC%JJO_MAX-EWC%JJO_MIN+1) * (EWC%KKO_MAX-EWC%KKO_MIN+1)
+   HP(II,JJ,KK) = H_OTHER/REAL(N_INT_CELLS,EB)
+ENDDO
+
+! Set FVX, FVY and FVZ to drive velocity components at solid boundaries within obstructions towards zero
+
+OBST_LOOP: DO N=1,M%N_OBST
+
+   OB=>M%OBSTRUCTION(N)
+
+   DO K=OB%K1+1,OB%K2
+      DO J=OB%J1+1,OB%J2
+         DO I=OB%I1  ,OB%I2
+            IC1 = M%CELL_INDEX(I,J,K)
+            IC2 = M%CELL_INDEX(I+1,J,K)
+            IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
+               IF (PREDICTOR) THEN
+                  DUUDT = -RFODT*M%U(I,J,K)
+               ELSE
+                  DUUDT = -RFODT*(M%U(I,J,K)+M%US(I,J,K))
+               ENDIF
+               M%FVX(I,J,K) = -M%RDXN(I)*(HP(I+1,J,K)-HP(I,J,K)) - DUUDT
+            ENDIF
+         ENDDO
+      ENDDO
+   ENDDO
+
+   DO K=OB%K1+1,OB%K2
+      DO J=OB%J1  ,OB%J2
+         DO I=OB%I1+1,OB%I2
+            IC1 = M%CELL_INDEX(I,J,K)
+            IC2 = M%CELL_INDEX(I,J+1,K)
+            IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
+               IF (PREDICTOR) THEN
+                  DVVDT = -RFODT*M%V(I,J,K)
+               ELSE
+                  DVVDT = -RFODT*(M%V(I,J,K)+M%VS(I,J,K))
+               ENDIF
+               M%FVY(I,J,K) = -M%RDYN(J)*(HP(I,J+1,K)-HP(I,J,K)) - DVVDT
+            ENDIF
+         ENDDO
+      ENDDO
+   ENDDO
+
+   DO K=OB%K1  ,OB%K2
+      DO J=OB%J1+1,OB%J2
+         DO I=OB%I1+1,OB%I2
+            IC1 = M%CELL_INDEX(I,J,K)
+            IC2 = M%CELL_INDEX(I,J,K+1)
+            IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
+               IF (PREDICTOR) THEN
+                  DWWDT = -RFODT*M%W(I,J,K)
+               ELSE
+                  DWWDT = -RFODT*(M%W(I,J,K)+M%WS(I,J,K))
+               ENDIF
+               M%FVZ(I,J,K) = -M%RDZN(K)*(HP(I,J,K+1)-HP(I,J,K)) - DWWDT
+            ENDIF
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDDO OBST_LOOP
+
+! Set FVX, FVY and FVZ to drive the normal velocity at solid boundaries towards the specified value
+
+WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
+
+   WC => M%WALL(IW)
+
+   IF (WC%BOUNDARY_TYPE==INTERPOLATED_BOUNDARY .OR. WC%BOUNDARY_TYPE==OPEN_BOUNDARY) CYCLE WALL_LOOP
+
+   IF (IW<=M%N_EXTERNAL_WALL_CELLS) THEN
+      NOM = M%EXTERNAL_WALL(IW)%NOM
+   ELSE
+      NOM = 0
+   ENDIF
+
+   IF (IW>M%N_EXTERNAL_WALL_CELLS .AND. WC%BOUNDARY_TYPE==NULL_BOUNDARY .AND. NOM==0) CYCLE WALL_LOOP
+
+   BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+   II  = BC%II
+   JJ  = BC%JJ
+   KK  = BC%KK
+   IOR = BC%IOR
+
+   DHFCT=1._EB
+   SELECT CASE(PRES_FLAG)
+      CASE(UGLMAT_FLAG,ULMAT_FLAG); DHFCT=0._EB
+      CASE(GLMAT_FLAG); IF (IW<=M%N_EXTERNAL_WALL_CELLS) DHFCT=0._EB
+   END SELECT
+
+   IF (NOM/=0 .OR. WC%BOUNDARY_TYPE==SOLID_BOUNDARY .OR. WC%BOUNDARY_TYPE==NULL_BOUNDARY) THEN
+      B1 => M%BOUNDARY_PROP1(WC%B1_INDEX)
+      IF (PREDICTOR) THEN
+         UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL_S
+      ELSE
+         UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL
+      ENDIF
+      SELECT CASE(IOR)
+         CASE( 1)
+            IF (PREDICTOR) THEN
+               DUUDT = RFODT*(UN-M%U(II,JJ,KK))
+            ELSE
+               DUUDT = 2._EB*RFODT*(UN-0.5_EB*(M%U(II,JJ,KK)+M%US(II,JJ,KK)) )
+            ENDIF
+            M%FVX(II,JJ,KK) = -M%RDXN(II)*(HP(II+1,JJ,KK)-HP(II,JJ,KK))*DHFCT - DUUDT
+         CASE(-1)
+            IF (PREDICTOR) THEN
+               DUUDT = RFODT*(UN-M%U(II-1,JJ,KK))
+            ELSE
+               DUUDT = 2._EB*RFODT*(UN-0.5_EB*(M%U(II-1,JJ,KK)+M%US(II-1,JJ,KK)) )
+            ENDIF
+            M%FVX(II-1,JJ,KK) = -M%RDXN(II-1)*(HP(II,JJ,KK)-HP(II-1,JJ,KK))*DHFCT - DUUDT
+         CASE( 2)
+            IF (PREDICTOR) THEN
+               DVVDT = RFODT*(UN-M%V(II,JJ,KK))
+            ELSE
+               DVVDT = 2._EB*RFODT*(UN-0.5_EB*(M%V(II,JJ,KK)+M%VS(II,JJ,KK)) )
+            ENDIF
+            M%FVY(II,JJ,KK) = -M%RDYN(JJ)*(HP(II,JJ+1,KK)-HP(II,JJ,KK))*DHFCT - DVVDT
+         CASE(-2)
+            IF (PREDICTOR) THEN
+               DVVDT = RFODT*(UN-M%V(II,JJ-1,KK))
+            ELSE
+               DVVDT = 2._EB*RFODT*(UN-0.5_EB*(M%V(II,JJ-1,KK)+M%VS(II,JJ-1,KK)) )
+            ENDIF
+            M%FVY(II,JJ-1,KK) = -M%RDYN(JJ-1)*(HP(II,JJ,KK)-HP(II,JJ-1,KK))*DHFCT - DVVDT
+         CASE( 3)
+            IF (PREDICTOR) THEN
+               DWWDT = RFODT*(UN-M%W(II,JJ,KK))
+            ELSE
+               DWWDT = 2._EB*RFODT*(UN-0.5_EB*(M%W(II,JJ,KK)+M%WS(II,JJ,KK)) )
+            ENDIF
+            M%FVZ(II,JJ,KK) = -M%RDZN(KK)*(HP(II,JJ,KK+1)-HP(II,JJ,KK))*DHFCT - DWWDT
+         CASE(-3)
+            IF (PREDICTOR) THEN
+               DWWDT = RFODT*(UN-M%W(II,JJ,KK-1))
+            ELSE
+               DWWDT = 2._EB*RFODT*(UN-0.5_EB*(M%W(II,JJ,KK-1)+M%WS(II,JJ,KK-1)) )
+            ENDIF
+            M%FVZ(II,JJ,KK-1) = -M%RDZN(KK-1)*(HP(II,JJ,KK)-HP(II,JJ,KK-1))*DHFCT - DWWDT
+      END SELECT
+   ENDIF
+
+   IF (WC%BOUNDARY_TYPE==MIRROR_BOUNDARY) THEN
+      SELECT CASE(IOR)
+         CASE( 1)
+            M%FVX(II  ,JJ,KK) = 0._EB
+         CASE(-1)
+            M%FVX(II-1,JJ,KK) = 0._EB
+         CASE( 2)
+            M%FVY(II  ,JJ,KK) = 0._EB
+         CASE(-2)
+            M%FVY(II,JJ-1,KK) = 0._EB
+         CASE( 3)
+            M%FVZ(II  ,JJ,KK) = 0._EB
+         CASE(-3)
+            M%FVZ(II,JJ,KK-1) = 0._EB
+      END SELECT
+   ENDIF
+
+ENDDO WALL_LOOP
+
+END SUBROUTINE NO_FLUX_KERNEL
+
+
+!> \brief Match velocity flux (FVX/FVY/FVZ) at interpolated mesh boundaries.
+!> \details Thread-safe kernel version of MATCH_VELOCITY_FLUX (velo.f90).
+!> Averages FVX/FVY/FVZ at exterior interpolated boundaries with values from neighboring meshes.
+!> \param M Mesh data structure
+!> \param NM Mesh index
+
+SUBROUTINE MATCH_VELOCITY_FLUX_KERNEL(M,NM)
+
+USE MESH_VARIABLES, ONLY: MESHES
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+INTEGER  :: NOM,II,JJ,KK,IOR,IW,IIO,JJO,KKO
+REAL(EB) :: DA_OTHER,FVX_OTHER,FVY_OTHER,FVZ_OTHER
+TYPE(OMESH_TYPE), POINTER :: OM
+TYPE(MESH_TYPE), POINTER :: M2
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+
+IF (NMESHES==1) RETURN
+IF (SOLID_PHASE_ONLY) RETURN
+
+! Loop over all external wall cells and match flux at interpolated boundaries
+
+EXTERNAL_WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS
+
+   WC=>M%WALL(IW)
+   EWC=>M%EXTERNAL_WALL(IW)
+   IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP
+
+   BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+   II  = BC%II
+   JJ  = BC%JJ
+   KK  = BC%KK
+   IOR = BC%IOR
+   NOM = EWC%NOM
+   OM => M%OMESH(NOM)
+   M2 => MESHES(NOM)
+
+   ! Determine the area of the interpolated cell face
+
+   DA_OTHER = 0._EB
+
+   SELECT CASE(ABS(IOR))
+      CASE(1)
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DY(JJO)*M2%DZ(KKO)
+               ENDDO
+            ENDDO
+         ENDDO
+      CASE(2)
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DX(IIO)*M2%DZ(KKO)
+               ENDDO
+            ENDDO
+         ENDDO
+      CASE(3)
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  DA_OTHER = DA_OTHER + M2%DX(IIO)*M2%DY(JJO)
+               ENDDO
+            ENDDO
+         ENDDO
+   END SELECT
+
+   ! Determine the normal component of velocity flux from the other mesh and use it for average
+
+   SELECT CASE(IOR)
+
+      CASE( 1)
+         FVX_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVX_OTHER = FVX_OTHER + OM%FVX(IIO,JJO,KKO)*M2%DY(JJO)*M2%DZ(KKO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVX(0,JJ,KK) = 0.5_EB*(M%FVX(0,JJ,KK) + FVX_OTHER)
+
+      CASE(-1)
+         FVX_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVX_OTHER = FVX_OTHER + OM%FVX(IIO-1,JJO,KKO)*M2%DY(JJO)*M2%DZ(KKO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVX(M%IBAR,JJ,KK) = 0.5_EB*(M%FVX(M%IBAR,JJ,KK) + FVX_OTHER)
+
+      CASE( 2)
+         FVY_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVY_OTHER = FVY_OTHER + OM%FVY(IIO,JJO,KKO)*M2%DX(IIO)*M2%DZ(KKO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVY(II,0,KK) = 0.5_EB*(M%FVY(II,0,KK) + FVY_OTHER)
+
+      CASE(-2)
+         FVY_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVY_OTHER = FVY_OTHER + OM%FVY(IIO,JJO-1,KKO)*M2%DX(IIO)*M2%DZ(KKO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVY(II,M%JBAR,KK) = 0.5_EB*(M%FVY(II,M%JBAR,KK) + FVY_OTHER)
+
+      CASE( 3)
+         FVZ_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVZ_OTHER = FVZ_OTHER + OM%FVZ(IIO,JJO,KKO)*M2%DX(IIO)*M2%DY(JJO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVZ(II,JJ,0) = 0.5_EB*(M%FVZ(II,JJ,0) + FVZ_OTHER)
+
+      CASE(-3)
+         FVZ_OTHER = 0._EB
+         DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
+            DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
+               DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
+                  FVZ_OTHER = FVZ_OTHER + OM%FVZ(IIO,JJO,KKO-1)*M2%DX(IIO)*M2%DY(JJO)/DA_OTHER
+               ENDDO
+            ENDDO
+         ENDDO
+         M%FVZ(II,JJ,M%KBAR) = 0.5_EB*(M%FVZ(II,JJ,M%KBAR) + FVZ_OTHER)
+
+   END SELECT
+
+ENDDO EXTERNAL_WALL_LOOP
+
+END SUBROUTINE MATCH_VELOCITY_FLUX_KERNEL
+
 
 END MODULE VELO_KERNELS

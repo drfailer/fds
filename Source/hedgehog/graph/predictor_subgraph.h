@@ -19,6 +19,7 @@
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "wallbc_subgraph.h"
+#include "pressure_iteration_subgraph.h"
 
 /// Build the Predictor sub-graph.
 ///
@@ -35,8 +36,10 @@
 /// @param nmeshes Number of meshes
 /// @param tEnd Simulation end time (passed to ChangeTimeStep sub-graph)
 /// @param kernelThreads Number of threads for parallel kernel tasks
+/// @param termSignal Shared termination signal for pressure iteration sub-graph
 /// @return Shared pointer to the constructed sub-graph
-inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads) {
+inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
+                                    std::shared_ptr<TerminationSignal> termSignal) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
 
     // --- Kernel sub-graph components ---
@@ -90,7 +93,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     auto predPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PredPressureCollector");
-    auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
 
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
@@ -139,10 +141,21 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // PredDivPart2 -> Pressure
     subgraph->edges(predDivExchangeTask, predDivP2KernelTask);
     subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
-    subgraph->edges(predPressureCollectorSM, predPressureTask);
+
+    // Pressure iteration: parallel sub-graph or sequential fallback
+    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
+    if (useParallelPressure) {
+        auto predPressureSubgraph = buildPressureIterationSubgraph(
+            tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal);
+        subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
+        subgraph->edges(predPressureSubgraph, velPredKernelTask);
+    } else {
+        auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
+        subgraph->edges(predPressureCollectorSM, predPressureTask);
+        subgraph->edges(predPressureTask, velPredKernelTask);
+    }
 
     // VelocityPredictor: parallel kernel (+ CC_PROJECT_VELOCITY collector if CC_IBM)
-    subgraph->edges(predPressureTask, velPredKernelTask);
     if (ccIBM) {
         auto velPredCCSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<VelocityPredictorCCCollector>(nmeshes), "VelPredCCCollector");

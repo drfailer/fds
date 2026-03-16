@@ -85,8 +85,8 @@ public:
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<RetryLoopState>(
-            this->state())->reachedEnd();
+        auto s = std::dynamic_pointer_cast<RetryLoopState>(this->state());
+        bool ret = s->reachedEnd();
         this->state()->unlock();
         return ret;
     }

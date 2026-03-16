@@ -21,6 +21,9 @@ int fds_get_nmeshes();
 int fds_get_lower_mesh_index();
 int fds_get_upper_mesh_index();
 int fds_is_cc_ibm();
+int fds_use_pressure_subgraph();
+int fds_iterate_pressure();
+int fds_get_pres_flag();
 void fds_zero_q_m_dot();
 double fds_adjust_dt(double t, double dt);
 
@@ -105,6 +108,25 @@ void fds_flush_output_files();
 void fds_mesh_exchange(int code);
 void fds_post_receives(int code);
 void fds_pressure_iteration(double t, double dt);
+
+// Pressure iteration kernel routines (for sub-graph parallelization)
+void fds_no_flux_kernel(int nm, double dt);
+void fds_match_velocity_flux_kernel(int nm);
+void fds_pressure_solver_compute_rhs_kernel(int nm, double t, double dt);
+void fds_pressure_solver_fft_kernel(int nm);
+void fds_pressure_check_residuals_kernel(int nm);
+void fds_compute_velocity_error_kernel(int nm, double dt);
+
+// Pressure iteration sub-graph helper functions
+void fds_pressure_iteration_init();
+void fds_pressure_iteration_increment();
+int fds_get_pressure_iterations();
+void fds_baroclinic_correction(double t, int nm);
+void fds_pressure_iteration_zero_wall_work1(int nm);
+void fds_pressure_iteration_check_convergence(double t, double dt);
+int fds_pressure_iteration_converged();
+int fds_pressure_iteration_needs_baroclinic();
+
 void fds_initialize_divergence_integrals();
 void fds_exchange_divergence_info();
 void fds_create_or_remove_obstructions(double t, double dt);

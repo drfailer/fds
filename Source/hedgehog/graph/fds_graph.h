@@ -5,6 +5,7 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/termination_signal.h"
 #include "../state/timestep_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/timestep_tasks.h"
@@ -30,9 +31,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     using GraphType = hh::Graph<1, MeshData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
+    // --- Shared termination signal for sub-graph cycle termination ---
+    auto termSignal = std::make_shared<TerminationSignal>();
+
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, kernelThreads);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, termSignal);
+    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, tEnd, kernelThreads, termSignal);
 
     // --- Create timestep pipeline components ---
     // Shared ICYC counter between global task (reads) and dump collector (increments)
@@ -45,7 +49,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
         "TimestepDumpCollector");
 
     auto timestepLoopSM = std::make_shared<TimestepLoopStateManager>(
-        std::make_shared<TimestepLoopState>(), "TimestepLoop");
+        std::make_shared<TimestepLoopState>(termSignal), "TimestepLoop");
     auto terminationSinkSM = std::make_shared<hh::StateManager<1, BarrierData, BarrierData>>(
         std::make_shared<TerminationSinkState>(), "TerminationSink");
 
