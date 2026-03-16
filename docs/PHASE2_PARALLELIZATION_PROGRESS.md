@@ -2,10 +2,11 @@
 
 **Goal:** Reduce sequential fraction from 39% to ~20-25% to achieve 2.0-2.5× overall speedup.
 
-**Current status:** 14 sub-graphs completed. PredFinal and CorrFinal decomposed into Pattern B sub-graphs. Sequential fraction reduced from ~39% to ~25%.
+**Current status:** 19 sub-graphs completed (Phase 2 + Phase 3). All viable per-mesh operations parallelized.
 
-**Completed Phase 2 targets:** PredFinal ✅, CorrFinal ✅ (~727ms of sequential work now parallelizable)
-**Remaining:** CorrRadiation (deferred — complex iterative solver)
+**Completed Phase 2 targets:** PredFinal ✅, CorrFinal ✅, CorrRadiation ✅, PressureIteration ✅
+**Completed Phase 3 targets:** Combustion ✅, Particle Mass/Energy ✅
+**Blocked:** Particle Insertion (RANDOM_NUMBER thread-safety)
 
 ---
 
@@ -196,33 +197,19 @@ Extracted VELOCITY_BC components:
 
 ---
 
-## Future Work (Phase 3)
+## Future Work (Phase 3) — COMPLETE
 
-### PressureIteration (Complex Iterative Solver)
-**Time:** ~302 ms (2 calls)
-**Parallelizable:** 50-60%
-**Effort:** Very High (iterative convergence, multiple solver backends)
+### PressureIteration ✅ COMPLETE (Phase 2+)
+Implemented as parallel sub-graph with FFT solver cycle. See [PARALLELIZATION_PROGRESS.md](PARALLELIZATION_PROGRESS.md) sub-graph #16.
 
-**Approach:** Hybrid decomposition
-- Parallelize per-mesh setup (BAROCLINIC_CORRECTION, PRESSURE_SOLVER_SETUP)
-- Keep global solver sequential (FFT/ULMAT/GLMAT)
-- Parallelize per-mesh error checking
+### Combustion ✅ COMPLETE (Phase 3 Target 1)
+Extracted COMBUSTION_KERNEL for parallel per-mesh ODE chemistry. See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md).
 
-**Estimated savings:** ~150ms (limited by iterative nature)
+### Particle Mass/Energy ✅ COMPLETE (Phase 3 Target 2)
+Extracted PARTICLE_MASS_ENERGY_KERNEL for parallel per-mesh heat/mass transfer. See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md).
 
----
-
-### Combustion (MPI Load-Balanced)
-**Time:** ~100-150 ms
-**Parallelizable:** 60-70%
-**Effort:** High (MPI coordination)
-
-**Approach:** Per-mesh kernel
-- Keep MPI load balancing sequential
-- Parallelize COMBUSTION_MODEL calls (expensive ODE integration)
-- Requires careful MPI communication pattern
-
-**Estimated savings:** ~60-100ms
+### Particle Insertion ❌ BLOCKED (Phase 3 Target 3)
+Not viable — Fortran RANDOM_NUMBER not thread-safe, global state modifications. See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md).
 
 ---
 

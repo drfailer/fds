@@ -68,7 +68,7 @@ Decomposing large Fortran modules into focused sub-modules.
 ### [PARALLELIZATION_PROGRESS.md](PARALLELIZATION_PROGRESS.md)
 **Current status and overall progress.**
 
-- Completed sub-graphs (12 total)
+- Completed sub-graphs (19 total, including Phase 3 parallelization)
 - Performance profiling results
 - Remaining sequential tasks
 - Future work roadmap
@@ -86,6 +86,11 @@ Decomposing large Fortran modules into focused sub-modules.
 - Test results (byte-identical on 1-5 meshes)
 
 **Best reference for Pattern B implementations.**
+
+### [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md)
+Phase 3 parallelization targets: Combustion, Particle Mass/Energy, Particle Insertion.
+
+**Status:** 2 of 3 targets complete, 1 blocked (RANDOM_NUMBER thread-safety).
 
 ## Other Documentation
 

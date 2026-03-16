@@ -26,7 +26,7 @@ Step-by-step procedures for parallelizing FDS routines:
    - Pattern B: Sequential pre/post + parallel kernel
 ```
 
-## Completed Sub-Graphs (17 sub-graphs)
+## Completed Sub-Graphs (19 sub-graphs)
 
 All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
@@ -85,10 +85,11 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Kernels: PARTICLE_MOMENTUM_TRANSFER_KERNEL, DIVERGENCE_PART_1_KERNEL
     - Files: data/pred_wall_div_data.h, state/pred_wall_div_state.h, task/pred_wall_div_kernel_task.h
 
-11. **Corrector Particle Step**
-    - Sequential pre-processing: PARTICLE_MASS_ENERGY_TRANSFER + MOVE_PARTICLES (cross-mesh transfer)
+11. **Corrector Particle Step** (restructured in Phase 3)
+    - Original: sequential MASS_ENERGY + MOVE → parallel MOMENTUM
+    - Now: parallel MASS_ENERGY → sequential REMOVE+MOVE barrier → parallel MOMENTUM
     - Kernel: PARTICLE_MOMENTUM_TRANSFER_KERNEL
-    - Files: data/corr_particle_data.h, state/corr_particle_state.h, task/corr_particle_kernel_task.h
+    - Files: task/corr_particle_kernel_task.h
 
 12. **WallBC** (3-phase complex routine, Pattern B)
     - Sequential pre-processing: ASSIGN_GHOST_VALUE (OMESH reads), NEAR_SURFACE_GAS_VARIABLES, HEAT_TRANS_COEF
@@ -126,6 +127,23 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Data-driven termination (reachedEnd + lastConverged) is the primary mechanism — the signal is a fallback because external flag changes alone cannot wake cycle nodes
     - Files: data/termination_signal.h, state/timestep_state.h (modified)
 
+### Phase 3: Easy Parallelization Targets
+
+18. **Combustion Kernel** (parallel per-mesh chemistry, Phase 3 Target 1)
+    - Extracted COMBUSTION_KERNEL from COMBUSTION_GENERAL_LOAD_BALANCED (fire.f90)
+    - Kernel handles: zero Q/CHI_R, identify active cells, COMBUSTION_MODEL ODE loop, CC_IBM volume averaging
+    - SOOT_SURFACE_OXIDATION + HVAC_CALC remain sequential in SootHvacTask barrier
+    - Technique: Pattern 2 (M pointer, `M => MESHES(NM)`)
+    - Files: fire_kernels.f90, task/combustion_kernel_task.h
+    - Replaced: CombustionHvacTask → CombustionKernelTask (parallel) + SootHvacTask (barrier)
+
+19. **Particle Mass/Energy Kernel** (parallel per-mesh heat/mass transfer, Phase 3 Target 2)
+    - Extracted PARTICLE_MASS_ENERGY_KERNEL from PARTICLE_MASS_ENERGY_TRANSFER (part.f90, ~1090 lines)
+    - Technique: Pattern 3 (local pointer alias shadowing, ~35 aliases, RECURSIVE)
+    - REMOVE_PARTICLES + MOVE_PARTICLES remain sequential in RemoveMoveParticlesTask barrier
+    - Files: part.f90, task/particle_mass_energy_kernel_task.h, task/barrier_tasks.h
+    - Replaced: CorrParticleOrchestrator → ParticleMassEnergyKernelTask (parallel) + RemoveMoveParticlesTask (barrier) + CorrParticleKernelTask (parallel)
+
 ## Kernel Extraction Summary
 
 ### Directly Used in Sub-Graphs
@@ -151,6 +169,8 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | PRESSURE_SOLVER_FFT_KERNEL | pres.f90 | PressureIteration |
 | PRESSURE_CHECK_RESIDUALS_KERNEL | pres.f90 | PressureIteration |
 | COMPUTE_VELOCITY_ERROR_KERNEL | velo.f90 | PressureIteration |
+| COMBUSTION_KERNEL | fire_kernels.f90 | Combustion |
+| PARTICLE_MASS_ENERGY_KERNEL | part.f90 | ParticleMassEnergy |
 
 ### New Extractions for WallBC
 
@@ -184,16 +204,18 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
 ## Remaining Sequential Tasks
 
-| Task | Routines | Blocker | Parallelization Plan |
-|------|----------|---------|---------------------|
-| CombustionHvacTask | COMBUSTION + HVAC_CALC | Combustion is per-mesh; HVAC is global | [Phase 3 Target 1](PHASE3_EASY_PARALLELIZATION.md) |
-| CorrParticleOrchestrator | PARTICLE_MASS_ENERGY + MOVE_PARTICLES | MASS_ENERGY is per-mesh; MOVE is cross-mesh | [Phase 3 Target 2](PHASE3_EASY_PARALLELIZATION.md) |
-| PredStep1Orchestrator | INSERT_ALL_PARTICLES | Per-mesh but RANDOM_NUMBER not thread-safe | [Phase 3 Target 3](PHASE3_EASY_PARALLELIZATION.md) |
+| Task | Routines | Blocker | Status |
+|------|----------|---------|--------|
+| ~~CombustionHvacTask~~ | ~~COMBUSTION + HVAC_CALC~~ | ~~Combustion is per-mesh; HVAC is global~~ | ✅ Done (Phase 3 Target 1) |
+| ~~CorrParticleOrchestrator~~ | ~~PARTICLE_MASS_ENERGY + MOVE_PARTICLES~~ | ~~MASS_ENERGY is per-mesh; MOVE is cross-mesh~~ | ✅ Done (Phase 3 Target 2) |
+| PredStep1Orchestrator | INSERT_ALL_PARTICLES | RANDOM_NUMBER not thread-safe, global state | Blocked — not viable |
+| SootHvacTask | SOOT_SURFACE_OXIDATION + HVAC_CALC | HVAC is global network solver | None planned |
+| RemoveMoveParticlesTask | REMOVE_PARTICLES + MOVE_PARTICLES | Cross-mesh OMESH writes | None planned |
 | MeshExchange tasks | MESH_EXCHANGE(1-7) | Inherently global/sequential | None planned |
 | DivergenceExchange tasks | EXCHANGE_DIVERGENCE_INFO | Inherently global/sequential | None planned |
 | PhaseTransitionTask | Phase transition bookkeeping | Inherently global/sequential | None planned |
 
-**Note**: All per-mesh kernel tasks have been parallelized (17 sub-graphs including parallel pressure iteration). Three orchestrator/barrier tasks contain per-mesh loops that could be extracted into parallel kernels (see [Phase 3](PHASE3_EASY_PARALLELIZATION.md)). The remaining barrier tasks are inherently global/sequential.
+**Note**: All viable per-mesh kernel tasks have been parallelized (19 sub-graphs). Phase 3 extracted 2 of 3 targets; Target 3 (particle insertion) is blocked by Fortran RANDOM_NUMBER thread-safety and global state modifications. The remaining barrier tasks are inherently global/sequential.
 
 ## Performance Profiling Results
 
@@ -245,9 +267,10 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | Phase 1 (12 sub-graphs) | 4.690s | 39.2% | Baseline |
 | Phase 2 (15 sub-graphs + CC_IBM) | 3.739s | 23.7% | **-20% total, -52% sequential** |
 | Phase 2+ (17 sub-graphs + pressure) | — | ~23% | Parallel pressure solve (FFT only) |
+| Phase 3 (19 sub-graphs + combustion/particle) | — | ~23% | Parallel combustion + particle mass/energy |
 
-**Amdahl's law**: With ~24% sequential, max theoretical speedup ≈ 1/(0.24 + 0.76/N) for N threads.
-Further reduction requires parallelizing combustion, particle mass/energy, and particle insertion (see [Phase 3](PHASE3_EASY_PARALLELIZATION.md)).
+**Amdahl's law**: With ~23% sequential, max theoretical speedup ≈ 1/(0.23 + 0.77/N) for N threads.
+Phase 3 parallelized combustion and particle mass/energy, reducing the sequential fraction further. Remaining sequential work is inherently global (MPI exchanges, HVAC, phase transitions).
 
 ## CC_IBM Integration
 
@@ -277,23 +300,20 @@ All verified byte-identical on CC_IBM test cases.
 
 ## Future Work
 
-### 1. Phase 3: Easy Parallelization Targets
+### 1. Phase 3: Easy Parallelization Targets — COMPLETE
 
-See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for detailed plans.
+See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for details.
 
-Three sequential nodes contain per-mesh loops that could be parallelized:
-1. **Combustion** — ODE chemistry solver, highest payoff for fire cases
-2. **Particle Mass/Energy** — per-particle heat transfer, moderate payoff
-3. **Particle Insertion** — lowest payoff, RANDOM_NUMBER thread-safety risk
+- ✅ **Combustion** — ODE chemistry solver parallelized (Target 1)
+- ✅ **Particle Mass/Energy** — per-particle heat transfer parallelized (Target 2)
+- ❌ **Particle Insertion** — blocked by RANDOM_NUMBER thread-safety (Target 3, not viable)
 
 ### 2. Advanced Optimization
 
-**a) Hybrid MPI+Hedgehog**
+**Hybrid MPI+Hedgehog**
 - Each MPI rank runs Hedgehog graph with kernelThreads > 1
 - Load balancing across MPI ranks and threads
 - Overlap MPI communication with kernel computation
-
-### 2. Advanced Optimization
 
 **Relaxed barriers**: Not all meshes share boundaries. A finer-grained dependency graph
 could let non-neighboring meshes proceed through MESH_EXCHANGE without waiting for each other.
@@ -329,14 +349,14 @@ approach for the predictor-corrector scheme.
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 17 (including parallel pressure iteration with cycle)
-- **Graph nodes replaced**: 20 (some tasks appear in both predictor/corrector)
-- **Kernels extracted**: 19 new kernels + utilizing ~30 existing kernels
-- **Thread-safe conversions**: 1800+ lines converted (including ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
+- **Sub-graphs created**: 19 (including parallel pressure iteration with cycle)
+- **Graph nodes replaced**: 22 (some tasks appear in both predictor/corrector)
+- **Kernels extracted**: 21 new kernels + utilizing ~30 existing kernels
+- **Thread-safe conversions**: 2900+ lines converted (including ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
 - **Test coverage**: 12 custom cases + 99 verification cases (73 pass at tol=1e-6)
 - **Overall speedup**: 5.35x on verification suite
-- **Sequential fraction**: reduced from 39% to ~24%
-- **Parallel fraction**: increased from 27% to ~62%
+- **Sequential fraction**: reduced from 39% to ~23%
+- **Parallel fraction**: increased from 27% to ~63%
 
 ## Documentation Index
 
@@ -353,3 +373,4 @@ approach for the predictor-corrector scheme.
 
 ### Progress Tracking
 - PARALLELIZATION_PROGRESS.md - This file (current status)
+- PHASE3_EASY_PARALLELIZATION.md - Phase 3 targets (2 complete, 1 blocked)
