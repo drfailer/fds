@@ -169,7 +169,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, kernelThreads, /*predictor=*/false, termSignal);
+            tEnd, nmeshes, kernelThreads, /*predictor=*/false, termSignal,
+            fds_get_pres_flag());
         subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
         // CC_IBM is always false when useParallelPressure is true
         subgraph->edges(corrPressureSubgraph, velCorrKernelTask);

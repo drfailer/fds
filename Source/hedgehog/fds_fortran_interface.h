@@ -119,6 +119,8 @@ void fds_match_velocity_flux_kernel(int nm);
 void fds_pressure_solver_compute_rhs_kernel(int nm, double t, double dt);
 void fds_pressure_solver_fft_kernel(int nm);
 void fds_pressure_check_residuals_kernel(int nm);
+void fds_ulmat_solver_kernel(int nm, double t, double dt);
+void fds_ulmat_check_residuals_kernel(int nm);
 void fds_compute_velocity_error_kernel(int nm, double dt);
 
 // Pressure iteration sub-graph helper functions

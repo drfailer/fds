@@ -32,7 +32,7 @@
 /// uses reachedEnd() && lastConverged() (data-driven, fires after final
 /// convergence on last timestep) with TerminationSignal as fallback.
 ///
-/// Only FFT solver is supported in parallel mode. ULMAT/GLMAT/UGLMAT
+/// FFT and ULMAT solvers are supported in parallel mode. GLMAT/UGLMAT
 /// and CC_IBM cases fall back to sequential PressureIterationTask.
 ///
 /// @param tEnd Simulation end time
@@ -40,16 +40,18 @@
 /// @param kernelThreads Number of threads for parallel kernel tasks
 /// @param predictor True for predictor phase (calls init_change_time_step on exit)
 /// @param termSignal Shared termination signal from the main timestep loop
+/// @param presFlag Pressure solver flag (FFT_FLAG=0, ULMAT_FLAG=3)
 /// @return Shared pointer to the constructed sub-graph
 inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
                                             size_t kernelThreads,
                                             bool predictor,
-                                            std::shared_ptr<TerminationSignal> termSignal) {
+                                            std::shared_ptr<TerminationSignal> termSignal,
+                                            int presFlag = 0) {
     using SubGraphType = hh::Graph<1, BarrierData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PressureIteration");
 
     auto preKernel = std::make_shared<PressurePreKernelTask>();
-    auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads);
+    auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
     auto solveCollSM = std::make_shared<hh::StateManager<
         1, MeshData, PressureIterData>>(
         std::make_shared<PressureSolveCollector>(nmeshes), "PressureSolveCollector");

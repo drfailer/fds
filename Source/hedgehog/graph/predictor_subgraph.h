@@ -146,7 +146,8 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
     if (useParallelPressure) {
         auto predPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal);
+            tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal,
+            fds_get_pres_flag());
         subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
     } else {

@@ -113,12 +113,13 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Files: shared with PredFinal (velocity_bc_data.h, velocity_bc_state.h, velocity_bc_edges_task.h, velocity_bc_subgraph.h)
     - Replaced: CorrFinalTask
 
-16. **PressureIteration** (predictor + corrector, parallel FFT solve with cycle)
+16. **PressureIteration** (predictor + corrector, parallel FFT/ULMAT solve with cycle)
     - 4-node sub-graph: PreKernel → SolveKernel (parallel) → SolveCollector → PostLoopSM (cycle)
-    - Kernels: NO_FLUX_KERNEL, PRESSURE_SOLVER_COMPUTE_RHS_KERNEL, PRESSURE_SOLVER_FFT_KERNEL, PRESSURE_CHECK_RESIDUALS_KERNEL
+    - FFT kernels: NO_FLUX_KERNEL, PRESSURE_SOLVER_COMPUTE_RHS_KERNEL, PRESSURE_SOLVER_FFT_KERNEL, PRESSURE_CHECK_RESIDUALS_KERNEL
+    - ULMAT kernels: ULMAT_SOLVER_KERNEL (Pattern 3 alias shadowing, ~500 lines), PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL (with inline GRADIENT_WEIGHT)
     - PostLoopSM runs Phase 3: MESH_EXCHANGE(5) + velocity error + convergence check
     - canTerminate() uses `(reachedEnd() && lastConverged()) || isTerminated()` — `lastConverged` prevents premature mid-iteration termination
-    - Only FFT solver supported in parallel mode; ULMAT/GLMAT/UGLMAT fall back to sequential PressureIterationTask
+    - GLMAT/UGLMAT and CC_IBM cases fall back to sequential PressureIterationTask
     - Files: data/pressure_iteration_data.h, state/pressure_iteration_state.h, task/pressure_iteration_tasks.h, graph/pressure_iteration_subgraph.h
 
 17. **TerminationSignal** (shared termination mechanism for sub-graph cycles)
@@ -167,7 +168,9 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | NO_FLUX_KERNEL | pres.f90 | PressureIteration |
 | PRESSURE_SOLVER_COMPUTE_RHS_KERNEL | pres.f90 | PressureIteration |
 | PRESSURE_SOLVER_FFT_KERNEL | pres.f90 | PressureIteration |
-| PRESSURE_CHECK_RESIDUALS_KERNEL | pres.f90 | PressureIteration |
+| PRESSURE_CHECK_RESIDUALS_KERNEL | pres_kernels.f90 | PressureIteration (FFT) |
+| ULMAT_SOLVER_KERNEL | pres.f90 | PressureIteration (ULMAT) |
+| PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL | pres_kernels.f90 | PressureIteration (ULMAT) |
 | COMPUTE_VELOCITY_ERROR_KERNEL | velo.f90 | PressureIteration |
 | COMBUSTION_KERNEL | fire_kernels.f90 | Combustion |
 | PARTICLE_MASS_ENERGY_KERNEL | part.f90 | ParticleMassEnergy |

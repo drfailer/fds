@@ -11,7 +11,8 @@ USE MESH_VARIABLES
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC PRESSURE_SOLVER_COMPUTE_RHS, PRESSURE_SOLVER_FFT, PRESSURE_SOLVER_CHECK_RESIDUALS, COMPUTE_VELOCITY_ERROR_KERNEL
+PUBLIC PRESSURE_SOLVER_COMPUTE_RHS, PRESSURE_SOLVER_FFT, PRESSURE_SOLVER_CHECK_RESIDUALS, &
+       PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL, COMPUTE_VELOCITY_ERROR_KERNEL
 
 CONTAINS
 
@@ -576,6 +577,149 @@ IF (ITERATE_BAROCLINIC_TERM) THEN
 ENDIF
 
 END SUBROUTINE PRESSURE_SOLVER_CHECK_RESIDUALS
+
+
+!> \brief Thread-safe kernel version of PRESSURE_SOLVER_CHECK_RESIDUALS_U (ULMAT solver).
+!> Uses explicit TYPE(MESH_TYPE) argument instead of MESH_POINTERS.
+!> CC_IBM branches are retained but not reached (CC_IBM excluded from parallel pressure path).
+
+RECURSIVE SUBROUTINE PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL(M, NM)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP,RHOP,P,RESIDUAL
+INTEGER :: I,J,K,IPZ,IC
+REAL(EB) :: LHSS,RHSS,IMFCT,JMFCT,KMFCT,IPFCT,JPFCT,KPFCT
+
+IF (SOLID_PHASE_ONLY) RETURN
+IF (FREEZE_VELOCITY)  RETURN
+
+! FFT fallback: if any zone uses FFT, use standard FFT residual check
+IF (PRES_FLAG==ULMAT_FLAG) THEN
+   DO IPZ=0,N_ZONE
+      IF (M%ZONE_MESH(IPZ)%USE_FFT) THEN
+         CALL PRESSURE_SOLVER_CHECK_RESIDUALS(M, NM)
+         RETURN
+      ENDIF
+   ENDDO
+ENDIF
+
+IF (PREDICTOR) THEN
+   HP => M%H
+   RHOP => M%RHO
+ELSE
+   HP => M%HS
+   RHOP => M%RHOS
+ENDIF
+
+! Optional check of the accuracy of the separable pressure solution, del^2 H = -del dot F - dD/dt
+
+IF (CHECK_POISSON) THEN
+   RESIDUAL => M%WORK8(1:M%IBAR,1:M%JBAR,1:M%KBAR); RESIDUAL = 0._EB
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF(M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            IMFCT = 1._EB; JMFCT = 1._EB; KMFCT = 1._EB; IPFCT = 1._EB; JPFCT = 1._EB; KPFCT = 1._EB
+            ! If surrounding wall_cell is type SOLID_BOUNDARY set FCT gradient factor to zero:
+            IC = M%CELL_INDEX(I,J,K)
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX(-1))%BOUNDARY_TYPE==SOLID_BOUNDARY) IMFCT = 0._EB
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX( 1))%BOUNDARY_TYPE==SOLID_BOUNDARY) IPFCT = 0._EB
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX(-2))%BOUNDARY_TYPE==SOLID_BOUNDARY) JMFCT = 0._EB
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX( 2))%BOUNDARY_TYPE==SOLID_BOUNDARY) JPFCT = 0._EB
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX(-3))%BOUNDARY_TYPE==SOLID_BOUNDARY) KMFCT = 0._EB
+            IF (M%WALL(M%CELL(IC)%WALL_INDEX( 3))%BOUNDARY_TYPE==SOLID_BOUNDARY) KPFCT = 0._EB
+            RHSS = ( M%R(I-1)*M%FVX(I-1,J,K) - M%R(I)*M%FVX(I,J,K) )*M%RDX(I)*M%RRN(I) &
+                 + (          M%FVY(I,J-1,K) -        M%FVY(I,J,K) )*M%RDY(J)        &
+                 + (          M%FVZ(I,J,K-1) -        M%FVZ(I,J,K) )*M%RDZ(K)        &
+                 - M%DDDT(I,J,K)
+            LHSS = ((HP(I+1,J,K)-HP(I,J,K))*M%RDXN(I)  *M%R(I)  *IPFCT -                                      &
+                    (HP(I,J,K)-HP(I-1,J,K))*M%RDXN(I-1)*M%R(I-1)*IMFCT                    )*M%RDX(I)*M%RRN(I) &
+                 + ((HP(I,J+1,K)-HP(I,J,K))*M%RDYN(J)*JPFCT -                                                  &
+                    (HP(I,J,K)-HP(I,J-1,K))*M%RDYN(J-1)*JMFCT                               )*M%RDY(J)        &
+                 + ((HP(I,J,K+1)-HP(I,J,K))*M%RDZN(K)*KPFCT -                                                  &
+                    (HP(I,J,K)-HP(I,J,K-1))*M%RDZN(K-1)*KMFCT                               )*M%RDZ(K)
+            RESIDUAL(I,J,K) = ABS(RHSS-LHSS)
+         ENDDO
+      ENDDO
+   ENDDO
+   M%POIS_ERR = MAXVAL(RESIDUAL)
+ENDIF
+
+! Mandatory check of how well the computed pressure satisfies the inseparable Poisson equation:
+! LHSS = del dot (1/rho) del p + del K = -del dot F - dD/dt = RHSS
+
+IF (ITERATE_BAROCLINIC_TERM) THEN
+   P => M%WORK7
+   P(0:M%IBP1,0:M%JBP1,0:M%KBP1) = RHOP(0:M%IBP1,0:M%JBP1,0:M%KBP1) * &
+      (HP(0:M%IBP1,0:M%JBP1,0:M%KBP1)-M%KRES(0:M%IBP1,0:M%JBP1,0:M%KBP1))
+   RESIDUAL => M%WORK8(1:M%IBAR,1:M%JBAR,1:M%KBAR); RESIDUAL = 0._EB
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF(M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            ! Compute gradient weights (thread-safe inline of GRADIENT_WEIGHT)
+            IMFCT = GRADIENT_WEIGHT_M(M, I, J, K, -1)
+            IPFCT = GRADIENT_WEIGHT_M(M, I, J, K,  1)
+            JMFCT = GRADIENT_WEIGHT_M(M, I, J, K, -2)
+            JPFCT = GRADIENT_WEIGHT_M(M, I, J, K,  2)
+            KMFCT = GRADIENT_WEIGHT_M(M, I, J, K, -3)
+            KPFCT = GRADIENT_WEIGHT_M(M, I, J, K,  3)
+            RHSS = &
+               (M%R(I-1)*(M%FVX(I-1,J,K)-M%FVX_B(I-1,J,K)*IMFCT) - &
+                M%R(I)  *(M%FVX(I,J,K)  -M%FVX_B(I,J,K)  *IPFCT) )*M%RDX(I)*M%RRN(I) &
+              +(         (M%FVY(I,J-1,K)-M%FVY_B(I,J-1,K)*JMFCT) - &
+                         (M%FVY(I,J,K)  -M%FVY_B(I,J,K)  *JPFCT) )*M%RDY(J)           &
+              +(         (M%FVZ(I,J,K-1)-M%FVZ_B(I,J,K-1)*KMFCT) - &
+                         (M%FVZ(I,J,K)  -M%FVZ_B(I,J,K)  *KPFCT) )*M%RDZ(K)           &
+              -M%DDDT(I,J,K)
+            LHSS = &
+               ((P(I+1,J,K)-P(I,J,K))*M%RDXN(I)*M%R(I) &
+                *2._EB/(RHOP(I+1,J,K)+RHOP(I,J,K))*IPFCT - &
+                (P(I,J,K)-P(I-1,J,K))*M%RDXN(I-1)*M%R(I-1) &
+                *2._EB/(RHOP(I-1,J,K)+RHOP(I,J,K))*IMFCT)*M%RDX(I)*M%RRN(I) &
+              +((P(I,J+1,K)-P(I,J,K))*M%RDYN(J) &
+                *2._EB/(RHOP(I,J+1,K)+RHOP(I,J,K))*JPFCT - &
+                (P(I,J,K)-P(I,J-1,K))*M%RDYN(J-1) &
+                *2._EB/(RHOP(I,J-1,K)+RHOP(I,J,K))*JMFCT)*M%RDY(J) &
+              +((P(I,J,K+1)-P(I,J,K))*M%RDZN(K) &
+                *2._EB/(RHOP(I,J,K+1)+RHOP(I,J,K))*KPFCT - &
+                (P(I,J,K)-P(I,J,K-1))*M%RDZN(K-1) &
+                *2._EB/(RHOP(I,J,K-1)+RHOP(I,J,K))*KMFCT)*M%RDZ(K) &
+              +((M%KRES(I+1,J,K)-M%KRES(I,J,K))*M%RDXN(I)*M%R(I)*IPFCT - &
+                (M%KRES(I,J,K)-M%KRES(I-1,J,K))*M%RDXN(I-1)*M%R(I-1)*IMFCT)*M%RDX(I)*M%RRN(I) &
+              +((M%KRES(I,J+1,K)-M%KRES(I,J,K))*M%RDYN(J)*JPFCT - &
+                (M%KRES(I,J,K)-M%KRES(I,J-1,K))*M%RDYN(J-1)*JMFCT)*M%RDY(J) &
+              +((M%KRES(I,J,K+1)-M%KRES(I,J,K))*M%RDZN(K)*KPFCT - &
+                (M%KRES(I,J,K)-M%KRES(I,J,K-1))*M%RDZN(K-1)*KMFCT)*M%RDZ(K)
+            RESIDUAL(I,J,K) = ABS(RHSS-LHSS)
+         ENDDO
+      ENDDO
+   ENDDO
+   PRESSURE_ERROR_MAX(NM) = MAXVAL(RESIDUAL)
+   PRESSURE_ERROR_MAX_LOC(:,NM) = MAXLOC(RESIDUAL)
+   IF (STORE_PRESSURE_POISSON_RESIDUAL) &
+      M%PP_RESIDUAL(1:M%IBAR,1:M%JBAR,1:M%KBAR) = RESIDUAL(1:M%IBAR,1:M%JBAR,1:M%KBAR)
+ENDIF
+
+CONTAINS
+
+REAL(EB) FUNCTION GRADIENT_WEIGHT_M(M, I, J, K, IOR0)
+   TYPE(MESH_TYPE), INTENT(IN) :: M
+   INTEGER, INTENT(IN) :: I, J, K, IOR0
+   INTEGER :: IW, NOM
+   LOGICAL :: INTERNAL_WALL_CELL
+   GRADIENT_WEIGHT_M = 1.0_EB
+   IW = M%CELL(M%CELL_INDEX(I,J,K))%WALL_INDEX(IOR0)
+   IF (IW == 0) RETURN
+   INTERNAL_WALL_CELL = (IW > M%N_EXTERNAL_WALL_CELLS)
+   NOM = 0
+   IF (.NOT.INTERNAL_WALL_CELL) NOM = M%EXTERNAL_WALL(IW)%NOM
+   IF (M%WALL(IW)%BOUNDARY_TYPE == SOLID_BOUNDARY .AND. &
+       (INTERNAL_WALL_CELL .OR. NOM/=0)) GRADIENT_WEIGHT_M = 0.0_EB
+END FUNCTION GRADIENT_WEIGHT_M
+
+END SUBROUTINE PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL
 
 
 !> \brief Compute velocity error at solid and interpolated boundaries.

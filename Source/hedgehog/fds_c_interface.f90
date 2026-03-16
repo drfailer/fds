@@ -108,14 +108,14 @@ END FUNCTION C_FDS_IS_CC_IBM
 
 ! Pressure iteration state queries
 FUNCTION C_FDS_USE_PRESSURE_SUBGRAPH() RESULT(FLAG) BIND(C, NAME="fds_use_pressure_subgraph")
-    ! Returns 1 if conditions are met for parallel pressure sub-graph (FFT only, non-CC_IBM, no tunnel).
+    ! Returns 1 if conditions are met for parallel pressure sub-graph (FFT or ULMAT, non-CC_IBM, no tunnel).
     ! Requires >= 2 local meshes: single-mesh cases have no parallelism to exploit and the sub-graph
     ! loop overhead dominates. When block decomposition lands, this threshold should be revisited.
     INTEGER(C_INT) :: FLAG
     FLAG = 0
     IF (CC_IBM) RETURN
     IF (TUNNEL_PRECONDITIONER) RETURN
-    IF (PRES_FLAG /= FFT_FLAG) RETURN
+    IF (PRES_FLAG /= FFT_FLAG .AND. PRES_FLAG /= ULMAT_FLAG) RETURN
     IF (UPPER_MESH_INDEX - LOWER_MESH_INDEX + 1 < 2) RETURN
     FLAG = 1
 END FUNCTION C_FDS_USE_PRESSURE_SUBGRAPH
@@ -828,6 +828,21 @@ SUBROUTINE C_FDS_COMPUTE_VELOCITY_ERROR_KERNEL(NM, DT) &
     REAL(C_DOUBLE), VALUE :: DT
     CALL COMPUTE_VELOCITY_ERROR_KERNEL(MESHES(NM), DT, NM)
 END SUBROUTINE C_FDS_COMPUTE_VELOCITY_ERROR_KERNEL
+
+SUBROUTINE C_FDS_ULMAT_SOLVER_KERNEL(NM, T, DT) &
+    BIND(C, NAME="fds_ulmat_solver_kernel")
+    USE LOCMAT_SOLVER, ONLY: ULMAT_SOLVER_KERNEL
+    INTEGER(C_INT), VALUE :: NM
+    REAL(C_DOUBLE), VALUE :: T, DT
+    CALL ULMAT_SOLVER_KERNEL(MESHES(NM), NM, T, DT)
+END SUBROUTINE C_FDS_ULMAT_SOLVER_KERNEL
+
+SUBROUTINE C_FDS_ULMAT_CHECK_RESIDUALS_KERNEL(NM) &
+    BIND(C, NAME="fds_ulmat_check_residuals_kernel")
+    USE PRES_KERNELS, ONLY: PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL
+    INTEGER(C_INT), VALUE :: NM
+    CALL PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL(MESHES(NM), NM)
+END SUBROUTINE C_FDS_ULMAT_CHECK_RESIDUALS_KERNEL
 
 SUBROUTINE C_FDS_INIT_DIV_INTEGRALS() BIND(C, NAME="fds_initialize_divergence_integrals")
     CALL INITIALIZE_DIVERGENCE_INTEGRALS_DRIVER()
