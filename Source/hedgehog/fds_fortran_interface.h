@@ -65,6 +65,7 @@ void fds_density_kernel(int nm, double t, double dt);
 void fds_divergence_part_1_kernel(int nm, double t, double dt);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
 void fds_particle_momentum_kernel(int nm, double dt);
+void fds_particle_momentum_block_kernel(int nm, double dt, int k1, int k2);
 void fds_viscosity_bc_kernel(int nm, int estimated);
 void fds_combustion_bc_kernel(int nm);
 void fds_condensation_kernel(int nm, double dt);

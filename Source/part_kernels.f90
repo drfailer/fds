@@ -11,7 +11,7 @@ USE MESH_VARIABLES, ONLY: MESH_TYPE
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC PARTICLE_MOMENTUM_TRANSFER_KERNEL
+PUBLIC PARTICLE_MOMENTUM_TRANSFER_KERNEL,PARTICLE_MOMENTUM_BLOCK_KERNEL
 
 CONTAINS
 
@@ -68,5 +68,56 @@ IF (CC_IBM) CALL CUTFACE_VELOCITIES(M,UU,VV,WW, &
    CUTFACES=.FALSE.)
 
 END SUBROUTINE PARTICLE_MOMENTUM_TRANSFER_KERNEL
+
+
+!> \brief Block-decomposed particle momentum: updates FVX/FVY/FVZ for K-range [K1, K2].
+!> \details First block (K1==1) extends down to K=0 to cover the full 0:KBAR range.
+!> Does NOT include CC_IBM CUTFACE_VELOCITIES calls (mesh-level path handles CC_IBM).
+!> \param M Mesh data structure
+!> \param DT Time step (s)
+!> \param K1 Start of K cell range (1-based inclusive, from decompose state)
+!> \param K2 End of K cell range (1-based inclusive)
+
+RECURSIVE SUBROUTINE PARTICLE_MOMENTUM_BLOCK_KERNEL(M,DT,K1,K2)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+REAL(EB), INTENT(IN) :: DT
+INTEGER, INTENT(IN) :: K1,K2
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW
+REAL(EB) :: RDT,UODT,VODT,WODT
+INTEGER :: I,J,K,K_START
+
+IF (M%NLP==0) RETURN
+
+RDT = 1._EB/DT
+
+IF (PREDICTOR) THEN
+   UU => M%U
+   VV => M%V
+   WW => M%W
+ELSE
+   UU => M%US
+   VV => M%VS
+   WW => M%WS
+ENDIF
+
+! First block extends down to K=0 to cover ghost face layer
+K_START = K1
+IF (K1==1) K_START = 0
+
+DO K=K_START,K2
+   DO J=0,M%JBAR
+      DO I=0,M%IBAR
+         UODT = ABS(UU(I,J,K)*RDT)
+         VODT = ABS(VV(I,J,K)*RDT)
+         WODT = ABS(WW(I,J,K)*RDT)
+         M%FVX(I,J,K) = M%FVX(I,J,K) + MIN(UODT,MAX(-UODT,M%FVX_D(I,J,K)))
+         M%FVY(I,J,K) = M%FVY(I,J,K) + MIN(VODT,MAX(-VODT,M%FVY_D(I,J,K)))
+         M%FVZ(I,J,K) = M%FVZ(I,J,K) + MIN(WODT,MAX(-WODT,M%FVZ_D(I,J,K)))
+      ENDDO
+   ENDDO
+ENDDO
+
+END SUBROUTINE PARTICLE_MOMENTUM_BLOCK_KERNEL
 
 END MODULE PART_KERNELS

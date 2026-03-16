@@ -29,11 +29,11 @@ See [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md) for the step-by-step procedure.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:807 | | CONTAINS subroutines (WALE, Deardorff, etc.), wall loops, turbulence model dispatch |
-| 2 | `MASS_FINITE_DIFFERENCES_NEW_KERNEL` | mass_kernels.f90:28 | | Cell loops (I,J,K) for scalar transport + wall face correction loop |
+| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:921 | **Mesh** | CONTAINS subroutines (WALE, Deardorff, etc.), wall loops (IW), turbulence model dispatch |
+| 2 | `MASS_FINITE_DIFFERENCES_NEW_KERNEL` | mass_kernels.f90:23 | **Mesh** | Cell loops (I,J,K) + wall face correction loops (WALL_LOOP_2, WALL_LOOP_3) |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — both kernels have wall loops that iterate over all wall cells.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -44,10 +44,10 @@ See [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md) for the step-by-step procedure.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DENSITY_KERNEL` | mass_kernels.f90:358 | | Multiple I,J,K loops (density update, CHECK_MASS_DENSITY redistribution) |
+| 1 | `DENSITY_KERNEL` | mass_kernels.f90:350 | **Mesh** | I,J,K loops + wall loops + zone loops (PBAR updates) + CHECK_MASS_DENSITY (mesh-level flags) |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — zone-dependent pressure updates, wall boundary corrections, CHECK_MASS_DENSITY mesh flags.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -58,12 +58,12 @@ See [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md) for the step-by-step procedure.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:211 | | Large kernel with CONTAINS subroutines, wall loops, species loops, cell loops |
+| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh** | Large kernel (590 lines) with CONTAINS, wall loops (DO IW at line 698), species loops, cell loops |
 
 Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before this kernel but are sequential pre-processing (run in orchestrator or before dispatch).
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — wall loops interleaved with cell loops, CONTAINS subroutines with host association.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -74,11 +74,11 @@ Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:27 | | Single I,J,K loop (0:IBAR, 0:JBAR, 0:KBAR), pure stencil |
-| 2 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:43 | | Cell loops + wall loops + per-mesh local accumulators (D_SUM_LOC, P_SUM_LOC, U_SUM_LOC) |
+| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:24 | **Mesh Block** | Pure I,J,K loop (0:IBAR, 0:JBAR, 0:KBAR). Block kernel exists. |
+| 2 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:27 | **Mesh** | Cell loops + multiple wall loops + per-mesh local accumulators (D_SUM_LOC, P_SUM_LOC, U_SUM_LOC) |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mixed — PARTICLE_MOMENTUM is Mesh Block (lightweight), DIVERGENCE_PART_1 is Mesh (dominates runtime). No conversion worthwhile.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -89,10 +89,10 @@ Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1404 | | Pressure update I,J,K loop + zone loop for pressure averaging |
+| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Mesh** | Zone loops (D_PBAR_DT, pressure averaging) + I,J,K cell loops + wall loops (BC_LOOP) |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — zone-dependent pressure calculations must run before cell loops; wall loops for boundary corrections.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -103,17 +103,17 @@ Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `NO_FLUX_KERNEL` | pres_kernels.f90:737 | | Wall loop (IW=1 to N_EXTERNAL+N_INTERNAL) |
-| 2 | `PRESSURE_SOLVER_COMPUTE_RHS` | pres_kernels.f90:24 | | Wall pre-processing + I,J,K RHS assembly loop |
-| 3 | `PRESSURE_SOLVER_FFT` | pres_kernels.f90:308 | | FFT solver (tridiagonal + spectral transform) — global mesh operation |
-| 4 | `PRESSURE_SOLVER_CHECK_RESIDUALS` | pres_kernels.f90:477 | | I,J,K residual loop + baroclinic correction with wall checks |
+| 1 | `NO_FLUX_KERNEL` | pres_kernels.f90:737 | **Mesh** | Wall loop (IW=1 to N_EXTERNAL+N_INTERNAL) |
+| 2 | `PRESSURE_SOLVER_COMPUTE_RHS` | pres_kernels.f90:24 | **Mesh** | Wall pre-processing + I,J,K RHS assembly loop |
+| 3 | `PRESSURE_SOLVER_FFT` | pres_kernels.f90:308 | **Mesh** | FFT solver (tridiagonal + spectral transform) — global mesh operation |
+| 4 | `PRESSURE_SOLVER_CHECK_RESIDUALS` | pres_kernels.f90:477 | **Mesh** | I,J,K residual loop + baroclinic correction with wall checks |
 
 Or ULMAT variant:
-| 3a | `ULMAT_SOLVER_KERNEL` | pres.f90 | | PARDISO/HYPRE direct solve per zone — global mesh operation |
-| 4a | `PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL` | pres_kernels.f90:586 | | I,J,K loops + inline GRADIENT_WEIGHT |
+| 3a | `ULMAT_SOLVER_KERNEL` | pres.f90 | **Mesh** | PARDISO/HYPRE direct solve per zone — global mesh operation |
+| 4a | `PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL` | pres_kernels.f90:586 | **Mesh** | I,J,K loops + inline GRADIENT_WEIGHT |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — FFT/ULMAT solvers operate on the full mesh; wall loops in NO_FLUX and COMPUTE_RHS.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -145,13 +145,13 @@ Or ULMAT variant:
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `MATCH_VELOCITY_KERNEL` | velo_kernels.f90:2238 | | External wall loop (IW=1 to N_EXTERNAL_WALL_CELLS) |
-| 2 | `VELOCITY_BC_PROCESS_EDGES_KERNEL` | velo_kernels.f90:1430 | | Edge loop with wall BC application |
+| 1 | `MATCH_VELOCITY_KERNEL` | velo_kernels.f90:2238 | **Mesh** | External wall loop (IW=1 to N_EXTERNAL_WALL_CELLS) |
+| 2 | `VELOCITY_BC_PROCESS_EDGES_KERNEL` | velo_kernels.f90:1430 | **Mesh** | Edge loop with wall BC application, wall loops |
 
 Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential pre-processing.
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — both kernels iterate over wall/edge indices, not (I,J,K) grid.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -162,11 +162,11 @@ Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential p
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:27 | | Same as PredWallDiv — pure I,J,K loop |
-| 2 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:43 | | Same as PredWallDiv — cell+wall loops + local accumulators |
+| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:24 | **Mesh Block** | Same as PredWallDiv — block kernel exists |
+| 2 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:27 | **Mesh** | Same as PredWallDiv — cell+wall loops + local accumulators |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mixed — same as PredWallDiv (#6). PARTICLE_MOMENTUM lightweight; DIVERGENCE_PART_1 dominates.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -179,12 +179,12 @@ Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential p
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:807 | | Same as PredStep1 — CONTAINS, wall loops, turbulence dispatch |
-| 2 | `MASS_FINITE_DIFFERENCES_NEW_KERNEL` | mass_kernels.f90:28 | | Same as PredStep1 — cell loops + wall correction |
-| 3 | `DENSITY_KERNEL` | mass_kernels.f90:358 | | Same as DensityPred — cell loops + CHECK_MASS_DENSITY |
+| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:921 | **Mesh** | Same as PredStep1 — CONTAINS, wall loops, turbulence dispatch |
+| 2 | `MASS_FINITE_DIFFERENCES_NEW_KERNEL` | mass_kernels.f90:23 | **Mesh** | Same as PredStep1 — cell loops + wall correction |
+| 3 | `DENSITY_KERNEL` | mass_kernels.f90:350 | **Mesh** | Same as DensityPred — cell loops + CHECK_MASS_DENSITY |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — all three kernels have wall loops and/or zone-level operations.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -195,12 +195,12 @@ Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential p
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:211 | | Same as predictor instance |
+| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh** | Same as predictor instance — wall loops, CONTAINS |
 
 Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this is a sequential operation.
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — wall loops interleaved with cell loops, CONTAINS with host association.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -211,10 +211,10 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `COMBUSTION_MODEL_KERNEL` | fire_kernels.f90:1143 | | Cell loops for combustion + species reaction loops per cell |
+| 1 | `COMBUSTION_GENERAL_KERNEL` | fire.f90:532 | **Mesh** | Builds active cell list, calls COMBUSTION_MODEL per cell, STOP_STATUS global flag, CONTAINS with host association, CC_IBM cut-cell loops |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — builds cell index list (not I,J,K grid loop), global STOP_STATUS flag, CONTAINS subroutines with host association.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -225,10 +225,10 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `CONDENSATION_EVAPORATION_KERNEL` | fire_kernels.f90:1539 | | Cell loop with local species chemistry per cell |
+| 1 | `CONDENSATION_EVAPORATION_KERNEL` | fire_kernels.f90:1138 | **Mesh** | Species loop containing I,J,K cell loop + wall loop (WALL_LOOP), sharing ZZ_INTERIM/RHO_INTERIM/TMP_INTERIM. Wall loop modifies gas cells at arbitrary (I,J,K) locations. Cannot decompose — wall and cell loops interleaved within species iteration. |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — wall loops interleaved with cell loops within SPEC_LOOP, shared interim arrays prevent clean K-decomposition.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -241,8 +241,8 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 |---|----------------|--------|----------------|-------|
 | 1 | `PARTICLE_MASS_ENERGY_TRANSFER_KERNEL` | part_kernels.f90 (wrapper) | | Particle loop (DO IP=1,NLP) — iterates over Lagrangian particles |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — particle loop (DO IP=1,NLP) iterates over Lagrangian particles, not cells.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -253,10 +253,17 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:27 | | Pure I,J,K loop (0:IBAR, 0:JBAR, 0:KBAR) |
+| 1 | `PARTICLE_MOMENTUM_TRANSFER_KERNEL` | part_kernels.f90:27 | **Mesh Block** | Pure I,J,K loop (0:IBAR, 0:JBAR, 0:KBAR), per-cell force accumulation. CC_IBM CUTFACE_VELOCITIES is mesh-level. |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh Block — entire kernel is a single I,J,K loop with no cross-cell dependencies.
+**Status:** DONE
+
+**Implementation:**
+- Block kernel: `PARTICLE_MOMENTUM_BLOCK_KERNEL(M, DT, K1, K2)` in part_kernels.f90
+- K-partition: first block extends to K=0 (covers full 0:KBAR range); cells K=K1:K2 for other blocks
+- Sub-graph: `graph/particle_momentum_block_subgraph.h` — Decompose → BlockKernel → Reassemble
+- CC_IBM path: uses original mesh-level `CorrParticleKernelTask` (CUTFACE_VELOCITIES requires full mesh)
+- Verified: pending
 
 ---
 
@@ -267,10 +274,10 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `WALL_BC_PROCESS_CELLS_KERNEL` | wall_kernels.f90:585 | | Wall loop (IW=1 to N_EXTERNAL+N_INTERNAL), per-wall-cell operations |
+| 1 | `WALL_BC_PROCESS_CELLS_KERNEL` | wall_kernels.f90:585 | **Mesh** | Wall loop (IW=1 to N_EXTERNAL+N_INTERNAL), iterates over wall cell index, not (I,J,K) grid |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — wall cell iteration (IW index), cannot be restricted to K sub-ranges.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -281,10 +288,10 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `COMPUTE_RADIATION_KERNEL` | radi.f90 | | FVM radiation solver with angle loops + cell loops, complex CONTAINS structure |
+| 1 | `COMPUTE_RADIATION_KERNEL` | radi.f90:3443 | **Mixed** | FVM angle sweeps (I,J,K loops per angle, decomposable) + wall loops + particle loops + global reductions (RAD_Q_SUM). 1300+ lines with complex CONTAINS structure. |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mixed — angle sweep cell loops could theoretically be K-decomposed, but wall/particle loops and complex 3D sweep pattern make it impractical. Would require major restructuring.
+**Status:** DONE (classified, no conversion — complexity too high for benefit)
 
 ---
 
@@ -295,12 +302,12 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:43 | | Cell loops + wall loops + per-mesh local accumulators |
+| 1 | `DIVERGENCE_PART_1_KERNEL` | divg_kernels.f90:27 | **Mesh** | Cell loops + multiple wall loops + per-mesh local accumulators (D_SUM_LOC, P_SUM_LOC, U_SUM_LOC) |
 
 Note: `fds_combustion_bc_kernel` runs before this kernel in the same task.
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — same as predictor instance (#6).
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -311,10 +318,10 @@ Note: `fds_combustion_bc_kernel` runs before this kernel in the same task.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1404 | | Same as predictor instance |
+| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Mesh** | Same as predictor instance — zone loops + wall loops |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — same as predictor instance.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -325,8 +332,8 @@ Note: `fds_combustion_bc_kernel` runs before this kernel in the same task.
 
 Same kernels as predictor instance (see above).
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — same as predictor instance.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -359,8 +366,8 @@ Same kernels as predictor instance (see above).
 
 Same kernels as predictor instance (see above).
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mesh — same as predictor instance.
+**Status:** DONE (classified, no conversion needed)
 
 ---
 
@@ -384,28 +391,29 @@ Same kernels as predictor instance (see above).
 
 ### Unique Kernel Tasks (deduplicated across predictor/corrector)
 
-| # | Task | Kernels | Expected Classification |
-|---|------|---------|------------------------|
+| # | Task | Kernels | Classification |
+|---|------|---------|----------------|
 | 1 | VelocityPredictorKernelTask | VELOCITY_PREDICTOR_KERNEL, CHECK_STABILITY_KERNEL | **DONE** — block kernel + mesh CheckStability |
 | 2 | VelocityCorrectorKernelTask | VELOCITY_CORRECTOR_KERNEL, CHECK_DIVERGENCE_KERNEL | **DONE** — block kernel + mesh CheckDiv |
-| 3 | DensityPredKernelTask | DENSITY_KERNEL | Likely mixed (I,J,K + CHECK_MASS_DENSITY) |
-| 4 | PredStep1/CorrStep1KernelTask | COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL, DENSITY_KERNEL | Likely mixed (wall loops in viscosity) |
-| 5 | DivSetupKernelTask | VELOCITY_FLUX_KERNEL | Likely mixed (large, CONTAINS, wall loops) |
-| 6 | PredWallDivKernelTask | PARTICLE_MOMENTUM_TRANSFER_KERNEL, DIVERGENCE_PART_1_KERNEL | Likely mixed (block + wall + accumulators) |
-| 7 | DivergencePart2KernelTask | DIVERGENCE_PART_2_KERNEL | Likely mixed (I,J,K + zone loop) |
-| 8 | CombustionKernelTask | COMBUSTION_MODEL_KERNEL | Pending analysis |
-| 9 | CorrCondensKernelTask | CONDENSATION_EVAPORATION_KERNEL | Likely mesh block (per-cell chemistry) |
-| 10 | ParticleMassEnergyKernelTask | PARTICLE_MASS_ENERGY_TRANSFER_KERNEL | Likely mesh (particle loop) |
-| 11 | CorrParticleKernelTask | PARTICLE_MOMENTUM_TRANSFER_KERNEL | Likely mesh block (pure I,J,K) |
-| 12 | WallBCKernelTask | WALL_BC_PROCESS_CELLS_KERNEL | Likely mesh (wall loop) |
-| 13 | CorrRadiationKernelTask | COMPUTE_RADIATION_KERNEL | Likely mesh (FVM angle sweep, complex) |
-| 14 | PressureSolveKernelTask | NO_FLUX + COMPUTE_RHS + FFT/ULMAT + CHECK_RESIDUALS | Likely mesh (FFT/ULMAT are global solvers) |
-| 15 | VelocityBCEdgesTask | MATCH_VELOCITY_KERNEL, VELOCITY_BC_PROCESS_EDGES_KERNEL | Likely mesh (wall/edge loops) |
-| 16 | RetryMomentumDivKernelTask | PARTICLE_MOMENTUM_TRANSFER_KERNEL, DIVERGENCE_PART_1_KERNEL | Same as PredWallDiv (#6) |
+| 3 | DensityPredKernelTask | DENSITY_KERNEL | **Mesh** — zone loops, wall loops, CHECK_MASS_DENSITY |
+| 4 | PredStep1/CorrStep1KernelTask | COMPUTE_VISCOSITY, MASS_FINITE_DIFFS, DENSITY | **Mesh** — all have wall loops |
+| 5 | DivSetupKernelTask | VELOCITY_FLUX_KERNEL | **Mesh** — wall loops, CONTAINS host association |
+| 6 | PredWallDivKernelTask | PARTICLE_MOMENTUM + DIVERGENCE_PART_1 | **Mixed** — PART_MOM block-able but lightweight; DIV_PART_1 mesh |
+| 7 | DivergencePart2KernelTask | DIVERGENCE_PART_2_KERNEL | **Mesh** — zone loops, wall loops |
+| 8 | CombustionKernelTask | COMBUSTION_GENERAL_KERNEL | **Mesh** — cell list, STOP_STATUS, CONTAINS host association |
+| 9 | CorrCondensKernelTask | CONDENSATION_EVAPORATION_KERNEL | **Mesh** — wall+cell loops interleaved in species loop |
+| 10 | ParticleMassEnergyKernelTask | PARTICLE_MASS_ENERGY_TRANSFER_KERNEL | **Mesh** — particle loop (DO IP=1,NLP) |
+| 11 | CorrParticleKernelTask | PARTICLE_MOMENTUM_TRANSFER_KERNEL | **DONE** — block kernel, CC_IBM mesh fallback |
+| 12 | WallBCKernelTask | WALL_BC_PROCESS_CELLS_KERNEL | **Mesh** — wall cell iteration (IW index) |
+| 13 | CorrRadiationKernelTask | COMPUTE_RADIATION_KERNEL | **Mixed** — angle sweeps + wall/particle loops |
+| 14 | PressureSolveKernelTask | NO_FLUX + COMPUTE_RHS + FFT/ULMAT + CHECK_RESIDUALS | **Mesh** — FFT/ULMAT global solvers, wall loops |
+| 15 | VelocityBCEdgesTask | MATCH_VELOCITY, VELOCITY_BC_PROCESS_EDGES | **Mesh** — wall/edge loops |
+| 16 | RetryMomentumDivKernelTask | PARTICLE_MOMENTUM + DIVERGENCE_PART_1 | **Mixed** — same as #6 |
 
 ### Progress Counters
 
 - **Total unique kernel tasks:** 16
-- **Classified:** 2 / 16
-- **Converted to mesh block:** 2
-- **Confirmed mesh-only:** 0
+- **Classified:** 16 / 16
+- **Converted to mesh block:** 3 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum)
+- **Confirmed mesh-only:** 11
+- **Mixed (no conversion):** 2 (PredWallDiv, RetryMomentumDiv — PART_MOM lightweight relative to DIV_PART_1)

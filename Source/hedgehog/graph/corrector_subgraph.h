@@ -19,6 +19,7 @@
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_corrector_kernel_task.h"
 #include "velocity_corrector_block_subgraph.h"
+#include "particle_momentum_block_subgraph.h"
 #include "wallbc_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
@@ -66,6 +67,9 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto particleRemoveMoveCollSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ParticleRemoveMoveCollector");
     auto particleRemoveMoveTask = std::make_shared<RemoveMoveParticlesTask>();
+    // ParticleMomentum: block-decomposed for non-CC_IBM, mesh-level fallback for CC_IBM
+    auto partMomSubgraph = buildParticleMomentumBlockSubgraph(
+        kernelThreads, static_cast<int>(kernelThreads));
     auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
 
     // VelocityCorrector: block-decomposed kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
@@ -147,8 +151,13 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(corrCondensKernelTask, particleMassEnergyKernelTask);
     subgraph->edges(particleMassEnergyKernelTask, particleRemoveMoveCollSM);
     subgraph->edges(particleRemoveMoveCollSM, particleRemoveMoveTask);
-    subgraph->edges(particleRemoveMoveTask, corrParticleKernelTask);
-    subgraph->edges(corrParticleKernelTask, collector7SM);
+    if (ccIBM) {
+        subgraph->edges(particleRemoveMoveTask, corrParticleKernelTask);
+        subgraph->edges(corrParticleKernelTask, collector7SM);
+    } else {
+        subgraph->edges(particleRemoveMoveTask, partMomSubgraph);
+        subgraph->edges(partMomSubgraph, collector7SM);
+    }
     subgraph->edges(collector7SM, meshExchange7);
 
     // WallBC sub-graph
