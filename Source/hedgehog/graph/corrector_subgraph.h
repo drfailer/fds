@@ -12,6 +12,7 @@
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
+#include "../task/combustion_kernel_task.h"
 #include "../task/corr_condens_kernel_task.h"
 #include "../task/corr_particle_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
@@ -32,7 +33,7 @@
 ///   VelocityCorrector -> MESH_EXCHANGE(6) -> CorrFinal
 ///
 /// Optimizations vs original graph:
-///   - Combustion + HVAC merged into single barrier task (eliminates 1 collector)
+///   - Combustion parallelized as kernel task, Soot+HVAC remains sequential barrier
 ///   - CorrRadiation outputs BarrierData directly (eliminates Collector(2))
 ///   - MeshExchange(2) includes InitDivIntegrals (eliminates 1 collector + 1 task)
 ///   - CorrFinal outputs BarrierData directly (eliminates TimestepCollector in parent)
@@ -79,10 +80,11 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(4)");
     auto meshExchange4 = std::make_shared<MeshExchangeTask>(4, /*ccDensity=*/ccIBM);
 
-    // Merged: Combustion + HVAC (eliminates CorrHvacCollector)
-    auto combustionCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CombustionCollector");
-    auto combustionHvacTask = std::make_shared<CombustionHvacTask>(1);
+    // Combustion: parallel kernel -> Soot+HVAC sequential barrier
+    auto combustionKernelTask = std::make_shared<CombustionKernelTask>(kernelThreads);
+    auto sootHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        std::make_shared<CollectorState>(nmeshes), "SootHvacCollector");
+    auto sootHvacTask = std::make_shared<SootHvacTask>(1);
 
     auto collector7SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "Collector(7)");
@@ -127,12 +129,13 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         subgraph->edges(meshExchange4, corrDivSetupKernelTask);
     }
 
-    // Merged Combustion+HVAC (was: combustion -> collect -> hvac)
-    subgraph->edges(corrDivSetupKernelTask, combustionCollectorSM);
-    subgraph->edges(combustionCollectorSM, combustionHvacTask);
+    // Combustion: parallel kernel -> Soot+HVAC barrier
+    subgraph->edges(corrDivSetupKernelTask, combustionKernelTask);
+    subgraph->edges(combustionKernelTask, sootHvacCollectorSM);
+    subgraph->edges(sootHvacCollectorSM, sootHvacTask);
 
     // CorrCondens -> CorrParticle: orchestrator (particle ops) -> parallel kernel
-    subgraph->edges(combustionHvacTask, corrCondensKernelTask);
+    subgraph->edges(sootHvacTask, corrCondensKernelTask);
     subgraph->edges(corrCondensKernelTask, corrParticleOrchSM);
     subgraph->edges(corrParticleOrchSM, corrParticleKernelTask);
     subgraph->edges(corrParticleKernelTask, collector7SM);

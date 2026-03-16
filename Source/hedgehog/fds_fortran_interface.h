@@ -80,6 +80,8 @@ void fds_wall_velocity_no_gradh(int nm, double dt, int store_flag);
 // Corrector phase per-mesh subroutines
 void fds_combustion_bc(int nm);
 void fds_combustion(double t, double dt);
+void fds_combustion_kernel(int nm, double t, double dt);
+void fds_soot_oxidation_loop(double dt);
 void fds_condensation(double dt, int nm);
 void fds_particle_mass_energy(double t, double dt, int nm);
 void fds_move_particles(double t, double dt, int nm);

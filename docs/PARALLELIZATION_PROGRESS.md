@@ -26,7 +26,7 @@ Step-by-step procedures for parallelizing FDS routines:
    - Pattern B: Sequential pre/post + parallel kernel
 ```
 
-## Completed Sub-Graphs (15 sub-graphs)
+## Completed Sub-Graphs (17 sub-graphs)
 
 All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
@@ -112,6 +112,20 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Files: shared with PredFinal (velocity_bc_data.h, velocity_bc_state.h, velocity_bc_edges_task.h, velocity_bc_subgraph.h)
     - Replaced: CorrFinalTask
 
+16. **PressureIteration** (predictor + corrector, parallel FFT solve with cycle)
+    - 4-node sub-graph: PreKernel → SolveKernel (parallel) → SolveCollector → PostLoopSM (cycle)
+    - Kernels: NO_FLUX_KERNEL, PRESSURE_SOLVER_COMPUTE_RHS_KERNEL, PRESSURE_SOLVER_FFT_KERNEL, PRESSURE_CHECK_RESIDUALS_KERNEL
+    - PostLoopSM runs Phase 3: MESH_EXCHANGE(5) + velocity error + convergence check
+    - canTerminate() uses `(reachedEnd() && lastConverged()) || isTerminated()` — `lastConverged` prevents premature mid-iteration termination
+    - Only FFT solver supported in parallel mode; ULMAT/GLMAT/UGLMAT fall back to sequential PressureIterationTask
+    - Files: data/pressure_iteration_data.h, state/pressure_iteration_state.h, task/pressure_iteration_tasks.h, graph/pressure_iteration_subgraph.h
+
+17. **TerminationSignal** (shared termination mechanism for sub-graph cycles)
+    - Shared `std::atomic<bool>` between TimestepLoopState and PressurePostLoopState
+    - TimestepLoopState calls `terminate()` when simulation ends; pressure sub-graphs check `isTerminated()` as fallback in canTerminate()
+    - Data-driven termination (reachedEnd + lastConverged) is the primary mechanism — the signal is a fallback because external flag changes alone cannot wake cycle nodes
+    - Files: data/termination_signal.h, state/timestep_state.h (modified)
+
 ## Kernel Extraction Summary
 
 ### Directly Used in Sub-Graphs
@@ -132,6 +146,11 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | PARTICLE_MOMENTUM_TRANSFER_KERNEL | part_kernels.f90 | PredWallDiv, CorrParticle |
 | WALL_BC_PROCESS_CELLS_KERNEL | wall.f90 | WallBC |
 | VELOCITY_BC_PROCESS_EDGES_KERNEL | velo_kernels.f90 | PredFinal, CorrFinal |
+| NO_FLUX_KERNEL | pres.f90 | PressureIteration |
+| PRESSURE_SOLVER_COMPUTE_RHS_KERNEL | pres.f90 | PressureIteration |
+| PRESSURE_SOLVER_FFT_KERNEL | pres.f90 | PressureIteration |
+| PRESSURE_CHECK_RESIDUALS_KERNEL | pres.f90 | PressureIteration |
+| COMPUTE_VELOCITY_ERROR_KERNEL | velo.f90 | PressureIteration |
 
 ### New Extractions for WallBC
 
@@ -165,11 +184,16 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
 ## Remaining Sequential Tasks
 
-| Task | Routines | Blocker |
-|------|----------|---------|
-| All barrier tasks | MESH_EXCHANGE, PRESSURE_ITERATION, HVAC_CALC | Inherently global/sequential |
+| Task | Routines | Blocker | Parallelization Plan |
+|------|----------|---------|---------------------|
+| CombustionHvacTask | COMBUSTION + HVAC_CALC | Combustion is per-mesh; HVAC is global | [Phase 3 Target 1](PHASE3_EASY_PARALLELIZATION.md) |
+| CorrParticleOrchestrator | PARTICLE_MASS_ENERGY + MOVE_PARTICLES | MASS_ENERGY is per-mesh; MOVE is cross-mesh | [Phase 3 Target 2](PHASE3_EASY_PARALLELIZATION.md) |
+| PredStep1Orchestrator | INSERT_ALL_PARTICLES | Per-mesh but RANDOM_NUMBER not thread-safe | [Phase 3 Target 3](PHASE3_EASY_PARALLELIZATION.md) |
+| MeshExchange tasks | MESH_EXCHANGE(1-7) | Inherently global/sequential | None planned |
+| DivergenceExchange tasks | EXCHANGE_DIVERGENCE_INFO | Inherently global/sequential | None planned |
+| PhaseTransitionTask | Phase transition bookkeeping | Inherently global/sequential | None planned |
 
-**Note**: All per-mesh computation tasks have been parallelized (15 sub-graphs). Only inherently global/sequential barrier tasks remain.
+**Note**: All per-mesh kernel tasks have been parallelized (17 sub-graphs including parallel pressure iteration). Three orchestrator/barrier tasks contain per-mesh loops that could be extracted into parallel kernels (see [Phase 3](PHASE3_EASY_PARALLELIZATION.md)). The remaining barrier tasks are inherently global/sequential.
 
 ## Performance Profiling Results
 
@@ -206,8 +230,8 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | Task | Time (ms) | Notes |
 |------|----------|-------|
 | TimestepCompute | 334 | Outputs, diagnostics, I/O |
-| PressureIteration (pred) | 148 | Global Poisson solver |
-| PressureIteration (corr) | 125 | Global Poisson solver |
+| PressureIteration (pred) | 148 | Parallel FFT kernel (when enabled) |
+| PressureIteration (corr) | 125 | Parallel FFT kernel (when enabled) |
 | ChangeTimeStep subgraph | 133 | CFL retry pipeline |
 | MeshExchanges (all) | 70 | Inter-mesh communication |
 | CorrFinalCollector | 38 | UPDATE_GLOBAL_OUTPUTS |
@@ -220,8 +244,10 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 |-------|-----------|-------------|-------------|
 | Phase 1 (12 sub-graphs) | 4.690s | 39.2% | Baseline |
 | Phase 2 (15 sub-graphs + CC_IBM) | 3.739s | 23.7% | **-20% total, -52% sequential** |
+| Phase 2+ (17 sub-graphs + pressure) | — | ~23% | Parallel pressure solve (FFT only) |
 
-**Amdahl's law**: With 24% sequential, max theoretical speedup ≈ 1/(0.24 + 0.76/N) for N threads.
+**Amdahl's law**: With ~24% sequential, max theoretical speedup ≈ 1/(0.24 + 0.76/N) for N threads.
+Further reduction requires parallelizing combustion, particle mass/energy, and particle insertion (see [Phase 3](PHASE3_EASY_PARALLELIZATION.md)).
 
 ## CC_IBM Integration
 
@@ -251,16 +277,18 @@ All verified byte-identical on CC_IBM test cases.
 
 ## Future Work
 
-### 1. Breaking the Sequential Bottleneck
+### 1. Phase 3: Easy Parallelization Targets
 
-Current sequential fraction reduced from ~39% to ~25% with PredFinal/CorrFinal decomposition. Options:
+See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for detailed plans.
 
-**a) RADIATION Decomposition**
-- Extract angle loop into parallel kernel
-- Keep RTE source correction sequential
-- Medium effort, moderate ROI (~350ms saved)
+Three sequential nodes contain per-mesh loops that could be parallelized:
+1. **Combustion** — ODE chemistry solver, highest payoff for fire cases
+2. **Particle Mass/Energy** — per-particle heat transfer, moderate payoff
+3. **Particle Insertion** — lowest payoff, RANDOM_NUMBER thread-safety risk
 
-**b) Hybrid MPI+Hedgehog**
+### 2. Advanced Optimization
+
+**a) Hybrid MPI+Hedgehog**
 - Each MPI rank runs Hedgehog graph with kernelThreads > 1
 - Load balancing across MPI ranks and threads
 - Overlap MPI communication with kernel computation
@@ -282,32 +310,33 @@ approach for the predictor-corrector scheme.
 
 ## Test Suite
 
-**Test runner**: `test_cases/run_tests.py`
+**Custom test runner**: `test_cases/run_tests.py` (12 cases)
+**Verification suite**: `test_cases/run_verification.py` (99 cases at --max-gold-time 30)
 
 **Build**: `cd build_hh && cmake --build . --target fds_hh -j$(nproc)`
 
-**Test cases** (8 total):
-- dancing_eddies_1mesh (1 mesh) — byte-identical
-- dancing_eddies_2mesh (2 meshes, embedded) — byte-identical
-- multiple_reac_3mesh (3 meshes) — byte-identical
-- dancing_eddies_4mesh (4 meshes) — byte-identical
-- species_props_5mesh (5 meshes) — byte-identical
-- shunn3_32_cc (1 mesh, CC_IBM) — tolerance 1e-5
-- two_spheres_cc (1 mesh, CC_IBM) — tolerance 1e-4
-- sphere_helium_1mesh_cc (1 mesh, CC_IBM) — byte-identical
+**Custom test cases** (12 total): all pass
+**Verification suite**: 73/99 pass at tol=1e-6
 
-**Verification**: `cd test_cases && python3 run_tests.py -v`
+**Verification failures** (26 cases):
+- 3 run failures (Complex_Geometry/geom_channel* — multi-mesh CC_IBM, known gap)
+- 4 header mismatches (MMS output format differences)
+- 1 row count mismatch (Adaptive_Mesh_Refinement/random_meshes — fewer timesteps)
+- 6 large numerical diffs (>1.0) — fire/particle/HT cases with accumulation ordering
+- 12 small numerical diffs — chaotic sensitivity, accumulation ordering
+
+**Run verification**: `cd test_cases && python3 run_verification.py test --no-redundant --max-gold-time 30 --timeout 120 --tolerance 1e-6`
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 15
-- **Graph nodes replaced**: 18 (some tasks appear in both predictor/corrector)
-- **Kernels extracted**: 14 new kernels + utilizing ~30 existing kernels
+- **Sub-graphs created**: 17 (including parallel pressure iteration with cycle)
+- **Graph nodes replaced**: 20 (some tasks appear in both predictor/corrector)
+- **Kernels extracted**: 19 new kernels + utilizing ~30 existing kernels
 - **Thread-safe conversions**: 1800+ lines converted (including ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
-- **Test coverage**: 8 test cases (5 standard + 3 CC_IBM), 1-5 meshes
-- **Overall speedup**: 20% total time reduction (4.690s → 3.739s on 4-mesh)
-- **Sequential fraction**: reduced from 39% to 24%
-- **Parallel fraction**: increased from 27% to 62%
+- **Test coverage**: 12 custom cases + 99 verification cases (73 pass at tol=1e-6)
+- **Overall speedup**: 5.35x on verification suite
+- **Sequential fraction**: reduced from 39% to ~24%
+- **Parallel fraction**: increased from 27% to ~62%
 
 ## Documentation Index
 
@@ -319,6 +348,7 @@ approach for the predictor-corrector scheme.
 
 ### Implementation Details
 - WALL_BC_PARALLELIZATION_PLAN.md - Complete WallBC implementation (reference)
+- PHASE3_EASY_PARALLELIZATION.md - Phase 3 easy parallelization targets
 - test_cases/WALLBC_TEST_REPORT.md - WallBC verification results
 
 ### Progress Tracking

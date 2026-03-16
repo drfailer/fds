@@ -75,6 +75,24 @@ private:
     int first_;
 };
 
+/// Sequential SOOT_SURFACE_OXIDATION + HVAC_CALC barrier task.
+/// Replaces the SOOT loop and HVAC from CombustionHvacTask after parallel combustion.
+class SootHvacTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    explicit SootHvacTask(int first)
+        : hh::AbstractTask<1, BarrierData, MeshData>("Soot+Hvac", 1),
+          first_(first) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        fds_soot_oxidation_loop(data->dt());
+        fds_hvac_calc(data->t(), data->dt(), first_);
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+
+private:
+    int first_;
+};
+
 /// HVAC_CALC barrier task — replaces HvacBarrierState.
 class HvacTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
