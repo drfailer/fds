@@ -53,6 +53,7 @@ void fds_velocity_bc(double t, int nm, int estimated);
 // Thread-safe kernel wrappers (bypass orchestration, call kernels directly)
 void fds_velocity_predictor_kernel(int nm, double t, double dt);
 void fds_velocity_predictor_kernel_only(int nm, double dt);
+void fds_velocity_predictor_block_kernel(int nm, double dt, int k1, int k2);
 void fds_check_stability_kernel_only(int nm, double t, double dt);
 void fds_velocity_corrector_kernel(int nm, double t, double dt);
 void fds_velocity_corrector_block_kernel(int nm, double dt, int k1, int k2);

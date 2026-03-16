@@ -124,11 +124,17 @@ Or ULMAT variant:
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `VELOCITY_PREDICTOR_KERNEL` | velo_kernels.f90:112 | | Three pure I,J,K loops for US, VS, WS (staggered grid) |
-| 2 | `CHECK_STABILITY_KERNEL` | velo_kernels.f90:1253 | | I,J,K CFL/VN loops with local min(DT) reduction |
+| 1 | `VELOCITY_PREDICTOR_KERNEL` | velo_kernels.f90:112 | **Mesh Block** | Three pure I,J,K loops for US, VS, WS (staggered grid). No cross-cell deps. |
+| 2 | `CHECK_STABILITY_KERNEL` | velo_kernels.f90:1253 | **Mesh** | I,J,K CFL/VN loops + wall loop, all with min/max reductions to mesh scalars |
 
-**Task classification:** Pending
-**Status:** Not started
+**Task classification:** Mixed — VELOCITY_PREDICTOR block-decomposed along K, CHECK_STABILITY runs at mesh level after reassembly.
+**Status:** DONE
+
+**Implementation:**
+- Block kernel: `VELOCITY_PREDICTOR_BLOCK_KERNEL(M, DT, K1, K2)` in velo_kernels.f90
+- Sub-graph: `graph/velocity_predictor_block_subgraph.h` — Decompose → BlockKernel → Reassemble → CheckStability (if !skipCFL)
+- CC_IBM path: uses original mesh-level `VelocityPredictorKernelTask` (CFL deferred to CC collector)
+- Verified: 12/12 custom pass, verification pending
 
 ---
 
@@ -380,7 +386,7 @@ Same kernels as predictor instance (see above).
 
 | # | Task | Kernels | Expected Classification |
 |---|------|---------|------------------------|
-| 1 | VelocityPredictorKernelTask | VELOCITY_PREDICTOR_KERNEL, CHECK_STABILITY_KERNEL | Likely mesh block (pure I,J,K + local reduction) |
+| 1 | VelocityPredictorKernelTask | VELOCITY_PREDICTOR_KERNEL, CHECK_STABILITY_KERNEL | **DONE** — block kernel + mesh CheckStability |
 | 2 | VelocityCorrectorKernelTask | VELOCITY_CORRECTOR_KERNEL, CHECK_DIVERGENCE_KERNEL | **DONE** — block kernel + mesh CheckDiv |
 | 3 | DensityPredKernelTask | DENSITY_KERNEL | Likely mixed (I,J,K + CHECK_MASS_DENSITY) |
 | 4 | PredStep1/CorrStep1KernelTask | COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL, DENSITY_KERNEL | Likely mixed (wall loops in viscosity) |
@@ -400,6 +406,6 @@ Same kernels as predictor instance (see above).
 ### Progress Counters
 
 - **Total unique kernel tasks:** 16
-- **Classified:** 1 / 16
-- **Converted to mesh block:** 1
+- **Classified:** 2 / 16
+- **Converted to mesh block:** 2
 - **Confirmed mesh-only:** 0
