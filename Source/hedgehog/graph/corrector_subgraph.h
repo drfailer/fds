@@ -7,13 +7,13 @@
 #include "../data/barrier_data.h"
 #include "../state/collector_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/corr_particle_state.h"
 #include "../state/velocity_corrector_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/combustion_kernel_task.h"
 #include "../task/corr_condens_kernel_task.h"
+#include "../task/particle_mass_energy_kernel_task.h"
 #include "../task/corr_particle_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
@@ -60,9 +60,11 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool ccIBM = fds_is_cc_ibm() != 0;
     auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
-    // CorrParticle: sequential MASS_ENERGY + MOVE -> parallel MOMENTUM kernel
-    auto corrParticleOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<CorrParticleOrchestrator>(nmeshes), "CorrParticleOrch");
+    // CorrParticle: parallel MASS_ENERGY -> sequential REMOVE+MOVE -> parallel MOMENTUM
+    auto particleMassEnergyKernelTask = std::make_shared<ParticleMassEnergyKernelTask>(kernelThreads);
+    auto particleRemoveMoveCollSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        std::make_shared<CollectorState>(nmeshes), "ParticleRemoveMoveCollector");
+    auto particleRemoveMoveTask = std::make_shared<RemoveMoveParticlesTask>();
     auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
 
     // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
@@ -134,10 +136,12 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(combustionKernelTask, sootHvacCollectorSM);
     subgraph->edges(sootHvacCollectorSM, sootHvacTask);
 
-    // CorrCondens -> CorrParticle: orchestrator (particle ops) -> parallel kernel
+    // CorrCondens -> CorrParticle: parallel MASS_ENERGY -> REMOVE+MOVE barrier -> parallel MOMENTUM
     subgraph->edges(sootHvacTask, corrCondensKernelTask);
-    subgraph->edges(corrCondensKernelTask, corrParticleOrchSM);
-    subgraph->edges(corrParticleOrchSM, corrParticleKernelTask);
+    subgraph->edges(corrCondensKernelTask, particleMassEnergyKernelTask);
+    subgraph->edges(particleMassEnergyKernelTask, particleRemoveMoveCollSM);
+    subgraph->edges(particleRemoveMoveCollSM, particleRemoveMoveTask);
+    subgraph->edges(particleRemoveMoveTask, corrParticleKernelTask);
     subgraph->edges(corrParticleKernelTask, collector7SM);
     subgraph->edges(collector7SM, meshExchange7);
 

@@ -84,6 +84,8 @@ void fds_combustion_kernel(int nm, double t, double dt);
 void fds_soot_oxidation_loop(double dt);
 void fds_condensation(double dt, int nm);
 void fds_particle_mass_energy(double t, double dt, int nm);
+void fds_particle_mass_energy_kernel(int nm, double t, double dt);
+void fds_remove_particles(double t, int nm);
 void fds_move_particles(double t, double dt, int nm);
 void fds_compute_radiation(double t, int nm, int rad_iter);
 void fds_compute_radiation_kernel(int nm, double t, int rad_iter,

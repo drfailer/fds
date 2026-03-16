@@ -93,6 +93,23 @@ private:
     int first_;
 };
 
+/// Sequential REMOVE_PARTICLES + MOVE_PARTICLES barrier task.
+/// Runs after parallel ParticleMassEnergyKernelTask, before parallel ParticleMomentumKernelTask.
+/// REMOVE_PARTICLES writes to OMESH send buffers (cross-mesh), MOVE_PARTICLES has cross-mesh transfer.
+class RemoveMoveParticlesTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    RemoveMoveParticlesTask()
+        : hh::AbstractTask<1, BarrierData, MeshData>("RemoveMove", 1) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        for (auto &md : data->meshes) {
+            fds_remove_particles(md->t, md->nm);
+            fds_move_particles(md->t, md->dt, md->nm);
+        }
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+};
+
 /// HVAC_CALC barrier task — replaces HvacBarrierState.
 class HvacTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
