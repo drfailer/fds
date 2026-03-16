@@ -11,6 +11,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <algorithm>
 
 #include "fds_fortran_interface.h"
 #include "data/mesh_data.h"
@@ -47,11 +49,17 @@ int main(int argc, char *argv[]) {
               << " Local meshes=" << local_nmeshes
               << " (range: " << lower_mesh_index << "-" << upper_mesh_index << ")"
               << " t=" << t << " dt=" << dt << " tEnd=" << tEnd << std::endl;
+    std::cout << "[FDS-HH] Hardware threads=" << std::thread::hardware_concurrency()
+              << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
-    // Parallel kernel tasks (velocity predictor/corrector) use local_nmeshes threads;
-    // all other tasks (orchestration, barriers) remain single-threaded.
+    // kernelThreads controls inter-mesh parallelism. Block decomposition of velocity/momentum
+    // kernels is available but provides negligible benefit (<0.2% of runtime) — the heavy kernels
+    // (WallBC, DivPart1, DivSetup, VelocityBCEdges) are mesh-level due to wall/zone loops.
+    // Using hw_threads would enable intra-mesh block decomposition but adds overhead without
+    // measurable speedup. Keep kernelThreads = nmeshes for now.
     size_t kernelThreads = local_nmeshes;
+    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads << std::endl;
     auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads);
 
     // Step 3: Execute the graph (spawns threads).
