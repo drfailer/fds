@@ -13,7 +13,8 @@ USE TYPES, ONLY: WALL_TYPE,BOUNDARY_COORD_TYPE,BOUNDARY_PROP1_TYPE,BOUNDARY_PROP
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_CORRECTOR_KERNEL,VELOCITY_FLUX_KERNEL, &
+PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_CORRECTOR_KERNEL, &
+       VELOCITY_CORRECTOR_BLOCK_KERNEL,VELOCITY_FLUX_KERNEL, &
        COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
        MATCH_VELOCITY_KERNEL,NO_FLUX_KERNEL,MATCH_VELOCITY_FLUX_KERNEL
 
@@ -196,6 +197,65 @@ ENDDO
 
 
 END SUBROUTINE VELOCITY_CORRECTOR_KERNEL
+
+
+!> \brief Block-decomposed velocity corrector: updates U, V, W for K-range [K1, K2].
+!> \details Processes only a sub-range of the K dimension, enabling intra-mesh parallelism.
+!> Each block writes to non-overlapping regions of the velocity arrays.
+!> For U and V (staggered in I and J): loop K=K1:K2.
+!> For W (staggered in K): loop K=K1-1:K2-1, plus K=KBAR for last block.
+!> \param M Mesh data structure
+!> \param DT Time step (s)
+!> \param K1 Start of K cell range (1-based inclusive)
+!> \param K2 End of K cell range (1-based inclusive)
+
+RECURSIVE SUBROUTINE VELOCITY_CORRECTOR_BLOCK_KERNEL(M,DT,K1,K2)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+REAL(EB), INTENT(IN) :: DT
+INTEGER, INTENT(IN) :: K1,K2
+INTEGER :: I,J,K,K1_W,K2_W
+
+IF (FREEZE_VELOCITY) THEN
+   M%U(0:M%IBAR,1:M%JBAR,K1:K2) = M%US(0:M%IBAR,1:M%JBAR,K1:K2)
+   M%V(1:M%IBAR,0:M%JBAR,K1:K2) = M%VS(1:M%IBAR,0:M%JBAR,K1:K2)
+   K1_W = K1 - 1
+   K2_W = K2 - 1
+   IF (K2==M%KBAR) K2_W = M%KBAR
+   M%W(1:M%IBAR,1:M%JBAR,K1_W:K2_W) = M%WS(1:M%IBAR,1:M%JBAR,K1_W:K2_W)
+   RETURN
+ENDIF
+
+DO K=K1,K2
+   DO J=1,M%JBAR
+      DO I=0,M%IBAR
+         M%U(I,J,K) = 0.5_EB*( M%U(I,J,K) + M%US(I,J,K) - DT*(M%FVX(I,J,K) + M%RDXN(I)*(M%HS(I+1,J,K)-M%HS(I,J,K))) )
+      ENDDO
+   ENDDO
+ENDDO
+
+DO K=K1,K2
+   DO J=0,M%JBAR
+      DO I=1,M%IBAR
+         M%V(I,J,K) = 0.5_EB*( M%V(I,J,K) + M%VS(I,J,K) - DT*(M%FVY(I,J,K) + M%RDYN(J)*(M%HS(I,J+1,K)-M%HS(I,J,K))) )
+      ENDDO
+   ENDDO
+ENDDO
+
+! W-faces: block owns K1-1:K2-1, last block extends to KBAR
+K1_W = K1 - 1
+K2_W = K2 - 1
+IF (K2==M%KBAR) K2_W = M%KBAR
+
+DO K=K1_W,K2_W
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         M%W(I,J,K) = 0.5_EB*( M%W(I,J,K) + M%WS(I,J,K) - DT*(M%FVZ(I,J,K) + M%RDZN(K)*(M%HS(I,J,K+1)-M%HS(I,J,K))) )
+      ENDDO
+   ENDDO
+ENDDO
+
+END SUBROUTINE VELOCITY_CORRECTOR_BLOCK_KERNEL
 
 
 !> \brief Compute the velocity flux terms (vorticity, stress tensor, momentum RHS).
