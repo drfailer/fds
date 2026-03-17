@@ -15,6 +15,7 @@ IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
 PUBLIC DIVERGENCE_PART_1_KERNEL,DIVERGENCE_PART_2_KERNEL,CHECK_DIVERGENCE_KERNEL
+PUBLIC DIVERGENCE_PART_2_PREPROCESSING,DIVERGENCE_PART_2_BLOCK_KERNEL
 
 CONTAINS
 
@@ -157,7 +158,7 @@ SPECIES_GT_1_IF: IF (N_TOTAL_SCALARS>1) THEN
 
       ! Manufactured solution
 
-      IF (PERIODIC_TEST==7) RHO_D = DIFF_MMS
+      IF (PERIODIC_TEST==9) RHO_D = DIFF_MMS
 
       ! Store max diffusivity for stability check
 
@@ -695,11 +696,6 @@ IF (CC_IBM) CALL CC_DIVERGENCE_PART_1(T,DT,NM)
 
 IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
 
-   ! Accumulate into per-mesh local arrays (thread-safe: no global writes)
-   M%D_SUM_LOC = 0._EB
-   M%P_SUM_LOC = 0._EB
-   M%U_SUM_LOC = 0._EB
-
    R_PFCT = 1._EB
    DO K=1,M%KBAR
       DO J=1,M%JBAR
@@ -710,21 +706,21 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
             IF (IPZ<1) CYCLE
             IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
             VC = M%DX(I)*M%RC(I)*VC1
-            M%D_SUM_LOC(IPZ) = M%D_SUM_LOC(IPZ) + VC*DP(I,J,K)
+            DSUM(IPZ) = DSUM(IPZ) + VC*DP(I,J,K)
             IF (CC_IBM) THEN
                R_PFCT = 1._EB
                IF (M%CCVAR(I,J,K,CC_CGSC) == CC_SOLID) THEN
                   CYCLE
                ELSEIF(M%CCVAR(I,J,K,CC_CGSC) == CC_CUTCFE) THEN
                   CALL ADD_CUTCELL_PSUM(M,I,J,K, &
-                     PBAR_P(K,IPZ),M%P_SUM_LOC(IPZ)); CYCLE
+                     PBAR_P(K,IPZ),PSUM(IPZ)); CYCLE
                ELSEIF(M%CCVAR(I,J,K,CC_UNKZ) > 0) THEN
                   CALL ADD_LINKEDCELL_PSUM(M,I,J,K, &
                      VC,PBAR_P(K,IPZ),RTRM(I,J,K), &
-                     M%P_SUM_LOC(IPZ)); CYCLE
+                     PSUM(IPZ)); CYCLE
                ENDIF
             ENDIF
-            M%P_SUM_LOC(IPZ) = M%P_SUM_LOC(IPZ) + VC*(M%R_PBAR(K,IPZ)*R_PFCT-RTRM(I,J,K))
+            PSUM(IPZ) = PSUM(IPZ) + VC*(M%R_PBAR(K,IPZ)*R_PFCT-RTRM(I,J,K))
          ENDDO
       ENDDO
    ENDDO
@@ -739,8 +735,8 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
       IPZ = B1%PRESSURE_ZONE
       IF (IPZ<1) CYCLE WALL_LOOP4
       IF (WC%BOUNDARY_TYPE/=SOLID_BOUNDARY) CYCLE WALL_LOOP4
-      IF (PREDICTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL_S*B1%AREA
-      IF (CORRECTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL  *B1%AREA
+      IF (PREDICTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL_S*B1%AREA
+      IF (CORRECTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL  *B1%AREA
    ENDDO WALL_LOOP4
 
 
@@ -750,8 +746,8 @@ IF_PRESSURE_ZONES: IF (N_ZONE>0) THEN
       B1 => M%BOUNDARY_PROP1(CFA%B1_INDEX)
       IPZ = B1%PRESSURE_ZONE
       IF (IPZ<1) CYCLE CFACE_LOOP
-      IF (PREDICTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL_S*B1%AREA
-      IF (CORRECTOR) M%U_SUM_LOC(IPZ) = M%U_SUM_LOC(IPZ) + B1%U_NORMAL  *B1%AREA
+      IF (PREDICTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL_S*B1%AREA
+      IF (CORRECTOR) USUM(IPZ) = USUM(IPZ) + B1%U_NORMAL  *B1%AREA
    ENDDO CFACE_LOOP
 
 
@@ -1602,6 +1598,261 @@ ENDIF
 IF(CC_IBM) CALL GET_CUTCELL_DDDT(DT,NM)
 
 END SUBROUTINE DIVERGENCE_PART_2_KERNEL
+
+
+!> \brief Preprocessing for DIVERGENCE_PART_2 block decomposition.
+!> Computes zone operations (USUM_ADD, D_PBAR_DT_P) and R_PBAR.
+!> Must be called sequentially per mesh BEFORE block kernel dispatch.
+!> \param M Mesh data structure
+!> \param DT Time step (s)
+!> \param NM Mesh number
+
+RECURSIVE SUBROUTINE DIVERGENCE_PART_2_PREPROCESSING(M,DT,NM)
+
+USE COMPLEX_GEOMETRY, ONLY : CC_CGSC, CC_UNKZ, CC_SOLID, CC_CUTCFE
+USE CC_VELOCITY, ONLY : GET_LINKED_VELOCITIES
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+REAL(EB), INTENT(IN) :: DT
+REAL(EB) :: USUM_ADD(N_ZONE),RDT,P_EQ,SUM_P_PSUM,SUM_USUM,SUM_DSUM,SUM_PSUM
+LOGICAL :: OPEN_ZONE
+REAL(EB), POINTER, DIMENSION(:) :: D_PBAR_DT_P
+REAL(EB), POINTER, DIMENSION(:,:) :: PBAR_P
+INTEGER :: IPZ,IOPZ
+
+IF (SOLID_PHASE_ONLY) RETURN
+IF (PERIODIC_TEST==3) RETURN
+IF (PERIODIC_TEST==4) RETURN
+
+RDT = 1._EB/DT
+
+SELECT CASE(PREDICTOR)
+   CASE(.TRUE.)
+      PBAR_P => M%PBAR_S
+   CASE(.FALSE.)
+      PBAR_P => M%PBAR
+END SELECT
+
+M%R_PBAR = 1._EB/PBAR_P
+
+! Adjust volume flows (USUM) of pressure ZONEs that are connected to equalize background pressure
+
+USUM_ADD = 0._EB
+
+DO IPZ=1,N_ZONE
+   SUM_P_PSUM = PBAR_P(1,IPZ)*PSUM(IPZ)
+   OPEN_ZONE  = .FALSE.
+   SUM_USUM = USUM(IPZ)
+   SUM_DSUM = DSUM(IPZ)
+   SUM_PSUM = PSUM(IPZ)
+   DO IOPZ=N_ZONE,0,-1
+      IF (IOPZ==IPZ) CYCLE
+      IF (CONNECTED_ZONES(IPZ,IOPZ)>0) THEN
+         IF (IOPZ==0) THEN
+            OPEN_ZONE = .TRUE.
+         ELSE
+            SUM_P_PSUM = SUM_P_PSUM + PBAR_P(1,IOPZ)*PSUM(IOPZ)
+            SUM_USUM = SUM_USUM + USUM(IOPZ)
+            SUM_DSUM = SUM_DSUM + DSUM(IOPZ)
+            SUM_PSUM = SUM_PSUM + PSUM(IOPZ)
+         ENDIF
+      ENDIF
+   ENDDO
+   IF (OPEN_ZONE) THEN
+      P_EQ          = M%P_0(1)
+      USUM_ADD(IPZ) = PSUM(IPZ)*(PBAR_P(1,IPZ)-P_EQ)/PRESSURE_RELAX_TIME + DSUM(IPZ) - USUM(IPZ)
+   ELSE
+      P_EQ          = SUM_P_PSUM/SUM_PSUM
+      USUM_ADD(IPZ) = PSUM(IPZ)*(PBAR_P(1,IPZ)-P_EQ)/PRESSURE_RELAX_TIME + DSUM(IPZ) - USUM(IPZ) - &
+                      PSUM(IPZ)*(SUM_DSUM-SUM_USUM)/SUM_PSUM
+   ENDIF
+ENDDO
+
+DO IPZ=1,N_ZONE
+   USUM(IPZ) = USUM(IPZ) + USUM_ADD(IPZ)
+ENDDO
+
+! Compute dP/dt for each pressure ZONE
+
+IF (N_ZONE>0) THEN
+
+   IF (PREDICTOR) D_PBAR_DT_P => M%D_PBAR_DT_S
+   IF (CORRECTOR) D_PBAR_DT_P => M%D_PBAR_DT
+
+   DO IPZ=1,N_ZONE
+      IF (ABS(PSUM(IPZ)) > TWENTY_EPSILON_EB) D_PBAR_DT_P(IPZ) = (DSUM(IPZ) - USUM(IPZ))/PSUM(IPZ)
+      IF (CORRECTOR) P_ZONE(IPZ)%DPSTAR =  D_PBAR_DT_P(IPZ)
+   ENDDO
+
+ENDIF
+
+! CC_IBM: compute linked velocities
+IF (CC_IBM) CALL GET_LINKED_VELOCITIES(NM,CORRECTOR,CMP_FLG=.FALSE.)
+
+END SUBROUTINE DIVERGENCE_PART_2_PREPROCESSING
+
+
+!> \brief Block kernel for DIVERGENCE_PART_2 — processes K-range [K1,K2].
+!> Requires DIVERGENCE_PART_2_PREPROCESSING to have been called first.
+!> Computes pressure zone DP contribution, solid cell zeroing, BC_LOOP,
+!> DIV computation, and DDDT for the given K-range.
+!> \param M Mesh data structure
+!> \param DT Time step (s)
+!> \param NM Mesh number
+!> \param K1 K-range start (1-based inclusive)
+!> \param K2 K-range end (1-based inclusive)
+
+RECURSIVE SUBROUTINE DIVERGENCE_PART_2_BLOCK_KERNEL(M,DT,NM,K1,K2)
+
+USE COMPLEX_GEOMETRY, ONLY : CC_CGSC, CC_UNKZ, CC_SOLID, CC_CUTCFE
+USE CC_PRESSURE_KERNELS, ONLY : ADD_CUTCELL_D_PBAR_DT, &
+   ADD_LINKEDCELL_D_PBAR_DT
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM,K1,K2
+REAL(EB), INTENT(IN) :: DT
+REAL(EB), POINTER, DIMENSION(:,:,:) :: DP,RTRM,DIV
+REAL(EB) :: RDT,UN_P
+REAL(EB), POINTER, DIMENSION(:) :: D_PBAR_DT_P
+REAL(EB), POINTER, DIMENSION(:,:) :: PBAR_P
+INTEGER :: IW,IC,I,J,K,IPZ,K_MIN
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+TYPE(BOUNDARY_PROP1_TYPE), POINTER :: B1
+
+IF (SOLID_PHASE_ONLY) RETURN
+IF (PERIODIC_TEST==3) RETURN
+IF (PERIODIC_TEST==4) RETURN
+
+RDT = 1._EB/DT
+
+SELECT CASE(PREDICTOR)
+   CASE(.TRUE.)
+      DP => M%DS
+      PBAR_P => M%PBAR_S
+   CASE(.FALSE.)
+      DP => M%D
+      PBAR_P => M%PBAR
+END SELECT
+
+RTRM => M%WORK1
+
+! Add pressure derivative to divergence (K-restricted)
+
+IF (N_ZONE>0) THEN
+
+   IF (PREDICTOR) D_PBAR_DT_P => M%D_PBAR_DT_S
+   IF (CORRECTOR) D_PBAR_DT_P => M%D_PBAR_DT
+
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IPZ = M%PRESSURE_ZONE(I,J,K)
+            IF (IPZ<1) CYCLE
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            DP(I,J,K) = DP(I,J,K) - (M%R_PBAR(K,IPZ)-RTRM(I,J,K))*D_PBAR_DT_P(IPZ)
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDIF
+
+! Zero out divergence in solid cells (K-restricted)
+
+DO K=K1,K2
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         IC = M%CELL_INDEX(I,J,K)
+         IF (M%CELL(IC)%SOLID) DP(I,J,K) = 0._EB
+      ENDDO
+   ENDDO
+ENDDO
+
+! Specify divergence in boundary cells to account for volume being generated at the walls (K-filtered)
+! First block includes K=0 ghost cells; last block includes K=KBP1 ghost cells.
+
+K_MIN = MERGE(0, K1, K1==1)
+
+BC_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
+   WC => M%WALL(IW)
+   IF (WC%BOUNDARY_TYPE==NULL_BOUNDARY) CYCLE BC_LOOP
+   BC=>M%BOUNDARY_COORD(WC%BC_INDEX)
+
+   ! K-filter: skip wall cells outside this block's range
+   IF (BC%KK < K_MIN .OR. BC%KK > K2) CYCLE BC_LOOP
+   ! Also skip KBP1 ghost cells unless this is the last block
+   IF (BC%KK > M%KBAR .AND. K2 < M%KBAR) CYCLE BC_LOOP
+
+   SELECT CASE (WC%BOUNDARY_TYPE)
+      CASE (SOLID_BOUNDARY)
+         IF (.NOT.M%CELL(M%CELL_INDEX(BC%II,BC%JJ,BC%KK))%SOLID) CYCLE BC_LOOP
+         B1 => M%BOUNDARY_PROP1(WC%BC_INDEX)
+         IF (PREDICTOR) THEN
+            UN_P = B1%U_NORMAL_S
+         ELSE
+            UN_P = B1%U_NORMAL
+         ENDIF
+         SELECT CASE(BC%IOR)
+            CASE( 1)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDX(BC%II)*M%RRN(BC%II)*M%R(BC%II)
+            CASE(-1)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDX(BC%II)*M%RRN(BC%II)*M%R(BC%II-1)
+            CASE( 2)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDY(BC%JJ)
+            CASE(-2)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDY(BC%JJ)
+            CASE( 3)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDZ(BC%KK)
+            CASE(-3)
+               DP(BC%II,BC%JJ,BC%KK) = DP(BC%II,BC%JJ,BC%KK) - UN_P*M%RDZ(BC%KK)
+         END SELECT
+      CASE (OPEN_BOUNDARY,MIRROR_BOUNDARY,INTERPOLATED_BOUNDARY)
+         DP(BC%II,BC%JJ,BC%KK) = DP(BC%IIG,BC%JJG,BC%KKG)
+   END SELECT
+ENDDO BC_LOOP
+
+! Compute time derivative of the divergence, dD/dt (K-restricted)
+
+DIV=>M%WORK1
+
+IF (PREDICTOR) THEN
+   DO K = K1,K2
+      DO J = 1,M%JBAR
+         DO I = 1,M%IBAR
+            DIV(I,J,K) = (M%R(I)*M%U(I,J,K)-M%R(I-1)*M%U(I-1,J,K))*M%RDX(I)*M%RRN(I) + (M%V(I,J,K)-M%V(I,J-1,K))*M%RDY(J) + &
+                         (M%W(I,J,K)-M%W(I,J,K-1))*M%RDZ(K)
+         ENDDO
+      ENDDO
+   ENDDO
+   DO K = K1,K2
+      DO J = 1,M%JBAR
+         DO I = 1,M%IBAR
+            M%DDDT(I,J,K) = (DP(I,J,K)-DIV(I,J,K))*RDT
+         ENDDO
+      ENDDO
+   ENDDO
+ELSEIF (CORRECTOR) THEN
+   DO K = K1,K2
+      DO J = 1,M%JBAR
+         DO I = 1,M%IBAR
+            DIV(I,J,K) = (M%R(I)*M%U(I,J,K) -M%R(I-1)*M%U(I-1,J,K)) *M%RDX(I)*M%RRN(I) + (M%V(I,J,K)- M%V(I,J-1,K)) *M%RDY(J) + &
+                         (M%W(I,J,K) -M%W(I,J,K-1)) *M%RDZ(K) &
+                       + (M%R(I)*M%US(I,J,K)-M%R(I-1)*M%US(I-1,J,K))*M%RDX(I)*M%RRN(I) + (M%VS(I,J,K)-M%VS(I,J-1,K))*M%RDY(J) + &
+                         (M%WS(I,J,K)-M%WS(I,J,K-1))*M%RDZ(K)
+         ENDDO
+      ENDDO
+   ENDDO
+   DO K = K1,K2
+      DO J = 1,M%JBAR
+         DO I = 1,M%IBAR
+            M%DDDT(I,J,K) = (2._EB*DP(I,J,K)-DIV(I,J,K))*RDT
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
+
+END SUBROUTINE DIVERGENCE_PART_2_BLOCK_KERNEL
 
 
 

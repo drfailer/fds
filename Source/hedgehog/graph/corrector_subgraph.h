@@ -20,6 +20,7 @@
 #include "compute_viscosity_block_subgraph.h"
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
+#include "divergence_part2_block_subgraph.h"
 #include "../task/velocity_corrector_kernel_task.h"
 #include "velocity_corrector_block_subgraph.h"
 #include "particle_momentum_block_subgraph.h"
@@ -60,6 +61,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto corrCondensKernelTask = std::make_shared<CorrCondensKernelTask>(kernelThreads);
     auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(kernelThreads);
     auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
+    bool canBlockDivP2 = fds_divergence_part_2_can_block_decompose() != 0 && numBlocks > 1;
 
     // Viscosity block decomposition: if non-DEARDORFF/DYNSMAG/CC_IBM, use K-block parallel
     bool canBlockVisc = fds_compute_viscosity_can_block_decompose() != 0;
@@ -210,9 +212,16 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
     subgraph->edges(corrDivCollectorSM, corrDivExchangeTask);
 
-    // CorrDivPart2 -> Pressure
-    subgraph->edges(corrDivExchangeTask, corrDivP2KernelTask);
-    subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
+    // CorrDivPart2 -> Pressure (block-decomposed or mesh-level)
+    if (canBlockDivP2) {
+        auto corrDivP2BlockSubgraph = buildDivergencePart2BlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(corrDivExchangeTask, corrDivP2BlockSubgraph);
+        subgraph->edges(corrDivP2BlockSubgraph, corrPressureCollectorSM);
+    } else {
+        subgraph->edges(corrDivExchangeTask, corrDivP2KernelTask);
+        subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
+    }
 
     // Pressure iteration: parallel sub-graph or sequential fallback
     // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)

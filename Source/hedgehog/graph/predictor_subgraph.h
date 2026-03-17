@@ -18,6 +18,7 @@
 #include "compute_viscosity_block_subgraph.h"
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
+#include "divergence_part2_block_subgraph.h"
 #include "../task/velocity_predictor_kernel_task.h"
 #include "velocity_predictor_block_subgraph.h"
 #include "change_timestep_subgraph.h"
@@ -77,6 +78,8 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
 
     // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
+    // Block decomposition: if non-CC_IBM, use K-block parallel
+    bool canBlockDivP2 = fds_divergence_part_2_can_block_decompose() != 0 && numBlocks > 1;
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
     // VelocityPredictor: block-decomposed kernel (+ CC post-processing collector if CC_IBM)
@@ -177,9 +180,16 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
     subgraph->edges(predDivCollectorSM, predDivExchangeTask);
 
-    // PredDivPart2 -> Pressure
-    subgraph->edges(predDivExchangeTask, predDivP2KernelTask);
-    subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
+    // PredDivPart2 -> Pressure (block-decomposed or mesh-level)
+    if (canBlockDivP2) {
+        auto predDivP2BlockSubgraph = buildDivergencePart2BlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(predDivExchangeTask, predDivP2BlockSubgraph);
+        subgraph->edges(predDivP2BlockSubgraph, predPressureCollectorSM);
+    } else {
+        subgraph->edges(predDivExchangeTask, predDivP2KernelTask);
+        subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
+    }
 
     // Pressure iteration: parallel sub-graph or sequential fallback
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
