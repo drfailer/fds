@@ -11,9 +11,11 @@
 #include "../state/velocity_predictor_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
+#include "../task/mass_fd_kernel_task.h"
 #include "../task/density_pred_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/pred_wall_div_kernel_task.h"
+#include "compute_viscosity_block_subgraph.h"
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
@@ -50,6 +52,9 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(kernelThreads);
+
+    // Viscosity block decomposition: if non-DEARDORFF/DYNSMAG/CC_IBM, use K-block parallel
+    bool canBlockVisc = fds_compute_viscosity_can_block_decompose() != 0;
 
     // DensityPred: parallel DENSITY_KERNEL
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
@@ -115,9 +120,20 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     subgraph->inputs(predStep1OrchSM);
 
-    // PredStep1: orchestrator (INSERT_ALL_PARTICLES) -> parallel kernel -> DensityPred
-    subgraph->edges(predStep1OrchSM, predStep1KernelTask);
-    subgraph->edges(predStep1KernelTask, densPredKernelTask);
+    // PredStep1: orchestrator (INSERT_ALL_PARTICLES) -> viscosity -> mass_fd -> DensityPred
+    if (canBlockVisc) {
+        // Block-decomposed viscosity -> separate mass_fd task
+        auto predViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
+            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
+        auto predMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
+        subgraph->edges(predStep1OrchSM, predViscBlockSubgraph);
+        subgraph->edges(predViscBlockSubgraph, predMassFDKernelTask);
+        subgraph->edges(predMassFDKernelTask, densPredKernelTask);
+    } else {
+        // Mesh-level fallback: combined viscosity + mass_fd
+        subgraph->edges(predStep1OrchSM, predStep1KernelTask);
+        subgraph->edges(predStep1KernelTask, densPredKernelTask);
+    }
 
     // DensityPred -> MESH_EXCHANGE(1)
     subgraph->edges(densPredKernelTask, collector1SM);

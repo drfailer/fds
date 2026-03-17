@@ -16,7 +16,8 @@ PRIVATE
 PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_PREDICTOR_BLOCK_KERNEL, &
        VELOCITY_CORRECTOR_KERNEL,VELOCITY_CORRECTOR_BLOCK_KERNEL,VELOCITY_FLUX_KERNEL, &
        VELOCITY_FLUX_BLOCK_KERNEL, &
-       COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
+       COMPUTE_VISCOSITY_KERNEL,COMPUTE_VISCOSITY_BLOCK_KERNEL,COMPUTE_VISCOSITY_POST_BLOCK, &
+       CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
        MATCH_VELOCITY_KERNEL,NO_FLUX_KERNEL,MATCH_VELOCITY_FLUX_KERNEL
 
 CONTAINS
@@ -1702,6 +1703,465 @@ ENDDO WALL_LOOP_SR
 END SUBROUTINE COMPUTE_STRAIN_RATE
 
 END SUBROUTINE COMPUTE_VISCOSITY_KERNEL
+
+
+!> \brief Block-decomposed viscosity: computes MU_DNS, STRAIN_RATE, turb MU, KRES for K-range [K1, K2].
+!> \details Only includes main cell loops for non-DEARDORFF/DYNSMAG turb models.
+!> Wall loops and corner mirroring are excluded — caller must run POST_BLOCK after all blocks complete.
+!> Features requiring mesh-level execution (DEARDORFF, DYNSMAG, CC_IBM) are excluded.
+!> \param M Mesh data structure
+!> \param NM Mesh number
+!> \param APPLY_TO_ESTIMATED_VARIABLES Flag for estimated (starred) variables
+!> \param K1 Start of K cell range (1-based inclusive)
+!> \param K2 End of K cell range (1-based inclusive)
+
+RECURSIVE SUBROUTINE COMPUTE_VISCOSITY_BLOCK_KERNEL(M,NM,APPLY_TO_ESTIMATED_VARIABLES,K1,K2)
+
+USE PHYSICAL_FUNCTIONS, ONLY: GET_VISCOSITY
+USE TURB_KERNELS, ONLY: WALE_VISCOSITY
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM,K1,K2
+LOGICAL, INTENT(IN) :: APPLY_TO_ESTIMATED_VARIABLES
+REAL(EB), ALLOCATABLE, DIMENSION(:) :: ZZ_GET
+REAL(EB) :: NU_EDDY,DELTA,U2,V2,W2,AA,A_IJ(3,3),BB,B_IJ(3,3), &
+            DUDX,DUDY,DUDZ,DVDX,DVDY,DVDZ,DWDX,DWDY,DWDZ, &
+            S11,S22,S33,S12,S13,S23,ONTHDIV
+INTEGER :: I,J,K,II,JJ
+REAL(EB), POINTER, DIMENSION(:,:,:) :: RHOP,UU,VV,WW
+REAL(EB), POINTER, DIMENSION(:,:,:,:) :: ZZP
+
+IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
+   RHOP => M%RHOS
+   UU   => M%US
+   VV   => M%VS
+   WW   => M%WS
+   ZZP  => M%ZZS
+ELSE
+   RHOP => M%RHO
+   UU   => M%U
+   VV   => M%V
+   WW   => M%W
+   ZZP  => M%ZZ
+ENDIF
+
+! Compute viscosity for DNS using primitive species (K=K1:K2)
+
+IF (SIM_MODE==SVLES_MODE) THEN
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            M%MU_DNS(I,J,K) = MU_AIR_0
+         ENDDO
+      ENDDO
+   ENDDO
+ELSE
+   ALLOCATE(ZZ_GET(1:N_TRACKED_SPECIES))
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            ZZ_GET(1:N_TRACKED_SPECIES) = ZZP(I,J,K,1:N_TRACKED_SPECIES)
+            CALL GET_VISCOSITY(ZZ_GET,M%MU_DNS(I,J,K),M%TMP(I,J,K))
+         ENDDO
+      ENDDO
+   ENDDO
+   DEALLOCATE(ZZ_GET)
+ENDIF
+
+! Compute strain rate (K=K1:K2) — inlined from COMPUTE_STRAIN_RATE
+! Reads UU/VV/WW stencil at K-1:K+1 (read-only, safe for parallel blocks)
+
+DO K=K1,K2
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         DUDX = M%RDX(I)*(UU(I,J,K)-UU(I-1,J,K))
+         DVDY = M%RDY(J)*(VV(I,J,K)-VV(I,J-1,K))
+         DWDZ = M%RDZ(K)*(WW(I,J,K)-WW(I,J,K-1))
+         DUDY = 0.25_EB*M%RDY(J)*(UU(I,J+1,K)-UU(I,J-1,K) &
+                +UU(I-1,J+1,K)-UU(I-1,J-1,K))
+         DUDZ = 0.25_EB*M%RDZ(K)*(UU(I,J,K+1)-UU(I,J,K-1) &
+                +UU(I-1,J,K+1)-UU(I-1,J,K-1))
+         DVDX = 0.25_EB*M%RDX(I)*(VV(I+1,J,K)-VV(I-1,J,K) &
+                +VV(I+1,J-1,K)-VV(I-1,J-1,K))
+         DVDZ = 0.25_EB*M%RDZ(K)*(VV(I,J,K+1)-VV(I,J,K-1) &
+                +VV(I,J-1,K+1)-VV(I,J-1,K-1))
+         DWDX = 0.25_EB*M%RDX(I)*(WW(I+1,J,K)-WW(I-1,J,K) &
+                +WW(I+1,J,K-1)-WW(I-1,J,K-1))
+         DWDY = 0.25_EB*M%RDY(J)*(WW(I,J+1,K)-WW(I,J-1,K) &
+                +WW(I,J+1,K-1)-WW(I,J-1,K-1))
+         ONTHDIV = ONTH*(DUDX+DVDY+DWDZ)
+         S11 = DUDX - ONTHDIV
+         S22 = DVDY - ONTHDIV
+         S33 = DWDZ - ONTHDIV
+         S12 = 0.5_EB*(DUDY+DVDX)
+         S13 = 0.5_EB*(DUDZ+DWDX)
+         S23 = 0.5_EB*(DVDZ+DWDY)
+         M%STRAIN_RATE(I,J,K) = SQRT(2._EB*(S11**2+S22**2+S33**2 &
+                                +2._EB*(S12**2+S13**2+S23**2)))
+      ENDDO
+   ENDDO
+ENDDO
+
+! Compute turbulent viscosity (K=K1:K2)
+
+SELECT CASE (TURB_MODEL)
+
+   CASE (NO_TURB_MODEL)
+
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               M%MU(I,J,K) = M%MU_DNS(I,J,K)
+            ENDDO
+         ENDDO
+      ENDDO
+
+   CASE (CONSMAG)
+
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               M%MU(I,J,K) = M%MU_DNS(I,J,K) &
+                  + RHOP(I,J,K)*M%CSD2(I,J,K)*M%STRAIN_RATE(I,J,K)
+            ENDDO
+         ENDDO
+      ENDDO
+
+   CASE (VREMAN)
+
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DUDX = M%RDX(I)*(UU(I,J,K)-UU(I-1,J,K))
+               DVDY = M%RDY(J)*(VV(I,J,K)-VV(I,J-1,K))
+               DWDZ = M%RDZ(K)*(WW(I,J,K)-WW(I,J,K-1))
+               DUDY = 0.25_EB*M%RDY(J)*(UU(I,J+1,K)-UU(I,J-1,K) &
+                      +UU(I-1,J+1,K)-UU(I-1,J-1,K))
+               DUDZ = 0.25_EB*M%RDZ(K)*(UU(I,J,K+1)-UU(I,J,K-1) &
+                      +UU(I-1,J,K+1)-UU(I-1,J,K-1))
+               DVDX = 0.25_EB*M%RDX(I)*(VV(I+1,J,K)-VV(I-1,J,K) &
+                      +VV(I+1,J-1,K)-VV(I-1,J-1,K))
+               DVDZ = 0.25_EB*M%RDZ(K)*(VV(I,J,K+1)-VV(I,J,K-1) &
+                      +VV(I,J-1,K+1)-VV(I,J-1,K-1))
+               DWDX = 0.25_EB*M%RDX(I)*(WW(I+1,J,K)-WW(I-1,J,K) &
+                      +WW(I+1,J,K-1)-WW(I-1,J,K-1))
+               DWDY = 0.25_EB*M%RDY(J)*(WW(I,J+1,K)-WW(I,J-1,K) &
+                      +WW(I,J+1,K-1)-WW(I,J-1,K-1))
+
+               A_IJ(1,1)=DUDX; A_IJ(2,1)=DUDY; A_IJ(3,1)=DUDZ
+               A_IJ(1,2)=DVDX; A_IJ(2,2)=DVDY; A_IJ(3,2)=DVDZ
+               A_IJ(1,3)=DWDX; A_IJ(2,3)=DWDY; A_IJ(3,3)=DWDZ
+
+               AA=0._EB
+               DO JJ=1,3
+                  DO II=1,3
+                     AA = AA + A_IJ(II,JJ)*A_IJ(II,JJ)
+                  ENDDO
+               ENDDO
+
+               B_IJ(1,1)=(M%DX(I)*A_IJ(1,1))**2 &
+                  + (M%DY(J)*A_IJ(2,1))**2 + (M%DZ(K)*A_IJ(3,1))**2
+               B_IJ(2,2)=(M%DX(I)*A_IJ(1,2))**2 &
+                  + (M%DY(J)*A_IJ(2,2))**2 + (M%DZ(K)*A_IJ(3,2))**2
+               B_IJ(3,3)=(M%DX(I)*A_IJ(1,3))**2 &
+                  + (M%DY(J)*A_IJ(2,3))**2 + (M%DZ(K)*A_IJ(3,3))**2
+
+               B_IJ(1,2)=M%DX(I)**2*A_IJ(1,1)*A_IJ(1,2) &
+                  + M%DY(J)**2*A_IJ(2,1)*A_IJ(2,2) &
+                  + M%DZ(K)**2*A_IJ(3,1)*A_IJ(3,2)
+               B_IJ(1,3)=M%DX(I)**2*A_IJ(1,1)*A_IJ(1,3) &
+                  + M%DY(J)**2*A_IJ(2,1)*A_IJ(2,3) &
+                  + M%DZ(K)**2*A_IJ(3,1)*A_IJ(3,3)
+               B_IJ(2,3)=M%DX(I)**2*A_IJ(1,2)*A_IJ(1,3) &
+                  + M%DY(J)**2*A_IJ(2,2)*A_IJ(2,3) &
+                  + M%DZ(K)**2*A_IJ(3,2)*A_IJ(3,3)
+
+               BB = B_IJ(1,1)*B_IJ(2,2) - B_IJ(1,2)**2 &
+                  + B_IJ(1,1)*B_IJ(3,3) - B_IJ(1,3)**2 &
+                  + B_IJ(2,2)*B_IJ(3,3) - B_IJ(2,3)**2
+
+               IF (ABS(AA)>TWENTY_EPSILON_EB &
+                   .AND. BB>TWENTY_EPSILON_EB) THEN
+                  NU_EDDY = C_VREMAN*SQRT(BB/AA)
+               ELSE
+                  NU_EDDY=0._EB
+               ENDIF
+
+               M%MU(I,J,K) = M%MU_DNS(I,J,K) + RHOP(I,J,K)*NU_EDDY
+
+            ENDDO
+         ENDDO
+      ENDDO
+
+   CASE (WALE)
+
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DELTA = M%LES_FILTER_WIDTH(I,J,K)
+               DUDX = M%RDX(I)*(UU(I,J,K)-UU(I-1,J,K))
+               DVDY = M%RDY(J)*(VV(I,J,K)-VV(I,J-1,K))
+               DWDZ = M%RDZ(K)*(WW(I,J,K)-WW(I,J,K-1))
+               DUDY = 0.25_EB*M%RDY(J)*(UU(I,J+1,K)-UU(I,J-1,K) &
+                      +UU(I-1,J+1,K)-UU(I-1,J-1,K))
+               DUDZ = 0.25_EB*M%RDZ(K)*(UU(I,J,K+1)-UU(I,J,K-1) &
+                      +UU(I-1,J,K+1)-UU(I-1,J,K-1))
+               DVDX = 0.25_EB*M%RDX(I)*(VV(I+1,J,K)-VV(I-1,J,K) &
+                      +VV(I+1,J-1,K)-VV(I-1,J-1,K))
+               DVDZ = 0.25_EB*M%RDZ(K)*(VV(I,J,K+1)-VV(I,J,K-1) &
+                      +VV(I,J-1,K+1)-VV(I,J-1,K-1))
+               DWDX = 0.25_EB*M%RDX(I)*(WW(I+1,J,K)-WW(I-1,J,K) &
+                      +WW(I+1,J,K-1)-WW(I-1,J,K-1))
+               DWDY = 0.25_EB*M%RDY(J)*(WW(I,J+1,K)-WW(I,J-1,K) &
+                      +WW(I,J+1,K-1)-WW(I,J-1,K-1))
+               A_IJ(1,1)=DUDX; A_IJ(1,2)=DUDY; A_IJ(1,3)=DUDZ
+               A_IJ(2,1)=DVDX; A_IJ(2,2)=DVDY; A_IJ(2,3)=DVDZ
+               A_IJ(3,1)=DWDX; A_IJ(3,2)=DWDY; A_IJ(3,3)=DWDZ
+               CALL WALE_VISCOSITY(NU_EDDY,A_IJ,DELTA)
+               M%MU(I,J,K) = M%MU_DNS(I,J,K) + RHOP(I,J,K)*NU_EDDY
+            ENDDO
+         ENDDO
+      ENDDO
+
+END SELECT
+
+! Compute resolved kinetic energy per unit mass (K=K1:K2)
+
+DO K=K1,K2
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         U2 = 0.25_EB*(UU(I-1,J,K)+UU(I,J,K))**2
+         V2 = 0.25_EB*(VV(I,J-1,K)+VV(I,J,K))**2
+         W2 = 0.25_EB*(WW(I,J,K-1)+WW(I,J,K))**2
+         M%KRES(I,J,K) = 0.5_EB*(U2+V2+W2)
+      ENDDO
+   ENDDO
+ENDDO
+
+END SUBROUTINE COMPUTE_VISCOSITY_BLOCK_KERNEL
+
+
+!> \brief Post-processing for block-decomposed viscosity: wall loops and corner mirroring.
+!> \details Must be called sequentially after all blocks have completed.
+!> Runs STRAIN_RATE wall corrections, MU wall loop, and MU/KRES corner mirroring.
+!> \param M Mesh data structure
+!> \param NM Mesh number
+!> \param APPLY_TO_ESTIMATED_VARIABLES Flag for estimated (starred) variables
+
+RECURSIVE SUBROUTINE COMPUTE_VISCOSITY_POST_BLOCK(M,NM,APPLY_TO_ESTIMATED_VARIABLES)
+
+USE PHYSICAL_FUNCTIONS, ONLY: GET_VISCOSITY
+USE TURB_KERNELS, ONLY: WALE_VISCOSITY
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+LOGICAL, INTENT(IN) :: APPLY_TO_ESTIMATED_VARIABLES
+REAL(EB) :: NU_EDDY,DELTA,VDF,WGT,A_IJ(3,3), &
+            DUDX,DUDY,DUDZ,DVDX,DVDY,DVDZ,DWDX,DWDY,DWDZ, &
+            S11,S22,S33,S12,S13,S23,ONTHDIV
+REAL(EB), PARAMETER :: RAPLUS=1._EB/26._EB
+INTEGER :: IIG,JJG,KKG,II,JJ,KK,IW,IOR,IC,SURF_INDEX
+REAL(EB), POINTER, DIMENSION(:,:,:) :: RHOP,UU,VV,WW
+INTEGER, POINTER, DIMENSION(:,:,:) :: CELL_COUNTER
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+TYPE(BOUNDARY_PROP1_TYPE), POINTER :: B1
+TYPE(BOUNDARY_PROP2_TYPE), POINTER :: B2
+TYPE(SURFACE_TYPE), POINTER :: SF
+
+IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
+   RHOP => M%RHOS
+   UU   => M%US
+   VV   => M%VS
+   WW   => M%WS
+ELSE
+   RHOP => M%RHO
+   UU   => M%U
+   VV   => M%V
+   WW   => M%W
+ENDIF
+
+! Strain rate wall loop (overwrites values near solid walls)
+
+WALL_LOOP_SR: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
+   WC=>M%WALL(IW)
+   IF (WC%BOUNDARY_TYPE/=SOLID_BOUNDARY) CYCLE WALL_LOOP_SR
+
+   BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+   SURF_INDEX = WC%SURF_INDEX
+   IIG = BC%IIG
+   JJG = BC%JJG
+   KKG = BC%KKG
+   IOR = BC%IOR
+
+   IF (IW>M%N_EXTERNAL_WALL_CELLS) THEN
+      SELECT CASE(IOR)
+         CASE( 1); IF (IIG>M%IBAR) CYCLE WALL_LOOP_SR
+         CASE(-1); IF (IIG<1)      CYCLE WALL_LOOP_SR
+         CASE( 2); IF (JJG>M%JBAR) CYCLE WALL_LOOP_SR
+         CASE(-2); IF (JJG<1)      CYCLE WALL_LOOP_SR
+         CASE( 3); IF (KKG>M%KBAR) CYCLE WALL_LOOP_SR
+         CASE(-3); IF (KKG<1)      CYCLE WALL_LOOP_SR
+      END SELECT
+   ENDIF
+
+   DUDX = M%RDX(IIG)*(UU(IIG,JJG,KKG)-UU(IIG-1,JJG,KKG))
+   DVDY = M%RDY(JJG)*(VV(IIG,JJG,KKG)-VV(IIG,JJG-1,KKG))
+   DWDZ = M%RDZ(KKG)*(WW(IIG,JJG,KKG)-WW(IIG,JJG,KKG-1))
+   ONTHDIV = ONTH*(DUDX+DVDY+DWDZ)
+   S11 = DUDX - ONTHDIV
+   S22 = DVDY - ONTHDIV
+   S33 = DWDZ - ONTHDIV
+
+   DUDY = 0.25_EB*M%RDY(JJG)*(UU(IIG,JJG+1,KKG) &
+          -UU(IIG,JJG-1,KKG)+UU(IIG-1,JJG+1,KKG) &
+          -UU(IIG-1,JJG-1,KKG))
+   DUDZ = 0.25_EB*M%RDZ(KKG)*(UU(IIG,JJG,KKG+1) &
+          -UU(IIG,JJG,KKG-1)+UU(IIG-1,JJG,KKG+1) &
+          -UU(IIG-1,JJG,KKG-1))
+   DVDX = 0.25_EB*M%RDX(IIG)*(VV(IIG+1,JJG,KKG) &
+          -VV(IIG-1,JJG,KKG)+VV(IIG+1,JJG-1,KKG) &
+          -VV(IIG-1,JJG-1,KKG))
+   DVDZ = 0.25_EB*M%RDZ(KKG)*(VV(IIG,JJG,KKG+1) &
+          -VV(IIG,JJG,KKG-1)+VV(IIG,JJG-1,KKG+1) &
+          -VV(IIG,JJG-1,KKG-1))
+   DWDX = 0.25_EB*M%RDX(IIG)*(WW(IIG+1,JJG,KKG) &
+          -WW(IIG-1,JJG,KKG)+WW(IIG+1,JJG,KKG-1) &
+          -WW(IIG-1,JJG,KKG-1))
+   DWDY = 0.25_EB*M%RDY(JJG)*(WW(IIG,JJG+1,KKG) &
+          -WW(IIG,JJG-1,KKG)+WW(IIG,JJG+1,KKG-1) &
+          -WW(IIG,JJG-1,KKG-1))
+
+   S12 = 0.5_EB*(DUDY+DVDX)
+   S13 = 0.5_EB*(DUDZ+DWDX)
+   S23 = 0.5_EB*(DVDZ+DWDY)
+
+   M%STRAIN_RATE(IIG,JJG,KKG) = SQRT(2._EB*(S11**2+S22**2 &
+      +S33**2+2._EB*(S12**2+S13**2+S23**2)))
+ENDDO WALL_LOOP_SR
+
+! Mirror viscosity into solids and exterior boundary cells
+
+CELL_COUNTER => M%IWORK1 ; CELL_COUNTER = 0
+
+WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
+
+   WC=>M%WALL(IW)
+   IF (WC%BOUNDARY_TYPE==NULL_BOUNDARY) CYCLE WALL_LOOP
+   BC=>M%BOUNDARY_COORD(WC%BC_INDEX)
+   B1=>M%BOUNDARY_PROP1(WC%B1_INDEX)
+   B2=>M%BOUNDARY_PROP2(WC%B2_INDEX)
+   II  = BC%II
+   JJ  = BC%JJ
+   KK  = BC%KK
+   IC  = M%CELL_INDEX(II,JJ,KK)
+   IOR = BC%IOR
+   IIG = BC%IIG
+   JJG = BC%JJG
+   KKG = BC%KKG
+   SF=>SURFACE(WC%SURF_INDEX)
+
+   IF (M%CELL(IC)%SOLID .OR. M%CELL(IC)%EXTERIOR) &
+      M%KRES(II,JJ,KK) = M%KRES(IIG,JJG,KKG)
+
+   SELECT CASE(WC%BOUNDARY_TYPE)
+
+      CASE(SOLID_BOUNDARY)
+
+         IF (SIM_MODE/=DNS_MODE) THEN
+            DELTA = M%LES_FILTER_WIDTH(IIG,JJG,KKG)
+            SELECT CASE(SF%NEAR_WALL_TURB_MODEL)
+               CASE DEFAULT
+                  NU_EDDY = 0._EB
+               CASE(CONSTANT_EDDY_VISCOSITY)
+                  NU_EDDY = SF%NEAR_WALL_EDDY_VISCOSITY
+               CASE(CONSMAG)
+                  VDF = 1._EB-EXP(-B2%Y_PLUS*RAPLUS)
+                  NU_EDDY = (VDF*C_SMAGORINSKY*DELTA)**2 &
+                     *M%STRAIN_RATE(IIG,JJG,KKG)
+               CASE(WALE)
+                  DUDX = M%RDX(IIG)*(UU(IIG,JJG,KKG) &
+                         -UU(IIG-1,JJG,KKG))
+                  DVDY = M%RDY(JJG)*(VV(IIG,JJG,KKG) &
+                         -VV(IIG,JJG-1,KKG))
+                  DWDZ = M%RDZ(KKG)*(WW(IIG,JJG,KKG) &
+                         -WW(IIG,JJG,KKG-1))
+                  DUDY = 0.25_EB*M%RDY(JJG) &
+                     *(UU(IIG,JJG+1,KKG)-UU(IIG,JJG-1,KKG) &
+                      +UU(IIG-1,JJG+1,KKG)-UU(IIG-1,JJG-1,KKG))
+                  DUDZ = 0.25_EB*M%RDZ(KKG) &
+                     *(UU(IIG,JJG,KKG+1)-UU(IIG,JJG,KKG-1) &
+                      +UU(IIG-1,JJG,KKG+1)-UU(IIG-1,JJG,KKG-1))
+                  DVDX = 0.25_EB*M%RDX(IIG) &
+                     *(VV(IIG+1,JJG,KKG)-VV(IIG-1,JJG,KKG) &
+                      +VV(IIG+1,JJG-1,KKG)-VV(IIG-1,JJG-1,KKG))
+                  DVDZ = 0.25_EB*M%RDZ(KKG) &
+                     *(VV(IIG,JJG,KKG+1)-VV(IIG,JJG,KKG-1) &
+                      +VV(IIG,JJG-1,KKG+1)-VV(IIG,JJG-1,KKG-1))
+                  DWDX = 0.25_EB*M%RDX(IIG) &
+                     *(WW(IIG+1,JJG,KKG)-WW(IIG-1,JJG,KKG) &
+                      +WW(IIG+1,JJG,KKG-1)-WW(IIG-1,JJG,KKG-1))
+                  DWDY = 0.25_EB*M%RDY(JJG) &
+                     *(WW(IIG,JJG+1,KKG)-WW(IIG,JJG-1,KKG) &
+                      +WW(IIG,JJG+1,KKG-1)-WW(IIG,JJG-1,KKG-1))
+                  A_IJ(1,1)=DUDX; A_IJ(1,2)=DUDY; A_IJ(1,3)=DUDZ
+                  A_IJ(2,1)=DVDX; A_IJ(2,2)=DVDY; A_IJ(2,3)=DVDZ
+                  A_IJ(3,1)=DWDX; A_IJ(3,2)=DWDY; A_IJ(3,3)=DWDZ
+                  CALL WALE_VISCOSITY(NU_EDDY,A_IJ,DELTA)
+            END SELECT
+            IF (CELL_COUNTER(IIG,JJG,KKG)==0) M%MU(IIG,JJG,KKG) = 0._EB
+            CELL_COUNTER(IIG,JJG,KKG) = CELL_COUNTER(IIG,JJG,KKG) + 1
+            WGT = 1._EB/REAL(CELL_COUNTER(IIG,JJG,KKG),EB)
+            M%MU(IIG,JJG,KKG) = (1._EB-WGT)*M%MU(IIG,JJG,KKG) &
+               + WGT*(M%MU_DNS(IIG,JJG,KKG) &
+               + RHOP(IIG,JJG,KKG)*NU_EDDY)
+         ELSE
+            M%MU(IIG,JJG,KKG) = M%MU_DNS(IIG,JJG,KKG)
+         ENDIF
+
+         IF (M%CELL(M%CELL_INDEX(II,JJ,KK))%SOLID) &
+            M%MU(II,JJ,KK) = M%MU(IIG,JJG,KKG)
+
+      CASE(OPEN_BOUNDARY,MIRROR_BOUNDARY)
+
+         M%MU(II,JJ,KK) = M%MU(IIG,JJG,KKG)
+
+   END SELECT
+
+ENDDO WALL_LOOP
+
+! Corner mirroring for MU
+
+M%MU(   0,0:M%JBP1,   0) = M%MU(   1,0:M%JBP1,1)
+M%MU(M%IBP1,0:M%JBP1,   0) = M%MU(M%IBAR,0:M%JBP1,1)
+M%MU(M%IBP1,0:M%JBP1,M%KBP1) = M%MU(M%IBAR,0:M%JBP1,M%KBAR)
+M%MU(   0,0:M%JBP1,M%KBP1) = M%MU(   1,0:M%JBP1,M%KBAR)
+M%MU(0:M%IBP1,   0,   0) = M%MU(0:M%IBP1,   1,1)
+M%MU(0:M%IBP1,M%JBP1,0)    = M%MU(0:M%IBP1,M%JBAR,1)
+M%MU(0:M%IBP1,M%JBP1,M%KBP1) = M%MU(0:M%IBP1,M%JBAR,M%KBAR)
+M%MU(0:M%IBP1,0,M%KBP1)    = M%MU(0:M%IBP1,   1,M%KBAR)
+M%MU(0,   0,0:M%KBP1)    = M%MU(   1,   1,0:M%KBP1)
+M%MU(M%IBP1,0,0:M%KBP1)    = M%MU(M%IBAR,   1,0:M%KBP1)
+M%MU(M%IBP1,M%JBP1,0:M%KBP1) = M%MU(M%IBAR,M%JBAR,0:M%KBP1)
+M%MU(0,M%JBP1,0:M%KBP1)    = M%MU(   1,M%JBAR,0:M%KBP1)
+
+! Corner mirroring for KRES
+
+M%KRES(   0,0:M%JBP1,   0) = M%KRES(   1,0:M%JBP1,1)
+M%KRES(M%IBP1,0:M%JBP1,   0) = M%KRES(M%IBAR,0:M%JBP1,1)
+M%KRES(M%IBP1,0:M%JBP1,M%KBP1) = M%KRES(M%IBAR,0:M%JBP1,M%KBAR)
+M%KRES(   0,0:M%JBP1,M%KBP1) = M%KRES(   1,0:M%JBP1,M%KBAR)
+M%KRES(0:M%IBP1,   0,   0) = M%KRES(0:M%IBP1,   1,1)
+M%KRES(0:M%IBP1,M%JBP1,0)    = M%KRES(0:M%IBP1,M%JBAR,1)
+M%KRES(0:M%IBP1,M%JBP1,M%KBP1) = M%KRES(0:M%IBP1,M%JBAR,M%KBAR)
+M%KRES(0:M%IBP1,0,M%KBP1)    = M%KRES(0:M%IBP1,   1,M%KBAR)
+M%KRES(0,   0,0:M%KBP1)    = M%KRES(   1,   1,0:M%KBP1)
+M%KRES(M%IBP1,0,0:M%KBP1)    = M%KRES(M%IBAR,   1,0:M%KBP1)
+M%KRES(M%IBP1,M%JBP1,0:M%KBP1) = M%KRES(M%IBAR,M%JBAR,0:M%KBP1)
+M%KRES(0,M%JBP1,0:M%KBP1)    = M%KRES(   1,M%JBAR,0:M%KBP1)
+
+END SUBROUTINE COMPUTE_VISCOSITY_POST_BLOCK
 
 
 !> \brief Check the CFL and Von Neumann stability criteria.

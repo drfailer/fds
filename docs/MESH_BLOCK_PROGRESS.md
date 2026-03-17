@@ -29,11 +29,11 @@ See [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md) for the step-by-step procedure.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:921 | **Mesh** | CONTAINS subroutines (WALE, Deardorff, etc.), wall loops (IW), turbulence model dispatch |
+| 1 | `COMPUTE_VISCOSITY_KERNEL` | velo_kernels.f90:1268 | **Mixed** | Cell loops (MU_DNS, STRAIN_RATE, turb MU, KRES) block-decomposable; wall loops + corner mirroring sequential |
 | 2 | `MASS_FINITE_DIFFERENCES_NEW_KERNEL` | mass_kernels.f90:23 | **Mesh** | Cell loops (I,J,K) + wall face correction loops (WALL_LOOP_2, WALL_LOOP_3) |
 
-**Task classification:** Mesh — both kernels have wall loops that iterate over all wall cells.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Mixed — viscosity cell loops block-decomposed for non-DEARDORFF/DYNSMAG/CC_IBM; wall loops sequential.
+**Status:** DONE — `COMPUTE_VISCOSITY_BLOCK_KERNEL` + `COMPUTE_VISCOSITY_POST_BLOCK` (velo_kernels.f90). Block sub-graph: `graph/compute_viscosity_block_subgraph.h`. Supports NO_TURB, CONSMAG, VREMAN, WALE. Falls back to mesh-level for DEARDORFF (default), DYNSMAG, CC_IBM.
 
 ---
 
