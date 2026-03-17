@@ -14,6 +14,7 @@
 #include "../task/density_pred_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/pred_wall_div_kernel_task.h"
+#include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
 #include "velocity_predictor_block_subgraph.h"
@@ -54,7 +55,9 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
 
     // PredDivSetup: parallel VELOCITY_FLUX_KERNEL (+ sequential CC_VELOCITY_BC if CC_IBM)
+    // Block decomposition: if no Coriolis/patch/CTRL/wind/periodic, use K-block parallel
     bool ccIBM = fds_is_cc_ibm() != 0;
+    bool canBlockFlux = fds_velocity_flux_can_block_decompose(1) != 0;
     auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
     // WallBC sub-graph (three-phase: preprocessing -> parallel kernel -> finalize)
@@ -120,18 +123,27 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(densPredKernelTask, collector1SM);
     subgraph->edges(collector1SM, meshExchange1);
 
-    // PredDivSetup: parallel kernel (with optional CC_VELOCITY_BC orchestrator if CC_IBM)
+    // PredDivSetup: block-decomposed or mesh-level depending on feature flags
     if (ccIBM) {
+        // CC_IBM: orchestrator for CC_VELOCITY_BC -> mesh-level kernel
         auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
         subgraph->edges(meshExchange1, predDivSetupOrchSM);
         subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
+        subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
+    } else if (canBlockFlux) {
+        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
+        auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
+            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
+        subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
+        subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
     } else {
+        // Mesh-level fallback (Coriolis, patch velocity, etc.)
         subgraph->edges(meshExchange1, predDivSetupKernelTask);
+        subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
     }
 
     // Merged HVAC+InitDiv (was: hvac -> collect -> initDiv)
-    subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
     subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
 
     // WallBC sub-graph (three-phase decomposition, reuses corrector pattern)

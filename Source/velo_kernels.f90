@@ -15,6 +15,7 @@ PRIVATE
 
 PUBLIC BAROCLINIC_CORRECTION_KERNEL,VELOCITY_PREDICTOR_KERNEL,VELOCITY_PREDICTOR_BLOCK_KERNEL, &
        VELOCITY_CORRECTOR_KERNEL,VELOCITY_CORRECTOR_BLOCK_KERNEL,VELOCITY_FLUX_KERNEL, &
+       VELOCITY_FLUX_BLOCK_KERNEL, &
        COMPUTE_VISCOSITY_KERNEL,CHECK_STABILITY_KERNEL,VELOCITY_BC_PROCESS_EDGES_KERNEL,VISCOSITY_BC_KERNEL, &
        MATCH_VELOCITY_KERNEL,NO_FLUX_KERNEL,MATCH_VELOCITY_FLUX_KERNEL
 
@@ -911,6 +912,352 @@ ENDDO DEVC_LOOP
 END SUBROUTINE PATCH_VELOCITY_FLUX
 
 END SUBROUTINE VELOCITY_FLUX_KERNEL
+
+
+!> \brief Block-decomposed velocity flux: computes vorticity, FVX, FVY, FVZ for K-range [K1, K2].
+!> \details Only includes main cell loops and DIRECT_FORCE (without CTRL_DIRECT_FORCE).
+!> Features requiring mesh-level execution (Coriolis, patch velocity, open wind, periodic tests)
+!> are excluded — caller must fall back to VELOCITY_FLUX_KERNEL when these are active.
+!> \param M Mesh data structure
+!> \param T Current time (s)
+!> \param DT Time step (s)
+!> \param NM Mesh number
+!> \param APPLY_TO_ESTIMATED_VARIABLES Flag for estimated (starred) variables
+!> \param K1 Start of K cell range (1-based inclusive)
+!> \param K2 End of K cell range (1-based inclusive)
+
+RECURSIVE SUBROUTINE VELOCITY_FLUX_BLOCK_KERNEL(M,T,DT,NM,APPLY_TO_ESTIMATED_VARIABLES,K1,K2)
+
+USE MATH_FUNCTIONS, ONLY: EVALUATE_RAMP
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+REAL(EB), INTENT(IN) :: T,DT
+INTEGER, INTENT(IN) :: NM,K1,K2
+LOGICAL, INTENT(IN) :: APPLY_TO_ESTIMATED_VARIABLES
+REAL(EB) :: MUX,MUY,MUZ,UP,UM,VP,VM,WP,WM,VTRM,OMXP,OMXM,OMYP,OMYM,OMZP,OMZM,TXYP,TXYM,TXZP,TXZM,TYZP,TYZM, &
+            DTXYDY,DTXZDZ,DTYZDZ,DTXYDX,DTXZDX,DTYZDY, &
+            DUDX,DVDY,DWDZ,DUDY,DUDZ,DVDX,DVDZ,DWDX,DWDY, &
+            VOMZ,WOMY,UOMY,VOMX,UOMZ,WOMX, &
+            RRHO,TXXP,TXXM,TYYP,TYYM,TZZP,TZZM,DTXXDX,DTYYDY,DTZZDZ
+INTEGER :: I,J,K,IEXP,IEXM,IEYP,IEYM,IEZP,IEZM,IC
+INTEGER :: K1_VORT,K1_FVZ,K2_FVZ
+REAL(EB), POINTER, DIMENSION(:,:,:) :: TXY,TXZ,TYZ,OMX,OMY,OMZ,UU,VV,WW,RHOP,DP
+REAL(EB) :: GX(0:M%IBAR),GY(0:M%IBAR),GZ(0:M%IBAR)
+
+IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
+   UU => M%US
+   VV => M%VS
+   WW => M%WS
+   DP => M%DS
+   RHOP => M%RHOS
+ELSE
+   UU => M%U
+   VV => M%V
+   WW => M%W
+   DP => M%D
+   RHOP => M%RHO
+ENDIF
+
+TXY => M%WORK1
+TXZ => M%WORK2
+TYZ => M%WORK3
+OMX => M%WORK4
+OMY => M%WORK5
+OMZ => M%WORK6
+
+! K ranges: vorticity extended 1 cell below for FVX/FVY dependency at K-1
+K1_VORT = MAX(0, K1-1)
+
+! FVZ staggered K range (same pattern as W in velocity predictor/corrector)
+K1_FVZ = K1 - 1
+K2_FVZ = K2 - 1
+IF (K2==M%KBAR) K2_FVZ = M%KBAR
+
+! Compute vorticity and stress tensor components
+
+DO K=K1_VORT,K2
+   DO J=0,M%JBAR
+      DO I=0,M%IBAR
+         DUDY = M%RDYN(J)*(UU(I,J+1,K)-UU(I,J,K))
+         DVDX = M%RDXN(I)*(VV(I+1,J,K)-VV(I,J,K))
+         DUDZ = M%RDZN(K)*(UU(I,J,K+1)-UU(I,J,K))
+         DWDX = M%RDXN(I)*(WW(I+1,J,K)-WW(I,J,K))
+         DVDZ = M%RDZN(K)*(VV(I,J,K+1)-VV(I,J,K))
+         DWDY = M%RDYN(J)*(WW(I,J+1,K)-WW(I,J,K))
+         OMX(I,J,K) = DWDY - DVDZ
+         OMY(I,J,K) = DUDZ - DWDX
+         OMZ(I,J,K) = DVDX - DUDY
+         MUX = 0.25_EB*(M%MU(I,J+1,K)+M%MU(I,J,K)+M%MU(I,J,K+1)+M%MU(I,J+1,K+1))
+         MUY = 0.25_EB*(M%MU(I+1,J,K)+M%MU(I,J,K)+M%MU(I,J,K+1)+M%MU(I+1,J,K+1))
+         MUZ = 0.25_EB*(M%MU(I+1,J,K)+M%MU(I,J,K)+M%MU(I,J+1,K)+M%MU(I+1,J+1,K))
+         TXY(I,J,K) = MUZ*(DVDX + DUDY)
+         TXZ(I,J,K) = MUY*(DUDZ + DWDX)
+         TYZ(I,J,K) = MUX*(DVDZ + DWDY)
+      ENDDO
+   ENDDO
+ENDDO
+
+! Compute gravity components (1D, cheap — computed redundantly per block)
+
+IF (.NOT.SPATIAL_GRAVITY_VARIATION) THEN
+   GX(0:M%IBAR) = EVALUATE_RAMP(T,I_RAMP_GX)*GVEC(1)
+   GY(0:M%IBAR) = EVALUATE_RAMP(T,I_RAMP_GY)*GVEC(2)
+   GZ(0:M%IBAR) = EVALUATE_RAMP(T,I_RAMP_GZ)*GVEC(3)
+ELSE
+   DO I=0,M%IBAR
+      GX(I) = EVALUATE_RAMP(M%X(I),I_RAMP_GX)*GVEC(1)
+      GY(I) = EVALUATE_RAMP(M%X(I),I_RAMP_GY)*GVEC(2)
+      GZ(I) = EVALUATE_RAMP(M%X(I),I_RAMP_GZ)*GVEC(3)
+   ENDDO
+ENDIF
+
+! Compute x-direction flux term FVX
+
+DO K=K1,K2
+   DO J=1,M%JBAR
+      DO I=0,M%IBAR
+         WP    = WW(I,J,K)   + WW(I+1,J,K)
+         WM    = WW(I,J,K-1) + WW(I+1,J,K-1)
+         VP    = VV(I,J,K)   + VV(I+1,J,K)
+         VM    = VV(I,J-1,K) + VV(I+1,J-1,K)
+         OMYP  = OMY(I,J,K)
+         OMYM  = OMY(I,J,K-1)
+         OMZP  = OMZ(I,J,K)
+         OMZM  = OMZ(I,J-1,K)
+         TXZP  = TXZ(I,J,K)
+         TXZM  = TXZ(I,J,K-1)
+         TXYP  = TXY(I,J,K)
+         TXYM  = TXY(I,J-1,K)
+         IC    = M%CELL_INDEX(I,J,K)
+         IEYP  = M%CELL(IC)%EDGE_INDEX(8)
+         IEYM  = M%CELL(IC)%EDGE_INDEX(6)
+         IEZP  = M%CELL(IC)%EDGE_INDEX(12)
+         IEZM  = M%CELL(IC)%EDGE_INDEX(10)
+         IF (M%EDGE(IEYP)%OMEGA(-1)>-1.E5_EB) THEN
+            OMYP = M%EDGE(IEYP)%OMEGA(-1)
+            TXZP = M%EDGE(IEYP)%TAU(-1)
+         ENDIF
+         IF (M%EDGE(IEYM)%OMEGA( 1)>-1.E5_EB) THEN
+            OMYM = M%EDGE(IEYM)%OMEGA( 1)
+            TXZM = M%EDGE(IEYM)%TAU( 1)
+         ENDIF
+         IF (M%EDGE(IEZP)%OMEGA(-2)>-1.E5_EB) THEN
+            OMZP = M%EDGE(IEZP)%OMEGA(-2)
+            TXYP = M%EDGE(IEZP)%TAU(-2)
+         ENDIF
+         IF (M%EDGE(IEZM)%OMEGA( 2)>-1.E5_EB) THEN
+            OMZM = M%EDGE(IEZM)%OMEGA( 2)
+            TXYM = M%EDGE(IEZM)%TAU( 2)
+         ENDIF
+         WOMY  = WP*OMYP + WM*OMYM
+         VOMZ  = VP*OMZP + VM*OMZM
+         RRHO  = 2._EB/(RHOP(I,J,K)+RHOP(I+1,J,K))
+         DVDY  = (VV(I+1,J,K)-VV(I+1,J-1,K))*M%RDY(J)
+         DWDZ  = (WW(I+1,J,K)-WW(I+1,J,K-1))*M%RDZ(K)
+         TXXP  = M%MU(I+1,J,K)*( FOTH*DP(I+1,J,K) - 2._EB*(DVDY+DWDZ) )
+         DVDY  = (VV(I,J,K)-VV(I,J-1,K))*M%RDY(J)
+         DWDZ  = (WW(I,J,K)-WW(I,J,K-1))*M%RDZ(K)
+         TXXM  = M%MU(I,J,K)  *( FOTH*DP(I,J,K)   - 2._EB*(DVDY+DWDZ) )
+         DTXXDX= M%RDXN(I)*(TXXP-TXXM)
+         DTXYDY= M%RDY(J) *(TXYP-TXYM)
+         DTXZDZ= M%RDZ(K) *(TXZP-TXZM)
+         VTRM  = DTXXDX + DTXYDY + DTXZDZ
+         M%FVX(I,J,K) = 0.25_EB*(WOMY - VOMZ) - GX(I) + RRHO*(GX(I)*M%RHO_0(K) - VTRM)
+      ENDDO
+   ENDDO
+ENDDO
+
+! Compute y-direction flux term FVY
+
+DO K=K1,K2
+   DO J=0,M%JBAR
+      DO I=1,M%IBAR
+         UP    = UU(I,J,K)   + UU(I,J+1,K)
+         UM    = UU(I-1,J,K) + UU(I-1,J+1,K)
+         WP    = WW(I,J,K)   + WW(I,J+1,K)
+         WM    = WW(I,J,K-1) + WW(I,J+1,K-1)
+         OMXP  = OMX(I,J,K)
+         OMXM  = OMX(I,J,K-1)
+         OMZP  = OMZ(I,J,K)
+         OMZM  = OMZ(I-1,J,K)
+         TYZP  = TYZ(I,J,K)
+         TYZM  = TYZ(I,J,K-1)
+         TXYP  = TXY(I,J,K)
+         TXYM  = TXY(I-1,J,K)
+         IC    = M%CELL_INDEX(I,J,K)
+         IEXP  = M%CELL(IC)%EDGE_INDEX(4)
+         IEXM  = M%CELL(IC)%EDGE_INDEX(2)
+         IEZP  = M%CELL(IC)%EDGE_INDEX(12)
+         IEZM  = M%CELL(IC)%EDGE_INDEX(11)
+         IF (M%EDGE(IEXP)%OMEGA(-2)>-1.E5_EB) THEN
+            OMXP = M%EDGE(IEXP)%OMEGA(-2)
+            TYZP = M%EDGE(IEXP)%TAU(-2)
+         ENDIF
+         IF (M%EDGE(IEXM)%OMEGA( 2)>-1.E5_EB) THEN
+            OMXM = M%EDGE(IEXM)%OMEGA( 2)
+            TYZM = M%EDGE(IEXM)%TAU( 2)
+         ENDIF
+         IF (M%EDGE(IEZP)%OMEGA(-1)>-1.E5_EB) THEN
+            OMZP = M%EDGE(IEZP)%OMEGA(-1)
+            TXYP = M%EDGE(IEZP)%TAU(-1)
+         ENDIF
+         IF (M%EDGE(IEZM)%OMEGA( 1)>-1.E5_EB) THEN
+            OMZM = M%EDGE(IEZM)%OMEGA( 1)
+            TXYM = M%EDGE(IEZM)%TAU( 1)
+         ENDIF
+         WOMX  = WP*OMXP + WM*OMXM
+         UOMZ  = UP*OMZP + UM*OMZM
+         RRHO  = 2._EB/(RHOP(I,J,K)+RHOP(I,J+1,K))
+         DUDX  = (UU(I,J+1,K)-UU(I-1,J+1,K))*M%RDX(I)
+         DWDZ  = (WW(I,J+1,K)-WW(I,J+1,K-1))*M%RDZ(K)
+         TYYP  = M%MU(I,J+1,K)*( FOTH*DP(I,J+1,K) - 2._EB*(DUDX+DWDZ) )
+         DUDX  = (UU(I,J,K)-UU(I-1,J,K))*M%RDX(I)
+         DWDZ  = (WW(I,J,K)-WW(I,J,K-1))*M%RDZ(K)
+         TYYM  = M%MU(I,J,K)  *( FOTH*DP(I,J,K)   - 2._EB*(DUDX+DWDZ) )
+         DTXYDX= M%RDX(I) *(TXYP-TXYM)
+         DTYYDY= M%RDYN(J)*(TYYP-TYYM)
+         DTYZDZ= M%RDZ(K) *(TYZP-TYZM)
+         VTRM  = DTXYDX + DTYYDY + DTYZDZ
+         M%FVY(I,J,K) = 0.25_EB*(UOMZ - WOMX) - GY(I) + RRHO*(GY(I)*M%RHO_0(K) - VTRM)
+      ENDDO
+   ENDDO
+ENDDO
+
+! Compute z-direction flux term FVZ
+
+DO K=K1_FVZ,K2_FVZ
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         UP    = UU(I,J,K)   + UU(I,J,K+1)
+         UM    = UU(I-1,J,K) + UU(I-1,J,K+1)
+         VP    = VV(I,J,K)   + VV(I,J,K+1)
+         VM    = VV(I,J-1,K) + VV(I,J-1,K+1)
+         OMYP  = OMY(I,J,K)
+         OMYM  = OMY(I-1,J,K)
+         OMXP  = OMX(I,J,K)
+         OMXM  = OMX(I,J-1,K)
+         TXZP  = TXZ(I,J,K)
+         TXZM  = TXZ(I-1,J,K)
+         TYZP  = TYZ(I,J,K)
+         TYZM  = TYZ(I,J-1,K)
+         IC    = M%CELL_INDEX(I,J,K)
+         IEXP  = M%CELL(IC)%EDGE_INDEX(4)
+         IEXM  = M%CELL(IC)%EDGE_INDEX(3)
+         IEYP  = M%CELL(IC)%EDGE_INDEX(8)
+         IEYM  = M%CELL(IC)%EDGE_INDEX(7)
+         IF (M%EDGE(IEXP)%OMEGA(-1)>-1.E5_EB) THEN
+            OMXP = M%EDGE(IEXP)%OMEGA(-1)
+            TYZP = M%EDGE(IEXP)%TAU(-1)
+         ENDIF
+         IF (M%EDGE(IEXM)%OMEGA( 1)>-1.E5_EB) THEN
+            OMXM = M%EDGE(IEXM)%OMEGA( 1)
+            TYZM = M%EDGE(IEXM)%TAU( 1)
+         ENDIF
+         IF (M%EDGE(IEYP)%OMEGA(-2)>-1.E5_EB) THEN
+            OMYP = M%EDGE(IEYP)%OMEGA(-2)
+            TXZP = M%EDGE(IEYP)%TAU(-2)
+         ENDIF
+         IF (M%EDGE(IEYM)%OMEGA( 2)>-1.E5_EB) THEN
+            OMYM = M%EDGE(IEYM)%OMEGA( 2)
+            TXZM = M%EDGE(IEYM)%TAU( 2)
+         ENDIF
+         UOMY  = UP*OMYP + UM*OMYM
+         VOMX  = VP*OMXP + VM*OMXM
+         RRHO  = 2._EB/(RHOP(I,J,K)+RHOP(I,J,K+1))
+         DUDX  = (UU(I,J,K+1)-UU(I-1,J,K+1))*M%RDX(I)
+         DVDY  = (VV(I,J,K+1)-VV(I,J-1,K+1))*M%RDY(J)
+         TZZP  = M%MU(I,J,K+1)*( FOTH*DP(I,J,K+1) - 2._EB*(DUDX+DVDY) )
+         DUDX  = (UU(I,J,K)-UU(I-1,J,K))*M%RDX(I)
+         DVDY  = (VV(I,J,K)-VV(I,J-1,K))*M%RDY(J)
+         TZZM  = M%MU(I,J,K)  *( FOTH*DP(I,J,K)   - 2._EB*(DUDX+DVDY) )
+         DTXZDX= M%RDX(I) *(TXZP-TXZM)
+         DTYZDY= M%RDY(J) *(TYZP-TYZM)
+         DTZZDZ= M%RDZN(K)*(TZZP-TZZM)
+         VTRM  = DTXZDX + DTYZDY + DTZZDZ
+         M%FVZ(I,J,K) = 0.25_EB*(VOMX - UOMY) - GZ(I) + RRHO*(GZ(I)*0.5_EB*(M%RHO_0(K)+M%RHO_0(K+1)) - VTRM)
+      ENDDO
+   ENDDO
+ENDDO
+
+! DIRECT_FORCE (K-restricted cell loops, excludes CTRL_DIRECT_FORCE)
+
+IF (ANY(ABS(FVEC)>TWENTY_EPSILON_EB)) CALL DIRECT_FORCE_BLOCK
+
+CONTAINS
+
+SUBROUTINE DIRECT_FORCE_BLOCK()
+
+REAL(EB) :: TIME_RAMP_FACTOR,SIN_THETA,COS_THETA,THETA
+
+IF (I_RAMP_DIRECTION_T/=0) THEN
+   THETA = EVALUATE_RAMP(T,I_RAMP_DIRECTION_T)*DEG2RAD
+   SIN_THETA = -SIN(THETA)
+   COS_THETA = -COS(THETA)
+ELSE
+   SIN_THETA = 1._EB
+   COS_THETA = 1._EB
+ENDIF
+
+IF (ABS(FVEC(1))>TWENTY_EPSILON_EB) THEN
+   IF (I_RAMP_FVX_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_FVX_T)
+   ELSEIF (I_RAMP_PGF_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_PGF_T)
+   ELSE
+      TIME_RAMP_FACTOR = 1._EB
+   ENDIF
+
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=0,M%IBAR
+            RRHO = 2._EB/(RHOP(I,J,K)+RHOP(I+1,J,K))
+            M%FVX(I,J,K) = M%FVX(I,J,K) - RRHO*FVEC(1)*TIME_RAMP_FACTOR*SIN_THETA
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
+
+IF (ABS(FVEC(2))>TWENTY_EPSILON_EB) THEN
+   IF (I_RAMP_FVY_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_FVY_T)
+   ELSEIF (I_RAMP_PGF_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_PGF_T)
+   ELSE
+      TIME_RAMP_FACTOR = 1._EB
+   ENDIF
+
+   DO K=K1,K2
+      DO J=0,M%JBAR
+         DO I=1,M%IBAR
+            RRHO = 2._EB/(RHOP(I,J,K)+RHOP(I,J+1,K))
+            M%FVY(I,J,K) = M%FVY(I,J,K) - RRHO*FVEC(2)*TIME_RAMP_FACTOR*COS_THETA
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
+
+IF (ABS(FVEC(3))>TWENTY_EPSILON_EB) THEN
+   IF (I_RAMP_FVZ_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_FVZ_T)
+   ELSEIF (I_RAMP_PGF_T>0) THEN
+      TIME_RAMP_FACTOR = EVALUATE_RAMP(T,I_RAMP_PGF_T)
+   ELSE
+      TIME_RAMP_FACTOR = 1._EB
+   ENDIF
+
+   DO K=K1_FVZ,K2_FVZ
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            RRHO = 2._EB/(RHOP(I,J,K)+RHOP(I,J,K+1))
+            M%FVZ(I,J,K) = M%FVZ(I,J,K) - RRHO*FVEC(3)*TIME_RAMP_FACTOR
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
+
+END SUBROUTINE DIRECT_FORCE_BLOCK
+
+END SUBROUTINE VELOCITY_FLUX_BLOCK_KERNEL
 
 
 !> \brief Compute the turbulent viscosity.

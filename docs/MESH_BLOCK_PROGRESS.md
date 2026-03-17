@@ -58,12 +58,20 @@ See [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md) for the step-by-step procedure.
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh** | Large kernel (590 lines) with CONTAINS, wall loops (DO IW at line 698), species loops, cell loops |
+| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh Block (2-phase)** | Main cell loops (vorticity, FVX, FVY, FVZ, DIRECT_FORCE) are block-decomposable. Wall loop in CORIOLIS_FORCE (line 698) writes ghost cells only — excluded via runtime check. |
 
-Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before this kernel but are sequential pre-processing (run in orchestrator or before dispatch).
+Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before this kernel but are sequential pre-processing (run in orchestrator before block dispatch).
 
-**Task classification:** Mesh — wall loops interleaved with cell loops, CONTAINS subroutines with host association.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Mesh Block (conditional) — block-decomposed when no Coriolis/patch/CTRL/wind/periodic features; mesh-level fallback otherwise.
+**Status:** DONE
+
+**Implementation:**
+- Block kernel: `VELOCITY_FLUX_BLOCK_KERNEL(M, T, DT, NM, APPLY_TO_ESTIMATED, K1, K2)` in velo_kernels.f90
+- K-partition: vorticity at K=max(0,K1-1):K2 (extended for FVX/FVY dependency); FVX/FVY at K1:K2; FVZ at K1-1:K2-1 (staggered, KBAR for last block)
+- Sub-graph: `graph/velocity_flux_block_subgraph.h` — Orchestrator(pre-proc + decompose) → BlockKernel → Collector(agglomeration)
+- Runtime check: `fds_velocity_flux_can_block_decompose()` excludes CC_IBM, CTRL_DIRECT_FORCE, Coriolis, patch velocity, open wind, periodic tests
+- CC_IBM path: uses original mesh-level `DivSetupKernelTask`
+- Verified: 12/12 custom pass, 45/59 verification pass (no regressions)
 
 ---
 
@@ -195,12 +203,12 @@ Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential p
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh** | Same as predictor instance — wall loops, CONTAINS |
+| 1 | `VELOCITY_FLUX_KERNEL` | velo_kernels.f90:325 | **Mesh Block (2-phase)** | Same as predictor — block-decomposed with runtime feature check |
 
-Note: corrector also calls `fds_agglomeration(dt, nm)` after the kernel — this is a sequential operation.
+Note: corrector also calls `fds_agglomeration(dt, nm)` after the block kernel in the collector — sequential post-processing.
 
-**Task classification:** Mesh — wall loops interleaved with cell loops, CONTAINS with host association.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Mesh Block (conditional) — same as predictor instance.
+**Status:** DONE (same implementation as predictor)
 
 ---
 
@@ -397,7 +405,7 @@ Same kernels as predictor instance (see above).
 | 2 | VelocityCorrectorKernelTask | VELOCITY_CORRECTOR_KERNEL, CHECK_DIVERGENCE_KERNEL | **DONE** — block kernel + mesh CheckDiv |
 | 3 | DensityPredKernelTask | DENSITY_KERNEL | **Mesh** — zone loops, wall loops, CHECK_MASS_DENSITY |
 | 4 | PredStep1/CorrStep1KernelTask | COMPUTE_VISCOSITY, MASS_FINITE_DIFFS, DENSITY | **Mesh** — all have wall loops |
-| 5 | DivSetupKernelTask | VELOCITY_FLUX_KERNEL | **Mesh** — wall loops, CONTAINS host association |
+| 5 | DivSetupKernelTask | VELOCITY_FLUX_KERNEL | **DONE** — block kernel (conditional), mesh fallback for Coriolis/patch/CTRL/wind/periodic |
 | 6 | PredWallDivKernelTask | PARTICLE_MOMENTUM + DIVERGENCE_PART_1 | **Mixed** — PART_MOM block-able but lightweight; DIV_PART_1 mesh |
 | 7 | DivergencePart2KernelTask | DIVERGENCE_PART_2_KERNEL | **Mesh** — zone loops, wall loops |
 | 8 | CombustionKernelTask | COMBUSTION_GENERAL_KERNEL | **Mesh** — cell list, STOP_STATUS, CONTAINS host association |
@@ -414,6 +422,6 @@ Same kernels as predictor instance (see above).
 
 - **Total unique kernel tasks:** 16
 - **Classified:** 16 / 16
-- **Converted to mesh block:** 3 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum)
-- **Confirmed mesh-only:** 11
+- **Converted to mesh block:** 4 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux)
+- **Confirmed mesh-only:** 10
 - **Mixed (no conversion):** 2 (PredWallDiv, RetryMomentumDiv — PART_MOM lightweight relative to DIV_PART_1)
