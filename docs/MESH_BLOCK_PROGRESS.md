@@ -278,14 +278,14 @@ Note: corrector also calls `fds_agglomeration(dt, nm)` after the block kernel in
 ### WallBCKernelTask (inside WallBC sub-graph)
 
 **Graph location:** WallBC sub-graph kernel
-**File:** `task/wallbc_kernel_task.h`
+**File:** `task/wallbc_kernel_task.h` (mesh-level), `graph/wallbc_block_subgraph.h` (block-level)
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `WALL_BC_PROCESS_CELLS_KERNEL` | wall_kernels.f90:585 | **Mesh** | Wall loop (IW=1 to N_EXTERNAL+N_INTERNAL), iterates over wall cell index, not (I,J,K) grid |
+| 1 | `WALL_BC_PROCESS_CELLS_KERNEL` | wall.f90:1274 | **Block** | Wall cell loop filtered by KKG range (Approach A: Wall Cell K-Indexing) |
 
-**Task classification:** Mesh — wall cell iteration (IW index), cannot be restricted to K sub-ranges.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Block — wall cells filtered by gas cell K-coordinate (BC%KKG) into K sub-ranges. CFACE cells skipped (CC_IBM excluded). Particle loop also filtered by KKG.
+**Status:** DONE — `WALL_BC_PROCESS_CELLS_BLOCK_KERNEL(M,NM,...,K1,K2)` in wall.f90. Block sub-graph: `graph/wallbc_block_subgraph.h`. Orchestrator runs preprocessing per-mesh, K-decomposes, collector runs WALL_BC_FINALIZE. Falls back to mesh-level for CC_IBM.
 
 ---
 
@@ -412,7 +412,7 @@ Same kernels as predictor instance (see above).
 | 9 | CorrCondensKernelTask | CONDENSATION_EVAPORATION_KERNEL | **Mesh** — wall+cell loops interleaved in species loop |
 | 10 | ParticleMassEnergyKernelTask | PARTICLE_MASS_ENERGY_TRANSFER_KERNEL | **Mesh** — particle loop (DO IP=1,NLP) |
 | 11 | CorrParticleKernelTask | PARTICLE_MOMENTUM_TRANSFER_KERNEL | **DONE** — block kernel, CC_IBM mesh fallback |
-| 12 | WallBCKernelTask | WALL_BC_PROCESS_CELLS_KERNEL | **Mesh** — wall cell iteration (IW index) |
+| 12 | WallBCKernelTask | WALL_BC_PROCESS_CELLS_KERNEL | **DONE** — block kernel (KKG filter), CC_IBM mesh fallback |
 | 13 | CorrRadiationKernelTask | COMPUTE_RADIATION_KERNEL | **Mixed** — angle sweeps + wall/particle loops |
 | 14 | PressureSolveKernelTask | NO_FLUX + COMPUTE_RHS + FFT/ULMAT + CHECK_RESIDUALS | **Mesh** — FFT/ULMAT global solvers, wall loops |
 | 15 | VelocityBCEdgesTask | MATCH_VELOCITY, VELOCITY_BC_PROCESS_EDGES | **Mesh** — wall/edge loops |
@@ -422,6 +422,6 @@ Same kernels as predictor instance (see above).
 
 - **Total unique kernel tasks:** 16
 - **Classified:** 16 / 16
-- **Converted to mesh block:** 4 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux)
-- **Confirmed mesh-only:** 10
+- **Converted to mesh block:** 6 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux, ComputeViscosity, WallBC)
+- **Confirmed mesh-only:** 8
 - **Mixed (no conversion):** 2 (PredWallDiv, RetryMomentumDiv — PART_MOM lightweight relative to DIV_PART_1)

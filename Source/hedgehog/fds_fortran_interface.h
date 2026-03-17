@@ -77,6 +77,8 @@ void fds_condensation_kernel(int nm, double dt);
 void fds_wall_bc_preprocessing(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_wall_bc_preprocessing_kernel(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_wall_bc_process_cells_kernel(int nm, double t, double dt, double dt_bc, int call_ht_1d);
+void fds_wall_bc_process_cells_block_kernel(int nm, double t, double dt, double dt_bc, int call_ht_1d, int k1, int k2);
+int fds_wall_bc_can_block_decompose();
 void fds_wall_bc_finalize(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_match_velocity_kernel(int nm, int is_predictor);
 void fds_velocity_bc_preprocessing(int nm, double t, int apply_to_estimated);

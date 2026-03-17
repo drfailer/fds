@@ -23,6 +23,7 @@
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "wallbc_subgraph.h"
+#include "wallbc_block_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 
 /// Build the Predictor sub-graph.
@@ -65,8 +66,11 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool canBlockFlux = fds_velocity_flux_can_block_decompose(1) != 0;
     auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
 
-    // WallBC sub-graph (three-phase: preprocessing -> parallel kernel -> finalize)
-    auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+    // WallBC sub-graph: K-block decomposition or mesh-level fallback
+    bool canBlockWallBC = fds_wall_bc_can_block_decompose() != 0;
+    auto predWallBCSubgraph = canBlockWallBC
+        ? buildWallBCBlockSubgraph(nmeshes, kernelThreads, static_cast<int>(kernelThreads))
+        : buildWallBCSubgraph(nmeshes, kernelThreads);
 
     // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
     auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);

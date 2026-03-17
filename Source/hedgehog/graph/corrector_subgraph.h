@@ -24,6 +24,7 @@
 #include "velocity_corrector_block_subgraph.h"
 #include "particle_momentum_block_subgraph.h"
 #include "wallbc_subgraph.h"
+#include "wallbc_block_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
 #include "pressure_iteration_subgraph.h"
@@ -90,7 +91,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Named sub-graphs ---
 
-    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, kernelThreads);
+    bool canBlockWallBC = fds_wall_bc_can_block_decompose() != 0;
+    auto wallBCSubgraph = canBlockWallBC
+        ? buildWallBCBlockSubgraph(nmeshes, kernelThreads, static_cast<int>(kernelThreads))
+        : buildWallBCSubgraph(nmeshes, kernelThreads);
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
     auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads);
 
