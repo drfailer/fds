@@ -64,6 +64,7 @@ void fds_compute_viscosity_block_kernel(int nm, int estimated, int k1, int k2);
 void fds_compute_viscosity_post_block(int nm, int estimated);
 int fds_compute_viscosity_can_block_decompose();
 void fds_cutface_velocities(int nm, int estimated, int cutfaces);
+void fds_cc_velocity_flux_post(int nm, double t, double dt, int estimated);
 void fds_mass_finite_differences_kernel(int nm);
 void fds_density_kernel(int nm, double t, double dt);
 void fds_divergence_part_1_kernel(int nm, double t, double dt);

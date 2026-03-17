@@ -44,6 +44,7 @@
 /// @param termSignal Shared termination signal for pressure iteration sub-graph
 /// @return Shared pointer to the constructed sub-graph
 inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
+                                    size_t blockThreads, int numBlocks,
                                     std::shared_ptr<TerminationSignal> termSignal) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
 
@@ -69,7 +70,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // WallBC sub-graph: K-block decomposition or mesh-level fallback
     bool canBlockWallBC = fds_wall_bc_can_block_decompose() != 0;
     auto predWallBCSubgraph = canBlockWallBC
-        ? buildWallBCBlockSubgraph(nmeshes, kernelThreads, static_cast<int>(kernelThreads))
+        ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
         : buildWallBCSubgraph(nmeshes, kernelThreads);
 
     // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
@@ -81,7 +82,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // VelocityPredictor: block-decomposed kernel (+ CC post-processing collector if CC_IBM)
     // For CC_IBM: skip CFL check in kernel (runs later in collector after CC_PROJECT_VELOCITY)
     auto velPredSubgraph = buildVelocityPredictorBlockSubgraph(
-        kernelThreads, static_cast<int>(kernelThreads), /*skipCFL=*/ccIBM);
+        blockThreads, numBlocks, /*skipCFL=*/ccIBM);
     // Fallback: original mesh-level kernel task for CC_IBM path
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(
         kernelThreads, /*skipCFL=*/ccIBM);
@@ -128,7 +129,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     if (canBlockVisc) {
         // Block-decomposed viscosity -> separate mass_fd task
         auto predViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
-            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
+            nmeshes, blockThreads, numBlocks);
         auto predMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
         subgraph->edges(predStep1OrchSM, predViscBlockSubgraph);
         subgraph->edges(predViscBlockSubgraph, predMassFDKernelTask);
@@ -144,19 +145,21 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(collector1SM, meshExchange1);
 
     // PredDivSetup: block-decomposed or mesh-level depending on feature flags
-    if (ccIBM) {
-        // CC_IBM: orchestrator for CC_VELOCITY_BC -> mesh-level kernel
+    if (canBlockFlux) {
+        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
+        // CC_IBM handled internally: CC_VELOCITY_BC + CUTFACE_VELOCITIES in orchestrator,
+        // CC_VELOCITY_FLUX in collector
+        auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
+        subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
+    } else if (ccIBM) {
+        // CC_IBM with features preventing block decomposition: orchestrator + mesh-level kernel
         auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
         subgraph->edges(meshExchange1, predDivSetupOrchSM);
         subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
-    } else if (canBlockFlux) {
-        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
-        auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
-            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
-        subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
-        subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
     } else {
         // Mesh-level fallback (Coriolis, patch velocity, etc.)
         subgraph->edges(meshExchange1, predDivSetupKernelTask);

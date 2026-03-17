@@ -26,7 +26,8 @@
 /// @param tEnd End time
 /// @param kernelThreads Number of threads for parallel kernel tasks (1 for sequential)
 /// @return Shared pointer to the constructed graph
-inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t kernelThreads) {
+inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t kernelThreads,
+                          size_t blockThreads, int numBlocks) {
 
     using GraphType = hh::Graph<1, MeshData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
@@ -35,8 +36,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto termSignal = std::make_shared<TerminationSignal>();
 
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, termSignal);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, tEnd, kernelThreads, termSignal);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, blockThreads, numBlocks, termSignal);
+    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, tEnd, kernelThreads, blockThreads, numBlocks, termSignal);
 
     // --- Create timestep pipeline components ---
     // Shared ICYC counter between global task (reads) and dump collector (increments)

@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <algorithm>
+#include <cstdlib>
 
 #include "fds_fortran_interface.h"
 #include "data/mesh_data.h"
@@ -22,10 +23,30 @@ int main(int argc, char *argv[]) {
     double t_init = 0.0, dt_init = 0.0;
     int nmeshes = 0;
 
+    // Parse command-line arguments.
+    // Usage: fds_hh [options] <input_file>
+    //   --block-threads N   Number of threads for block-decomposed kernel tasks
+    //                       (default: hardware_concurrency)
+    //   --num-blocks N      Number of K-blocks per mesh for block decomposition
+    //                       (default: same as block-threads)
+    std::string inputFile;
+    int cliBlockThreads = 0;   // 0 = use default (hardware_concurrency)
+    int cliNumBlocks = 0;      // 0 = use default (same as blockThreads)
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg(argv[i]);
+        if (arg == "--block-threads" && i + 1 < argc) {
+            cliBlockThreads = std::atoi(argv[++i]);
+        } else if (arg == "--num-blocks" && i + 1 < argc) {
+            cliNumBlocks = std::atoi(argv[++i]);
+        } else if (arg[0] != '-') {
+            inputFile = arg;
+        }
+    }
+
     // Step 0: Pass the input file name to Fortran before initialization.
     // The Fortran runtime's GET_COMMAND_ARGUMENT may not work when main is C++.
-    if (argc > 1) {
-        std::string inputFile(argv[1]);
+    if (!inputFile.empty()) {
         fds_set_input_file(inputFile.c_str(), static_cast<int>(inputFile.size()));
     }
 
@@ -53,14 +74,22 @@ int main(int argc, char *argv[]) {
               << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
-    // kernelThreads controls inter-mesh parallelism. Block decomposition of velocity/momentum
-    // kernels is available but provides negligible benefit (<0.2% of runtime) — the heavy kernels
-    // (WallBC, DivPart1, DivSetup, VelocityBCEdges) are mesh-level due to wall/zone loops.
-    // Using hw_threads would enable intra-mesh block decomposition but adds overhead without
-    // measurable speedup. Keep kernelThreads = nmeshes for now.
+    // kernelThreads: for mesh-level kernel tasks (1 thread per mesh)
+    // blockThreads: for block-decomposed kernel tasks (intra-mesh parallelism)
+    // numBlocks: number of K-blocks per mesh (granularity of block decomposition)
     size_t kernelThreads = local_nmeshes;
-    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads << std::endl;
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads);
+    size_t blockThreads = (cliBlockThreads > 0)
+        ? static_cast<size_t>(cliBlockThreads)
+        : std::max(static_cast<size_t>(local_nmeshes),
+                   static_cast<size_t>(std::thread::hardware_concurrency()));
+    int numBlocks = (cliNumBlocks > 0)
+        ? cliNumBlocks
+        : static_cast<int>(blockThreads);
+    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads
+              << " Block threads=" << blockThreads
+              << " Num blocks=" << numBlocks << std::endl;
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads,
+                               blockThreads, numBlocks);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();

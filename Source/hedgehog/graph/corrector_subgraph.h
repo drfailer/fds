@@ -50,6 +50,7 @@
 /// @param termSignal Shared termination signal for pressure iteration sub-graph
 /// @return Shared pointer to the constructed sub-graph
 inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
+                                    size_t blockThreads, int numBlocks,
                                     std::shared_ptr<TerminationSignal> termSignal) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("Corrector");
 
@@ -78,14 +79,14 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto particleRemoveMoveTask = std::make_shared<RemoveMoveParticlesTask>();
     // ParticleMomentum: block-decomposed for non-CC_IBM, mesh-level fallback for CC_IBM
     auto partMomSubgraph = buildParticleMomentumBlockSubgraph(
-        kernelThreads, static_cast<int>(kernelThreads));
+        blockThreads, numBlocks);
     auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
 
     // VelocityCorrector: block-decomposed kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
     // Block decomposition splits each mesh into K-range blocks for intra-mesh parallelism.
     // CHECK_DIVERGENCE_KERNEL runs at mesh level after block reassembly.
     auto velCorrSubgraph = buildVelocityCorrectorBlockSubgraph(
-        kernelThreads, static_cast<int>(kernelThreads));
+        blockThreads, numBlocks);
     // Fallback: original mesh-level kernel task for CC_IBM path
     auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
 
@@ -93,7 +94,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     bool canBlockWallBC = fds_wall_bc_can_block_decompose() != 0;
     auto wallBCSubgraph = canBlockWallBC
-        ? buildWallBCBlockSubgraph(nmeshes, kernelThreads, static_cast<int>(kernelThreads))
+        ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
         : buildWallBCSubgraph(nmeshes, kernelThreads);
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
     auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads);
@@ -141,7 +142,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     if (canBlockVisc) {
         // Block-decomposed viscosity -> separate mass_fd + density task
         auto corrViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
-            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
+            nmeshes, blockThreads, numBlocks);
         auto corrMassFDDensityTask = std::make_shared<MassFDDensityKernelTask>(kernelThreads);
         subgraph->inputs(corrViscBlockSubgraph);
         subgraph->edges(corrViscBlockSubgraph, corrMassFDDensityTask);
@@ -154,19 +155,21 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(collector4SM, meshExchange4);
 
     // CorrDivSetup: block-decomposed or mesh-level depending on feature flags
-    if (ccIBM) {
-        // CC_IBM: orchestrator for CC_VELOCITY_BC -> mesh-level kernel
+    if (canBlockFlux) {
+        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
+        // CC_IBM handled internally: CC_VELOCITY_BC + CUTFACE_VELOCITIES in orchestrator,
+        // CC_VELOCITY_FLUX in collector
+        auto corrDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(meshExchange4, corrDivSetupBlockSubgraph);
+        subgraph->edges(corrDivSetupBlockSubgraph, combustionKernelTask);
+    } else if (ccIBM) {
+        // CC_IBM with features preventing block decomposition: orchestrator + mesh-level kernel
         auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
         subgraph->edges(meshExchange4, corrDivSetupOrchSM);
         subgraph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);
         subgraph->edges(corrDivSetupKernelTask, combustionKernelTask);
-    } else if (canBlockFlux) {
-        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
-        auto corrDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
-            nmeshes, kernelThreads, static_cast<int>(kernelThreads));
-        subgraph->edges(meshExchange4, corrDivSetupBlockSubgraph);
-        subgraph->edges(corrDivSetupBlockSubgraph, combustionKernelTask);
     } else {
         // Mesh-level fallback (Coriolis, patch velocity, etc.)
         subgraph->edges(meshExchange4, corrDivSetupKernelTask);

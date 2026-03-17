@@ -48,8 +48,14 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             // Sequential pre-processing per mesh
             for (auto &md : collected_) {
+                // CC_IBM: CC_VELOCITY_BC must run before velocity flux
+                if (fds_is_cc_ibm())
+                    fds_cc_velocity_bc(md->t, md->nm, md->phase);
                 fds_set_baroclinic_false(md->nm);
                 fds_viscosity_bc_kernel(md->nm, md->phase);
+                // CC_IBM: set cutface velocities before block kernels
+                if (fds_is_cc_ibm())
+                    fds_cutface_velocities(md->nm, md->phase, 1);
             }
 
             // Decompose each mesh into K-blocks
@@ -94,6 +100,9 @@ public:
         entry.count++;
         if (entry.count == entry.expected) {
             auto md = entry.meshData;
+            // CC_IBM post-processing: reset cutface velocities + CC gravity corrections
+            if (fds_is_cc_ibm())
+                fds_cc_velocity_flux_post(md->nm, md->t, md->dt, md->phase);
             // Post-processing: agglomeration (corrector only)
             if (md->phase)
                 fds_agglomeration(md->dt, md->nm);
