@@ -301,6 +301,25 @@ All verified byte-identical on CC_IBM test cases.
 - two_spheres_cc: 1-mesh Two Spheres (tolerance 1e-4, minor numerical difference)
 - sphere_helium_1mesh_cc: 1-mesh Sphere Helium (byte-identical)
 
+## Intra-Mesh Block Decomposition (7 kernels converted)
+
+K-block decomposition partitions each mesh along the K dimension into sub-blocks [K1:K2],
+enabling intra-mesh parallelism. Each block is processed by a separate thread.
+
+See [MESH_BLOCK_PROGRESS.md](MESH_BLOCK_PROGRESS.md) for detailed per-kernel status.
+
+### Completed Block Decompositions
+
+| Kernel | Sub-graph | K-partition | Notes |
+|--------|-----------|-------------|-------|
+| VELOCITY_PREDICTOR_KERNEL | velocity_predictor_block_subgraph.h | US/VS at K1:K2; WS at K1-1:K2-1 | CheckStability at mesh level |
+| VELOCITY_CORRECTOR_KERNEL | velocity_corrector_block_subgraph.h | U/V at K1:K2; W at K1-1:K2-1 | CheckDiv at mesh level |
+| VELOCITY_FLUX_KERNEL | velocity_flux_block_subgraph.h | Vorticity K-1:K2; FVX/Y K1:K2; FVZ K1-1:K2-1 | Conditional: no Coriolis/patch/CTRL/wind/periodic |
+| COMPUTE_VISCOSITY_KERNEL | compute_viscosity_block_subgraph.h | MU/STRAIN at K1:K2 | Conditional: NO_TURB/CONSMAG/VREMAN/WALE only |
+| WALL_BC_PROCESS_CELLS_KERNEL | wallbc_block_subgraph.h | Wall cells filtered by KKG range | CC_IBM falls back to mesh-level |
+| PARTICLE_MOMENTUM_KERNEL | particle_momentum_block_subgraph.h | Cells K1:K2 (first block extends to K=0) | CC_IBM falls back to mesh-level |
+| VELOCITY_BC_PROCESS_EDGES_KERNEL | velocity_bc_edges_block_subgraph.h | Edges filtered by ED%K; DRAG_UVWMAX MAX-reduced | Used by PredFinal + CorrFinal |
+
 ## Future Work
 
 ### 1. Phase 3: Easy Parallelization Targets — COMPLETE
@@ -311,7 +330,57 @@ See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for details
 - ✅ **Particle Mass/Energy** — per-particle heat transfer parallelized (Target 2)
 - ❌ **Particle Insertion** — blocked by RANDOM_NUMBER thread-safety (Target 3, not viable)
 
-### 2. Advanced Optimization
+### 2. Phase 4: Remaining Block Decomposition Targets
+
+Ranked by estimated impact (combined runtime × decomposition feasibility):
+
+#### Target 1: DIVERGENCE_PART_1_KERNEL (HIGH priority)
+
+**Combined runtime**: 824ms per timestep (pred 286 + corr 294 + retry 244)
+**Decomposable fraction**: ~77%
+**Feasibility**: HIGH
+
+The kernel (divg_kernels.f90) has three sections:
+1. **Wall preprocessing** (~15%): `WALL_LOOP_1` reads wall properties, writes to gas cells at wall (II,JJ,KK) coordinates. Sequential — wall cells write to arbitrary (I,J,K) locations.
+2. **Cell+species loops** (~77%): `SPEC_LOOP` with I,J,K cell loops computing FX, RHO_D_DZDX/Y/Z, diffusive fluxes. Fully K-decomposable. Per-mesh local accumulators (D_SUM_LOC, P_SUM_LOC, U_SUM_LOC) need per-block locals + SUM reduction.
+3. **Wall postprocessing** (~8%): `WALL_LOOP_2` and `WALL_LOOP_3` correct species/enthalpy fluxes at wall cells. Sequential — same arbitrary (I,J,K) issue.
+
+**Approach**: 3-stage pattern: Wall preprocessing (orchestrator) → K-block cell loops (parallel) → Wall postprocessing (collector). Accumulator reduction (SUM) in collector.
+
+**Appears in**: PredWallDivKernelTask, CorrDivPart1KernelTask, RetryMomentumDivKernelTask (3 graph nodes).
+
+#### Target 2: DIVERGENCE_PART_2_KERNEL (HIGH priority, easy win)
+
+**Combined runtime**: ~140ms per timestep (pred + corr)
+**Decomposable fraction**: ~98%
+**Feasibility**: HIGH
+
+The kernel (divg_kernels.f90) has:
+1. **Zone ops** (~2%): D_PBAR_DT computation, pressure zone averaging. Sequential — per-zone global state.
+2. **Cell loops** (~90%): I,J,K loops computing DP, RTRM, D_PBAR_DT_S. Fully K-decomposable.
+3. **BC_LOOP** (~8%): Wall cell corrections to D_PBAR_DT_S. Can be K-filtered by wall KKG coordinate.
+
+**Approach**: Zone ops in orchestrator → K-block cell loops + filtered BC_LOOP (parallel) → simple reassembly (collector).
+
+**Appears in**: DivergencePart2KernelTask (2 graph nodes: pred + corr).
+
+#### Target 3: DENSITY_KERNEL (MODERATE priority)
+
+**Combined runtime**: ~150ms per timestep
+**Decomposable fraction**: ~70%
+**Feasibility**: MODERATE
+
+Main blocker: CHECK_MASS_DENSITY at end of kernel requires K±1 halo access (compares cell with neighbors). Zone PBAR_S updates are mesh-global. Species advection cell loops are fully K-decomposable.
+
+**Approach**: Would need K±1 halo overlap between blocks OR run CHECK_MASS_DENSITY as mesh-level post-step.
+
+#### Not Viable for Block Decomposition
+
+- **MASS_FINITE_DIFFERENCES**: GET_SCALAR_FACE_VALUE stencils require full K-domain neighbor access. Cannot K-decompose.
+- **COMPUTE_RADIATION_KERNEL**: Complex FVM solver (1300+ lines, angle sweeps in 3D, wall/particle loops). Would require major restructuring.
+- **DumpMeshOutputs**: I/O task.
+
+### 3. Advanced Optimization
 
 **Hybrid MPI+Hedgehog**
 - Each MPI rank runs Hedgehog graph with kernelThreads > 1
@@ -353,13 +422,16 @@ approach for the predictor-corrector scheme.
 ## Summary Statistics
 
 - **Sub-graphs created**: 19 (including parallel pressure iteration with cycle)
+- **Block sub-graphs**: 7 (intra-mesh K-block decomposition for additional parallelism)
 - **Graph nodes replaced**: 22 (some tasks appear in both predictor/corrector)
 - **Kernels extracted**: 21 new kernels + utilizing ~30 existing kernels
+- **Block kernels**: 7 (VELOCITY_PREDICTOR, VELOCITY_CORRECTOR, VELOCITY_FLUX, COMPUTE_VISCOSITY, WALL_BC, PARTICLE_MOMENTUM, VELOCITY_BC_EDGES)
 - **Thread-safe conversions**: 2900+ lines converted (including ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
 - **Test coverage**: 12 custom cases + 99 verification cases (73 pass at tol=1e-6)
 - **Overall speedup**: 5.35x on verification suite
 - **Sequential fraction**: reduced from 39% to ~23%
 - **Parallel fraction**: increased from 27% to ~63%
+- **Phase 4 targets identified**: 2 high priority (DIVERGENCE_PART_1: 824ms, DIVERGENCE_PART_2: 140ms), 1 moderate (DENSITY_KERNEL)
 
 ## Documentation Index
 
@@ -376,4 +448,5 @@ approach for the predictor-corrector scheme.
 
 ### Progress Tracking
 - PARALLELIZATION_PROGRESS.md - This file (current status)
+- MESH_BLOCK_PROGRESS.md - Intra-mesh K-block decomposition (7 converted, Phase 4 roadmap)
 - PHASE3_EASY_PARALLELIZATION.md - Phase 3 targets (2 complete, 1 blocked)

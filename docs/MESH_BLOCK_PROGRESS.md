@@ -149,17 +149,23 @@ Or ULMAT variant:
 ### VelocityBCEdgesTask (predictor instance, inside PredFinal sub-graph)
 
 **Graph location:** PredFinal sub-graph kernel
-**File:** `task/velocity_bc_edges_task.h`
+**File:** `task/velocity_bc_edges_task.h`, `graph/velocity_bc_edges_block_subgraph.h`
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `MATCH_VELOCITY_KERNEL` | velo_kernels.f90:2238 | **Mesh** | External wall loop (IW=1 to N_EXTERNAL_WALL_CELLS) |
-| 2 | `VELOCITY_BC_PROCESS_EDGES_KERNEL` | velo_kernels.f90:1430 | **Mesh** | Edge loop with wall BC application, wall loops |
+| 1 | `MATCH_VELOCITY_KERNEL` | velo_kernels.f90:2238 | **Mesh** | External wall loop — sequential preprocessing in orchestrator |
+| 2 | `VELOCITY_BC_PROCESS_EDGES_KERNEL` | velo_kernels.f90:2361 | **Block** | Edge loop filtered by ED%K range; DRAG_UVWMAX via local accumulator + MAX reduction |
 
-Note: `fds_velocity_bc_preprocessing` runs before the kernel but is sequential pre-processing.
+**Task classification:** Block — edge loop filtered by K coordinate. MATCH_VELOCITY + VELOCITY_BC_PREPROCESSING run in orchestrator; DRAG_UVWMAX reduced in collector.
+**Status:** DONE
 
-**Task classification:** Mesh — both kernels iterate over wall/edge indices, not (I,J,K) grid.
-**Status:** DONE (classified, no conversion needed)
+**Implementation:**
+- Block kernel: `VELOCITY_BC_PROCESS_EDGES_KERNEL(M,NM,T,...,K1_IN,K2_IN,DRAG_UVWMAX_LOCAL)` — OPTIONAL parameters in velo_kernels.f90
+- K-partition: edges filtered by ED%K; first block includes K=0 boundary edges
+- DRAG_UVWMAX: per-block local accumulator, MAX-reduced in collector, written back via `fds_set_drag_uvwmax`
+- Sub-graph: `graph/velocity_bc_edges_block_subgraph.h` — Orchestrator(SYNTHETIC_TURBULENCE+MATCH+PREPROCESS+decompose) → BlockKernel → Collector(reassemble+DRAG reduce+CC_VELOCITY_BC)
+- CC_VELOCITY_BC runs in collector (mesh-level)
+- Verified: 12/12 custom pass, 45/59 verification pass (no regressions), WUI vegetation tests pass
 
 ---
 
@@ -370,12 +376,14 @@ Same kernels as predictor instance (see above).
 ### VelocityBCEdgesTask (corrector instance, inside CorrFinal sub-graph)
 
 **Graph location:** CorrFinal sub-graph kernel
-**File:** `task/velocity_bc_edges_task.h`
+**File:** `task/velocity_bc_edges_task.h`, `graph/velocity_bc_edges_block_subgraph.h`
 
 Same kernels as predictor instance (see above).
 
-**Task classification:** Mesh — same as predictor instance.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Block — same as predictor instance. Shares block kernel implementation.
+**Status:** DONE
+
+**Implementation:** Same as predictor instance. CorrFinal block sub-graph additionally runs `UPDATE_GLOBAL_OUTPUTS` in collector (per-mesh output accumulation). See predictor VelocityBCEdgesTask entry for full details.
 
 ---
 
@@ -415,13 +423,26 @@ Same kernels as predictor instance (see above).
 | 12 | WallBCKernelTask | WALL_BC_PROCESS_CELLS_KERNEL | **DONE** — block kernel (KKG filter), CC_IBM mesh fallback |
 | 13 | CorrRadiationKernelTask | COMPUTE_RADIATION_KERNEL | **Mixed** — angle sweeps + wall/particle loops |
 | 14 | PressureSolveKernelTask | NO_FLUX + COMPUTE_RHS + FFT/ULMAT + CHECK_RESIDUALS | **Mesh** — FFT/ULMAT global solvers, wall loops |
-| 15 | VelocityBCEdgesTask | MATCH_VELOCITY, VELOCITY_BC_PROCESS_EDGES | **Mesh** — wall/edge loops |
+| 15 | VelocityBCEdgesTask | MATCH_VELOCITY, VELOCITY_BC_PROCESS_EDGES | **DONE** — block kernel (ED%K filter), DRAG_UVWMAX MAX reduction |
 | 16 | RetryMomentumDivKernelTask | PARTICLE_MOMENTUM + DIVERGENCE_PART_1 | **Mixed** — same as #6 |
 
 ### Progress Counters
 
 - **Total unique kernel tasks:** 16
 - **Classified:** 16 / 16
-- **Converted to mesh block:** 6 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux, ComputeViscosity, WallBC)
-- **Confirmed mesh-only:** 8
+- **Converted to mesh block:** 7 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux, ComputeViscosity, WallBC, VelocityBCEdges)
+- **Confirmed mesh-only:** 7
 - **Mixed (no conversion):** 2 (PredWallDiv, RetryMomentumDiv — PART_MOM lightweight relative to DIV_PART_1)
+
+### Phase 4: Remaining Block Decomposition Targets
+
+Ranked by estimated impact (runtime × feasibility):
+
+| Priority | Kernel | Combined Time (ms) | Decomposable % | Feasibility | Blocker |
+|----------|--------|-------------------|----------------|-------------|---------|
+| 1 | DIVERGENCE_PART_1_KERNEL | 824 (pred 286 + corr 294 + retry 244) | 77% | HIGH | Wall preprocessing/postprocessing sequential; cell+species loops block-decomposable |
+| 2 | DIVERGENCE_PART_2_KERNEL | 140 (pred + corr) | 98% | HIGH | Only zone ops (D_PBAR_DT) sequential; cell loops + BC_LOOP fully decomposable |
+| 3 | DENSITY_KERNEL | ~150 | 70% | MODERATE | CHECK_MASS_DENSITY needs K±1 halo; zone PBAR updates sequential |
+| 4 | MASS_FINITE_DIFFERENCES | ~100 | LOW | LOW | GET_SCALAR_FACE_VALUE stencils require full K-domain neighbor access |
+| 5 | COMPUTE_RADIATION_KERNEL | ~250 | ~30% | LOW | Complex FVM solver (1300+ lines, CONTAINS, angle sweeps, wall+particle loops) |
+| 6 | DumpMeshOutputs | — | 0% | NONE | I/O task, not parallelizable |
