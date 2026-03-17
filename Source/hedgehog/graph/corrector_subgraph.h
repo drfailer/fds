@@ -97,7 +97,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
         : buildWallBCSubgraph(nmeshes, kernelThreads);
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
-    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads);
+    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads, blockThreads, numBlocks);
 
     // --- Barrier tasks ---
 

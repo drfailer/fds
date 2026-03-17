@@ -8,20 +8,23 @@
 #include "../task/velocity_bc_edges_task.h"
 #include "../state/velocity_bc_state.h"
 #include "../state/collector_state.h"
+#include "velocity_bc_edges_block_subgraph.h"
 
 /// Build the PredFinal sub-graph.
 ///
-/// Architecture:
-///   1. Sequential preprocessing (PredFinalOrchestrator):
-///      - SYNTHETIC_TURBULENCE_IF_ENABLED (SEM inflow BC — uses RANDOM_NUMBER)
+/// With block decomposition (numBlocks > 1):
+///   Orchestrator(SYNTHETIC_TURBULENCE + MATCH_VELOCITY + PREPROCESSING + K-decompose) ->
+///   VelBCEdgesBlockKernel(parallel) -> Collector(reassemble + DRAG reduce + CC_VELOCITY_BC)
 ///
-///   2. Parallel kernel execution (VelocityBCEdgesTask, applyToEstimated=1):
-///      - MATCH_VELOCITY_KERNEL, VELOCITY_BC_PREPROCESSING, VELOCITY_BC_PROCESS_EDGES_KERNEL
-///
-///   3. Collection -> BarrierData output:
-///      - CC_IBM: PredFinalCCCollector (CC_VELOCITY_BC + collect)
-///      - Non-CC_IBM: CollectorState (pure collection)
-inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
+/// Without block decomposition:
+///   PredFinalOrchestrator(SYNTHETIC_TURBULENCE) -> VelocityBCEdgesTask(mesh-level) ->
+///   Collector(CC_VELOCITY_BC if CC_IBM)
+inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads,
+                                    size_t blockThreads, int numBlocks) {
+    if (numBlocks > 1) {
+        return buildPredFinalBlockSubgraph(nmeshes, blockThreads, numBlocks);
+    }
+
     using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
@@ -49,15 +52,19 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
 
 /// Build the CorrFinal sub-graph.
 ///
-/// Architecture:
-///   1. Parallel kernel execution (VelocityBCEdgesTask, applyToEstimated=0):
-///      - MATCH_VELOCITY_KERNEL, VELOCITY_BC_PREPROCESSING, VELOCITY_BC_PROCESS_EDGES_KERNEL
+/// With block decomposition (numBlocks > 1):
+///   Orchestrator(MATCH_VELOCITY + PREPROCESSING + K-decompose) ->
+///   VelBCEdgesBlockKernel(parallel) -> Collector(reassemble + DRAG reduce +
+///     CC_VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS)
 ///
-///   2. Sequential finalization (CorrFinalCollector):
-///      - CC_VELOCITY_BC (if CC_IBM active — no-op otherwise)
-///      - UPDATE_GLOBAL_OUTPUTS (per-mesh output accumulation)
-///      - Emits single BarrierData
-inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
+/// Without block decomposition:
+///   VelocityBCEdgesTask(mesh-level) -> CorrFinalCollector(CC_VELOCITY_BC + outputs)
+inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads,
+                                    size_t blockThreads, int numBlocks) {
+    if (numBlocks > 1) {
+        return buildCorrFinalBlockSubgraph(nmeshes, blockThreads, numBlocks);
+    }
+
     using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 

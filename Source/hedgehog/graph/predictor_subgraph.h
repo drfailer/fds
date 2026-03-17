@@ -88,7 +88,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         kernelThreads, /*skipCFL=*/ccIBM);
 
     // PredFinal sub-graph (Pattern B, outputs BarrierData)
-    auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads);
+    auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads, blockThreads, numBlocks);
 
     // ChangeTimeStep sub-graph (CFL retry loop)
     auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(tEnd, nmeshes, kernelThreads);

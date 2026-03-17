@@ -85,6 +85,9 @@ void fds_wall_bc_finalize(int nm, double t, double dt_bc, int call_ht_1d);
 void fds_match_velocity_kernel(int nm, int is_predictor);
 void fds_velocity_bc_preprocessing(int nm, double t, int apply_to_estimated);
 void fds_velocity_bc_process_edges_kernel(int nm, double t, int apply_to_estimated);
+void fds_velocity_bc_process_edges_block_kernel(int nm, double t, int apply_to_estimated,
+                                                 int k1, int k2, double *drag_uvwmax_out);
+void fds_set_drag_uvwmax(int nm, double val);
 void fds_synthetic_turbulence_if_enabled(double dt, double t, int nm);
 void fds_cc_velocity_bc(double t, int nm, int estimated);
 void fds_cc_project_velocity(int nm, double dt, int store_flag);
