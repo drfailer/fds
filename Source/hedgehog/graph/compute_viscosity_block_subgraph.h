@@ -45,6 +45,13 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
+            // CC_IBM pre-processing: set cutface velocities before strain rate computation
+            if (fds_is_cc_ibm()) {
+                for (auto &md : collected_) {
+                    fds_cutface_velocities(md->nm, md->phase, 1);
+                }
+            }
+
             // Decompose each mesh into K-blocks
             for (auto &md : collected_) {
                 int kbar = fds_get_kbar(md->nm);
