@@ -158,7 +158,7 @@ SPECIES_GT_1_IF: IF (N_TOTAL_SCALARS>1) THEN
 
       ! Manufactured solution
 
-      IF (PERIODIC_TEST==9) RHO_D = DIFF_MMS
+      IF (PERIODIC_TEST==7) RHO_D = DIFF_MMS
 
       ! Store max diffusivity for stability check
 

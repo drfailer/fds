@@ -3,14 +3,14 @@
 FDS Verification Suite Runner
 
 Runs verification cases from Verification/FDS_Cases.sh,
-comparing fds_hh (Hedgehog) output against fds6 (ground truth).
+comparing fds_hh (Hedgehog) output against fds_master (ground truth).
 
 Usage:
     # Discover all cases
     python run_verification.py discover [--category Aerosols]
 
-    # Generate gold files with fds6 (ground truth)
-    python run_verification.py generate-gold [--category Aerosols] [--timeout 300] [--jobs 4]
+    # Generate gold files with fds_master (ground truth)
+    python run_verification.py generate-gold --exe /path/to/fds_master [--category Aerosols] [--timeout 300] [--jobs 4]
 
     # Run tests with fds_hh and compare against gold
     python run_verification.py test [--category Aerosols] [--timeout 300] [--jobs 4]
@@ -43,8 +43,8 @@ RUN_DIR = TEST_DIR / "verification_run"
 RESULTS_FILE = TEST_DIR / "verification_results.json"
 BUILD_DIR = REPO_ROOT / "build_hh"
 FDS_HH = BUILD_DIR / "Source" / "hedgehog" / "fds_hh"
-FDS6_PATH = shutil.which('fds6')
-FDS6 = Path(FDS6_PATH) if FDS6_PATH else None
+FDS_MASTER_PATH = shutil.which('fds_master')
+FDS_MASTER = Path(FDS_MASTER_PATH) if FDS_MASTER_PATH else None
 COMPARE_SCRIPT = TEST_DIR / "compare_csv.py"
 
 
@@ -153,7 +153,7 @@ def run_fds(exe: Path, input_file: Path, work_dir: Path, chid: str,
     Args:
         nproc: Number of MPI processes (from -p N in FDS_Cases.sh).
                For fds_hh, always pass 1 (Hedgehog handles all meshes internally).
-        omp_threads: Number of OpenMP threads (for fds6 performance).
+        omp_threads: Number of OpenMP threads (for fds_master performance).
                For fds_hh, always pass 1 (uses Hedgehog threading instead).
 
     Returns (success, elapsed_seconds).
@@ -361,7 +361,7 @@ def _run_single_case(case: Dict, exe: Path, output_dir: Path,
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # fds_hh always runs with 1 MPI process (Hedgehog handles all meshes internally)
-    # fds6 uses the nproc from FDS_Cases.sh for multi-mesh parallelism
+    # fds_master uses the nproc from FDS_Cases.sh for multi-mesh parallelism
     nproc = 1 if is_fds_hh else case.get('nproc', 1)
     # fds_hh uses Hedgehog threading, not OpenMP
     omp = 1 if is_fds_hh else omp_threads
@@ -388,12 +388,16 @@ def _run_single_case(case: Dict, exe: Path, output_dir: Path,
 
 
 def cmd_generate_gold(args, cases: List[Dict]):
-    """Generate gold files using fds6."""
-    if FDS6 is None:
-        print("Error: fds6 not found in PATH")
+    """Generate gold files using fds_master."""
+    exe = Path(args.exe) if args.exe else FDS_MASTER
+    if exe is None:
+        print("Error: fds_master not found in PATH. Use --exe /path/to/fds_master")
+        return 1
+    if not exe.exists():
+        print(f"Error: {exe} does not exist")
         return 1
 
-    print(f"Generating gold files with: {FDS6}")
+    print(f"Generating gold files with: {exe}")
     print(f"Output directory: {GOLD_DIR}")
     print(f"Cases: {len(cases)}, Timeout: {args.timeout}s")
     print(f"OMP_NUM_THREADS: {args.omp_threads}, MPI: per-case nproc from FDS_Cases.sh\n")
@@ -430,7 +434,7 @@ def cmd_generate_gold(args, cases: List[Dict]):
         for i, case in enumerate(to_run, 1):
             nproc_str = f" -p {case['nproc']}" if case['nproc'] > 1 else ""
             print(f"[{i}/{len(to_run)}] {case['id']:50s}{nproc_str:>5s} ", end='', flush=True)
-            result = _run_single_case(case, FDS6, GOLD_DIR, args.timeout, False,
+            result = _run_single_case(case, exe, GOLD_DIR, args.timeout, False,
                                       omp_threads=args.omp_threads)
             if result['success']:
                 passed += 1
@@ -451,7 +455,7 @@ def cmd_generate_gold(args, cases: List[Dict]):
             futures = {}
             for case in to_run:
                 fut = executor.submit(
-                    _run_single_case, case, FDS6, GOLD_DIR, args.timeout, False,
+                    _run_single_case, case, exe, GOLD_DIR, args.timeout, False,
                     omp_threads=args.omp_threads)
                 futures[fut] = case
 
@@ -575,7 +579,7 @@ def cmd_test(args, cases: List[Dict]):
                 if gold_time > 0:
                     speedup = gold_time / result['elapsed'] if result['elapsed'] > 0 else 0
                     print(f"PASS ({result['elapsed']:.1f}s, "
-                          f"fds6={gold_time:.1f}s, "
+                          f"fds_master={gold_time:.1f}s, "
                           f"ratio={speedup:.2f}x)")
                 else:
                     print(f"PASS ({result['elapsed']:.1f}s)")
@@ -639,7 +643,7 @@ def cmd_report(args, cases: List[Dict]):
                 'case_id': case_id,
                 'nmeshes': tr.get('nmeshes', 1),
                 'nproc': gr.get('nproc', 1),
-                'fds6_time': gold_time,
+                'fds_master_time': gold_time,
                 'fds_hh_time': hh_time,
                 'ratio': gold_time / hh_time if hh_time > 0 else 0,
             })
@@ -674,7 +678,7 @@ def cmd_report(args, cases: List[Dict]):
     # Print performance summary
     if perf_data:
         print(f"\n{'=' * 80}")
-        print(f"PERFORMANCE COMPARISON (fds6 vs fds_hh)")
+        print(f"PERFORMANCE COMPARISON (fds_master vs fds_hh)")
         print(f"{'=' * 80}")
 
         # Separate single-mesh and multi-mesh
@@ -685,32 +689,32 @@ def cmd_report(args, cases: List[Dict]):
             if not data:
                 continue
 
-            total_fds6 = sum(p['fds6_time'] for p in data)
+            total_fds_master = sum(p['fds_master_time'] for p in data)
             total_hh = sum(p['fds_hh_time'] for p in data)
-            avg_ratio = total_fds6 / total_hh if total_hh > 0 else 0
+            avg_ratio = total_fds_master / total_hh if total_hh > 0 else 0
 
             print(f"\n{label} cases ({len(data)}):")
-            print(f"  Total fds6 time:   {total_fds6:8.1f}s")
+            print(f"  Total fds_master time:   {total_fds_master:8.1f}s")
             print(f"  Total fds_hh time: {total_hh:8.1f}s")
             print(f"  Aggregate ratio:   {avg_ratio:8.2f}x")
 
             # Show top 20 cases by fds_hh time
             data_sorted = sorted(data, key=lambda p: p['fds_hh_time'], reverse=True)
-            print(f"\n  {'Case':50s} {'fds6':>8s} {'fds_hh':>8s} {'ratio':>7s} {'meshes':>6s} {'nproc':>5s}")
+            print(f"\n  {'Case':50s} {'fds_master':>8s} {'fds_hh':>8s} {'ratio':>7s} {'meshes':>6s} {'nproc':>5s}")
             print(f"  {'-'*50} {'-'*8} {'-'*8} {'-'*7} {'-'*6} {'-'*5}")
             for p in data_sorted[:20]:
                 nproc_str = str(p.get('nproc', '?'))
-                print(f"  {p['case_id']:50s} {p['fds6_time']:7.1f}s {p['fds_hh_time']:7.1f}s "
+                print(f"  {p['case_id']:50s} {p['fds_master_time']:7.1f}s {p['fds_hh_time']:7.1f}s "
                       f"{p['ratio']:6.2f}x {p['nmeshes']:5d} {nproc_str:>5s}")
 
         # Overall
-        total_fds6 = sum(p['fds6_time'] for p in perf_data)
+        total_fds_master = sum(p['fds_master_time'] for p in perf_data)
         total_hh = sum(p['fds_hh_time'] for p in perf_data)
-        avg_ratio = total_fds6 / total_hh if total_hh > 0 else 0
+        avg_ratio = total_fds_master / total_hh if total_hh > 0 else 0
 
         print(f"\n{'=' * 80}")
         print(f"Overall ({len(perf_data)} cases): "
-              f"fds6={total_fds6:.1f}s, fds_hh={total_hh:.1f}s, "
+              f"fds_master={total_fds_master:.1f}s, fds_hh={total_hh:.1f}s, "
               f"ratio={avg_ratio:.2f}x")
         print(f"{'=' * 80}")
 
@@ -846,7 +850,8 @@ def main():
     p_disc.add_argument('--max-gold-time', type=float, help='Skip cases where gold took longer than N seconds')
 
     # generate-gold
-    p_gold = subparsers.add_parser('generate-gold', help='Generate gold files with fds6')
+    p_gold = subparsers.add_parser('generate-gold', help='Generate gold files with fds_master')
+    p_gold.add_argument('--exe', help='Path to fds_master binary (default: fds_master on PATH)')
     p_gold.add_argument('--category', help='Filter by category (comma-separated)')
     p_gold.add_argument('--max-meshes', type=int, help='Max mesh count')
     p_gold.add_argument('--case', action='append', help='Filter by case name/CHID')
@@ -855,7 +860,7 @@ def main():
     p_gold.add_argument('--timeout', type=int, default=300, help='Per-case timeout (default: 300s)')
     p_gold.add_argument('--jobs', '-j', type=int, default=1, help='Parallel jobs (default: 1)')
     p_gold.add_argument('--force', action='store_true', help='Regenerate existing gold files')
-    p_gold.add_argument('--omp-threads', type=int, default=4, help='OpenMP threads for fds6 (default: 4)')
+    p_gold.add_argument('--omp-threads', type=int, default=4, help='OpenMP threads for fds_master (default: 4)')
     p_gold.add_argument('--no-redundant', action='store_true', help='Keep only smallest grid size per family + multi-mesh')
     p_gold.add_argument('--max-gold-time', type=float, help='Skip cases where gold took longer than N seconds')
 
