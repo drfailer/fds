@@ -92,7 +92,7 @@ void fds_velocity_bc_process_edges_block_kernel(int nm, double t, int apply_to_e
                                                  int k1, int k2, double *drag_uvwmax_out);
 void fds_set_drag_uvwmax(int nm, double val);
 void fds_synthetic_turbulence_if_enabled(double dt, double t, int nm);
-void fds_cc_velocity_bc(double t, int nm, int estimated);
+void fds_cc_velocity_bc(double t, int nm, int estimated, int do_ibedges);
 void fds_cc_project_velocity(int nm, double dt, int store_flag);
 void fds_wall_velocity_no_gradh(int nm, double dt, int store_flag);
 
@@ -130,6 +130,7 @@ void fds_flush_output_files();
 // Barrier / exchange subroutines
 void fds_mesh_exchange(int code);
 void fds_post_receives(int code);
+void fds_exchange_inserted_particles();
 void fds_pressure_iteration(double t, double dt);
 
 // Pressure iteration kernel routines (for sub-graph parallelization)

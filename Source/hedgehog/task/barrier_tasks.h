@@ -34,6 +34,11 @@ public:
         if (ccDensity_) { fds_cc_density(data->t(), data->dt()); }
         if (ccEndStep_) { fds_cc_end_step(data->t(), data->dt(), 0); }
         fds_mesh_exchange(code_);
+        // After MESH_EXCHANGE(1), exchange newly inserted particles that
+        // crossed mesh boundaries (sprinkler/nozzle particles).
+        // Only runs on FIRST_PASS with multi-mesh particle exchange.
+        // Matches main.f90 lines 664-672.
+        if (code_ == 1) { fds_exchange_inserted_particles(); }
         if (initDiv_) { fds_initialize_divergence_integrals(); }
         for (auto &md : data->meshes) { this->addResult(md); }
     }

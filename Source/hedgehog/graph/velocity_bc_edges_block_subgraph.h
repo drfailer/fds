@@ -140,10 +140,10 @@ public:
                 for (auto &e : completedMeshes_) {
                     fds_set_drag_uvwmax(e.meshData->nm, e.dragUvwMax);
                     if (isCorrFinal_) {
-                        fds_cc_velocity_bc(e.meshData->t, e.meshData->nm, applyToEstimated_);
+                        fds_cc_velocity_bc(e.meshData->t, e.meshData->nm, applyToEstimated_, 1);  // DO_IBEDGES=TRUE (velocity BC context)
                         fds_update_global_outputs(e.meshData->t, e.meshData->dt, e.meshData->nm);
                     } else {
-                        fds_cc_velocity_bc(e.meshData->t, e.meshData->nm, applyToEstimated_);
+                        fds_cc_velocity_bc(e.meshData->t, e.meshData->nm, applyToEstimated_, 1);  // DO_IBEDGES=TRUE (velocity BC context)
                     }
                 }
 

@@ -60,7 +60,7 @@ public:
 
         if (count_ == nmeshes_) {
             for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 1);  // applyToEstimated=1 (predictor)
+                fds_cc_velocity_bc(md->t, md->nm, 1, 1);  // applyToEstimated=1 (predictor), DO_IBEDGES=TRUE
             }
 
             auto bd = std::make_shared<BarrierData>();
@@ -98,7 +98,7 @@ public:
 
         if (count_ == nmeshes_) {
             for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 0);  // applyToEstimated=0 (corrector)
+                fds_cc_velocity_bc(md->t, md->nm, 0, 1);  // applyToEstimated=0 (corrector), DO_IBEDGES=TRUE
                 fds_update_global_outputs(md->t, md->dt, md->nm);
             }
 

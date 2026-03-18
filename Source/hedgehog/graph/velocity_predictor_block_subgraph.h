@@ -56,6 +56,11 @@ public:
 ///   MeshData -> Decompose -> VelPredBlockKernel(parallel) -> Reassemble
 ///            -> CheckStabilityKernel(parallel, if !skipCFL) -> MeshData
 ///
+/// Note: This sub-graph does NOT call WALL_VELOCITY_NO_GRADH, so it must
+/// not be used for sparse pressure solvers (ULMAT/GLMAT/UGLMAT) which
+/// require that call between the kernel and CHECK_STABILITY.
+/// For those solvers, use VelocityPredictorFullTask instead.
+///
 /// @param kernelThreads Number of threads for parallel tasks
 /// @param numBlocks Target number of blocks per mesh
 /// @param skipCFL If true, skip CHECK_STABILITY_KERNEL (CC_IBM path)

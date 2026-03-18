@@ -1,482 +1,482 @@
-digraph x0x5607afaa7ed0 {
-label="FDS Hedgehog Graph\nExecution duration:18.190s\nCreation duration:33.300ms"; fontsize=25; penwidth=5; labelloc=top; labeljust=left; 
-x0x5607acbe4ab0 [label="Source", shape=invhouse];
-x0x5607acbe4d00 [label="Sink", shape=point];
-subgraph clusterx0x5607afc35430 {
+digraph x0x647da3093e90 {
+label="FDS Hedgehog Graph\nExecution duration:20.197s\nCreation duration:32.692ms"; fontsize=25; penwidth=5; labelloc=top; labeljust=left; 
+x0x647da01d0a70 [label="Source", shape=invhouse];
+x0x647da01d0cc0 [label="Sink", shape=point];
+subgraph clusterx0x647da32213f0 {
 label="Predictor"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afb2ba20 [label="PredStep1Orch\nElements: 304\nWait: 17.870s\nLock state: 49.429us\nEmpty ready list: 33.637ms\nDequeue+Exec: 294.143ms\nExec/Element: 966.826us",shape=rect,color="#0089ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afb2c5c0 [label="PredStep1Kernel x 4\nElements: Min: 76 / Avg: 76 +- 0 / Max: 76
-Wait Time: Min: 17.040s / Avg: 17.091s +- 31.976ms / Max: 17.125s\nDequeue+Exec: Min: 1.072s / Avg: 1.105s +- 32.224ms / Max: 1.157s\nExec:   Min: 14.110ms / Avg: 14.540ms +- 407.671us / Max: 15.193ms\n",shape=rect,color="#20ff00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc23e0 [label="DensityPredKernel x 4\nElements: Min: 70 / Avg: 76 +- 3.74166 / Max: 80
-Wait Time: Min: 17.891s / Avg: 17.917s +- 22.238ms / Max: 17.947s\nDequeue+Exec: Min: 250.167ms / Avg: 280.060ms +- 22.447ms / Max: 306.492ms\nExec:   Min: 3.516ms / Avg: 3.678ms +- 136.328us / Max: 3.829ms\n",shape=rect,color="#008fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-subgraph clusterx0x5607afcc2cd0 {
+x0x647da31179e0 [label="PredStep1Orch\nElements: 312\nWait: 20.052s\nLock state: 48.294us\nEmpty ready list: 37.545ms\nDequeue+Exec: 116.145ms\nExec/Element: 371.636us",shape=rect,color="#0035ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da3118580 [label="PredStep1Kernel x 4\nElements: Min: 78 / Avg: 78 +- 0 / Max: 78
+Wait Time: Min: 19.075s / Avg: 19.106s +- 17.957ms / Max: 19.118s\nDequeue+Exec: Min: 1.087s / Avg: 1.098s +- 18.239ms / Max: 1.130s\nExec:   Min: 13.936ms / Avg: 14.086ms +- 233.922us / Max: 14.491ms\n",shape=rect,color="#08ff00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32ae3a0 [label="DensityPredKernel x 4\nElements: Min: 73 / Avg: 78 +- 3.08221 / Max: 81
+Wait Time: Min: 19.904s / Avg: 19.913s +- 7.388ms / Max: 19.924s\nDequeue+Exec: Min: 280.825ms / Avg: 292.360ms +- 7.679ms / Max: 302.016ms\nExec:   Min: 3.595ms / Avg: 3.753ms +- 182.631us / Max: 4.043ms\n",shape=rect,color="#008aff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+subgraph clusterx0x647da32aec90 {
 label="WallBCBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcc3230 [label="WallBCBlockOrch\nElements: 304\nWait: 17.538s\nLock state: 44.020us\nEmpty ready list: 269.314ms\nDequeue+Exec: 405.002ms\nExec/Element: 1.331ms",shape=rect,color="#00bdff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc36a0 [label="WallBCBlockKernel x 40\nElements: Min: 91 / Avg: 190 +- 49.3336 / Max: 324
-Wait Time: Min: 18.122s / Avg: 18.147s +- 12.092ms / Max: 18.173s\nDequeue+Exec: Min: 30.730ms / Avg: 43.120ms +- 7.223ms / Max: 63.448ms\nExec:   Min: 158.889us / Avg: 235.246us +- 52.950us / Max: 359.817us\n",shape=rect,color="#0012ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc3d30 [label="WallBCBlockColl\nElements: 7600\nWait: 18.173s\nLock state: 669.717us\nEmpty ready list: 28.166ms\nDequeue+Exec: 6.403ms\nExec/Element: 514ns",shape=rect,color="#0003ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcc3230MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc36a0WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afcc3d30WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
+x0x647da32af1f0 [label="WallBCBlockOrch\nElements: 312\nWait: 19.531s\nLock state: 45.400us\nEmpty ready list: 264.064ms\nDequeue+Exec: 425.274ms\nExec/Element: 1.362ms",shape=rect,color="#00c3ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32af660 [label="WallBCBlockKernel x 40\nElements: Min: 81 / Avg: 195 +- 57.596 / Max: 313
+Wait Time: Min: 20.135s / Avg: 20.149s +- 7.310ms / Max: 20.159s\nDequeue+Exec: Min: 55.060ms / Avg: 66.587ms +- 7.555ms / Max: 80.985ms\nExec:   Min: 196.145us / Avg: 372.606us +- 125.060us / Max: 783.240us\n",shape=rect,color="#001eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32afcf0 [label="WallBCBlockColl\nElements: 7800\nWait: 20.171s\nLock state: 536.376us\nEmpty ready list: 37.678ms\nDequeue+Exec: 8.431ms\nExec/Element: 770ns",shape=rect,color="#0003ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32af1f0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32af660WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
+"edgex0x647da32afcf0WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
 }
-x0x5607afcc41a0 [label="PredWallDivKernel x 4\nElements: Min: 76 / Avg: 76 +- 0 / Max: 76
-Wait Time: Min: 16.050s / Avg: 16.095s +- 36.548ms / Max: 16.141s\nDequeue+Exec: Min: 2.059s / Avg: 2.104s +- 36.414ms / Max: 2.149s\nExec:   Min: 27.090ms / Avg: 27.688ms +- 479.133us / Max: 28.281ms\n",shape=rect,color="#ff2d00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-subgraph clusterx0x5607afcc4a90 {
+x0x647da32b0160 [label="PredWallDivKernel x 4\nElements: Min: 78 / Avg: 78 +- 0 / Max: 78
+Wait Time: Min: 17.984s / Avg: 18.035s +- 31.368ms / Max: 18.065s\nDequeue+Exec: Min: 2.142s / Avg: 2.172s +- 31.313ms / Max: 2.223s\nExec:   Min: 27.468ms / Avg: 27.848ms +- 401.500us / Max: 28.507ms\n",shape=rect,color="#ff1800", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+subgraph clusterx0x647da32b0a50 {
 label="VelocityPredictorBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcc4ff0 [label="VelPredDecompose\nElements: 304\nWait: 17.863s\nLock state: 46.389us\nEmpty ready list: 192.956ms\nDequeue+Exec: 4.050ms\nExec/Element: 11.464us",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc5460 [label="VelPredBlockKernel x 40\nElements: Min: 114 / Avg: 190 +- 46.5301 / Max: 306
-Wait Time: Min: 18.040s / Avg: 18.048s +- 2.703ms / Max: 18.053s\nDequeue+Exec: Min: 7.676ms / Avg: 11.428ms +- 2.399ms / Max: 17.126ms\nExec:   Min: 32.631us / Avg: 62.374us +- 20.227us / Max: 139.107us\n",shape=rect,color="#0005ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc5af0 [label="VelPredReassemble\nElements: 7600\nWait: 18.045s\nLock state: 1.481ms\nEmpty ready list: 4.440ms\nDequeue+Exec: 5.946ms\nExec/Element: 283ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc5f60 [label="CheckStabilityKernel x 40\nElements: Min: 4 / Avg: 7.6 +- 1.86815 / Max: 11
-Wait Time: Min: 18.046s / Avg: 18.052s +- 2.393ms / Max: 18.057s\nDequeue+Exec: Min: 3.903ms / Avg: 8.540ms +- 2.452ms / Max: 14.064ms\nExec:   Min: 702.429us / Avg: 1.122ms +- 193.860us / Max: 1.649ms\n",shape=rect,color="#0005ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcc4ff0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc5460MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=95", shape=rect];
-"edgex0x5607afcc5af0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
-"edgex0x5607afcc5f60MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+x0x647da32b0fb0 [label="VelPredDecompose\nElements: 312\nWait: 19.819s\nLock state: 48.512us\nEmpty ready list: 226.759ms\nDequeue+Exec: 5.749ms\nExec/Element: 15.077us",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b1420 [label="VelPredBlockKernel x 40\nElements: Min: 115 / Avg: 195 +- 38.474 / Max: 297
+Wait Time: Min: 20.032s / Avg: 20.037s +- 2.483ms / Max: 20.042s\nDequeue+Exec: Min: 8.197ms / Avg: 13.232ms +- 2.366ms / Max: 17.493ms\nExec:   Min: 42.718us / Avg: 69.277us +- 17.075us / Max: 113.861us\n",shape=rect,color="#0005ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b1ab0 [label="VelPredReassemble\nElements: 7800\nWait: 20.038s\nLock state: 634.620us\nEmpty ready list: 5.952ms\nDequeue+Exec: 4.423ms\nExec/Element: 193ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b1f20 [label="CheckStabilityKernel x 40\nElements: Min: 5 / Avg: 7.8 +- 1.36382 / Max: 11
+Wait Time: Min: 20.040s / Avg: 20.043s +- 1.675ms / Max: 20.046s\nDequeue+Exec: Min: 4.891ms / Avg: 8.208ms +- 1.557ms / Max: 11.560ms\nExec:   Min: 804.554us / Avg: 1.059ms +- 168.318us / Max: 1.578ms\n",shape=rect,color="#0004ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32b0fb0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b1420MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=72", shape=rect];
+"edgex0x647da32b1ab0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=98", shape=rect];
+"edgex0x647da32b1f20MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
 }
-subgraph clusterx0x5607afcc6850 {
+subgraph clusterx0x647da32b2c90 {
 label="PredFinal"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcc6db0 [label="PredFinalBlockOrch\nElements: 304\nWait: 17.596s\nLock state: 50.261us\nEmpty ready list: 392.803ms\nDequeue+Exec: 81.003ms\nExec/Element: 265.901us",shape=rect,color="#0025ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc7220 [label="VelBCEdgesBlockKernel x 40\nElements: Min: 76 / Avg: 190 +- 49.611 / Max: 292
-Wait Time: Min: 17.976s / Avg: 18.006s +- 14.655ms / Max: 18.034s\nDequeue+Exec: Min: 41.199ms / Avg: 67.916ms +- 13.861ms / Max: 102.138ms\nExec:   Min: 246.030us / Avg: 368.727us +- 79.861us / Max: 632.490us\n",shape=rect,color="#001eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc78b0 [label="PredFinalBlockColl\nElements: 7600\nWait: 18.048s\nLock state: 546.877us\nEmpty ready list: 13.124ms\nDequeue+Exec: 15.691ms\nExec/Element: 561ns",shape=rect,color="#0007ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcc6db0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc7220VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afcc78b0VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=98", shape=rect];
+x0x647da32b31f0 [label="PredFinalBlockOrch\nElements: 312\nWait: 19.543s\nLock state: 52.212us\nEmpty ready list: 429.645ms\nDequeue+Exec: 83.671ms\nExec/Element: 267.623us",shape=rect,color="#0026ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b3660 [label="VelBCEdgesBlockKernel x 40\nElements: Min: 145 / Avg: 195 +- 33.121 / Max: 281
+Wait Time: Min: 19.981s / Avg: 19.996s +- 7.931ms / Max: 20.016s\nDequeue+Exec: Min: 44.133ms / Avg: 62.963ms +- 7.973ms / Max: 79.294ms\nExec:   Min: 237.794us / Avg: 324.403us +- 52.443us / Max: 455.367us\n",shape=rect,color="#001fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b3cf0 [label="PredFinalBlockColl\nElements: 7800\nWait: 20.043s\nLock state: 530.392us\nEmpty ready list: 7.948ms\nDequeue+Exec: 9.177ms\nExec/Element: 207ns",shape=rect,color="#0004ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32b31f0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b3660VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=99", shape=rect];
+"edgex0x647da32b3cf0VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=98", shape=rect];
 }
-subgraph clusterx0x5607afcc7d10 {
+subgraph clusterx0x647da32b4150 {
 label="ChangeTimeStepSubgraph"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcc8060 [label="RetryPreKernel\nElements: 76
-Wait Time: 17.986s\nDequeue+Exec: 72.149ms\nExec: 948.046us\n",shape=rect,color="#0021ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc8730 [label="RetryMomentumDivKernel x 4\nElements: Min: 2 / Avg: 2 +- 0 / Max: 2
-Wait Time: Min: 17.986s / Avg: 17.999s +- 9.907ms / Max: 18.013s\nDequeue+Exec: Min: 44.497ms / Avg: 59.222ms +- 9.939ms / Max: 72.147ms\nExec:   Min: 22.246ms / Avg: 29.609ms +- 4.969ms / Max: 36.071ms\n",shape=rect,color="#001dff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc8dc0 [label="RetryMomDivCollector\nElements: 8\nWait: 18.058s\nLock state: 2.780us\nEmpty ready list: 413.796us\nDequeue+Exec: 19.385us\nExec/Element: 1.400us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc9230 [label="RetryPostKernel\nElements: 76
-Wait Time: 18.034s\nDequeue+Exec: 23.750ms\nExec: 310.235us\n",shape=rect,color="#000bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc9ad0 [label="RetryLoop\nElements: 76\nWait: 18.055s\nLock state: 10.069us\nEmpty ready list: 1.513ms\nDequeue+Exec: 172.998us\nExec/Element: 1.019us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcc8060BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcc8060RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=0", shape=rect];
-"edgex0x5607afcc8730MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc8dc0MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
-"edgex0x5607afcc9230RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcc9ad0RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=1", shape=rect];
+x0x647da32b44a0 [label="RetryPreKernel\nElements: 78
+Wait Time: 19.868s\nDequeue+Exec: 181.479ms\nExec: 2.325ms\n",shape=rect,color="#0053ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b4b70 [label="RetryMomentumDivKernel x 4\nElements: Min: 5 / Avg: 5 +- 0 / Max: 5
+Wait Time: Min: 19.893s / Avg: 19.899s +- 6.662ms / Max: 19.910s\nDequeue+Exec: Min: 139.321ms / Avg: 150.519ms +- 6.725ms / Max: 156.753ms\nExec:   Min: 27.862ms / Avg: 30.102ms +- 1.345ms / Max: 31.348ms\n",shape=rect,color="#0047ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b5200 [label="RetryMomDivCollector\nElements: 20\nWait: 20.049s\nLock state: 5.499us\nEmpty ready list: 32.050us\nDequeue+Exec: 54.669us\nExec/Element: 1.867us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b5670 [label="RetryPostKernel\nElements: 78
+Wait Time: 19.973s\nDequeue+Exec: 76.577ms\nExec: 979.119us\n",shape=rect,color="#0023ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b5f10 [label="RetryLoop\nElements: 78\nWait: 20.045s\nLock state: 10.357us\nEmpty ready list: 1.616ms\nDequeue+Exec: 194.641us\nExec/Element: 1.189us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32b44a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b44a0RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=0", shape=rect];
+"edgex0x647da32b4b70MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b5200MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b5670RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b5f10RetrySequenceData"[label="RetrySequenceData\nQS=0\nMQS=1", shape=rect];
 }
-x0x5607afcca160 [label="Collector(1)\nElements: 304\nWait: 18.196s\nLock state: 105.137us\nEmpty ready list: 514.102us\nDequeue+Exec: 734.625us\nExec/Element: 1.614us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcca5d0 [label="MeshExchange(1)\nElements: 76
-Wait Time: 18.151s\nDequeue+Exec: 46.473ms\nExec: 609.991us\n",shape=rect,color="#0015ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccac60 [label="PredHvacCollector\nElements: 304\nWait: 18.195s\nLock state: 2.707ms\nEmpty ready list: 489.042us\nDequeue+Exec: 504.143us\nExec/Element: 979ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccb0d0 [label="Hvac+InitDiv\nElements: 76
-Wait Time: 18.198s\nDequeue+Exec: 716.186us\nExec: 8.488us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccb760 [label="PredDivCollector\nElements: 304\nWait: 18.199s\nLock state: 97.118us\nEmpty ready list: 504.111us\nDequeue+Exec: 772.084us\nExec/Element: 1.586us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccbbd0 [label="DivergenceExchange\nElements: 76
-Wait Time: 18.199s\nDequeue+Exec: 835.578us\nExec: 9.980us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccc260 [label="PredPressureCollector\nElements: 304\nWait: 18.198s\nLock state: 56.831us\nEmpty ready list: 3.332ms\nDequeue+Exec: 484.342us\nExec/Element: 945ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccc8e0 [label="ChangeTimeStepCollector\nElements: 304\nWait: 18.051s\nLock state: 64.475us\nEmpty ready list: 498.387us\nDequeue+Exec: 549.152us\nExec/Element: 1.179us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcccf60 [label="Collector(3)\nElements: 304\nWait: 18.051s\nLock state: 38.703us\nEmpty ready list: 333.141us\nDequeue+Exec: 266.505us\nExec/Element: 497ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccd3d0 [label="MeshExchange(3)\nElements: 76
-Wait Time: 18.020s\nDequeue+Exec: 32.090ms\nExec: 420.920us\n",shape=rect,color="#000fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccd850 [label="PhaseTransition\nElements: 76
-Wait Time: 18.045s\nDequeue+Exec: 29.022ms\nExec: 380.848us\n",shape=rect,color="#000dff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-subgraph clusterx0x5607afccdcc0 {
+x0x647da32b65a0 [label="Collector(1)\nElements: 312\nWait: 20.204s\nLock state: 102.991us\nEmpty ready list: 503.625us\nDequeue+Exec: 684.735us\nExec/Element: 1.437us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b6a10 [label="MeshExchange(1)\nElements: 78
+Wait Time: 20.102s\nDequeue+Exec: 103.986ms\nExec: 1.331ms\n",shape=rect,color="#002fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b70a0 [label="PredHvacCollector\nElements: 312\nWait: 20.205s\nLock state: 84.502us\nEmpty ready list: 1.163ms\nDequeue+Exec: 998.823us\nExec/Element: 963ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b7510 [label="Hvac+InitDiv\nElements: 78
+Wait Time: 20.206s\nDequeue+Exec: 1.091ms\nExec: 12.938us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b7ba0 [label="PredDivCollector\nElements: 312\nWait: 20.207s\nLock state: 104.984us\nEmpty ready list: 529.078us\nDequeue+Exec: 779.900us\nExec/Element: 1.569us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b8010 [label="DivergenceExchange\nElements: 78
+Wait Time: 20.207s\nDequeue+Exec: 901.960us\nExec: 10.550us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b86a0 [label="PredPressureCollector\nElements: 312\nWait: 20.201s\nLock state: 55.960us\nEmpty ready list: 7.790ms\nDequeue+Exec: 452.677us\nExec/Element: 850ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b8d20 [label="ChangeTimeStepCollector\nElements: 312\nWait: 20.041s\nLock state: 1.217ms\nEmpty ready list: 525.329us\nDequeue+Exec: 602.598us\nExec/Element: 1.270us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b93a0 [label="Collector(3)\nElements: 312\nWait: 20.041s\nLock state: 40.745us\nEmpty ready list: 348.031us\nDequeue+Exec: 282.180us\nExec/Element: 516ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b9810 [label="MeshExchange(3)\nElements: 78
+Wait Time: 20.011s\nDequeue+Exec: 33.477ms\nExec: 427.639us\n",shape=rect,color="#000fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b9c90 [label="PhaseTransition\nElements: 78
+Wait Time: 20.008s\nDequeue+Exec: 42.559ms\nExec: 544.598us\n",shape=rect,color="#0013ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+subgraph clusterx0x647da32ba100 {
 label="VelocityFluxBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcce220 [label="VelFluxOrch\nElements: 304\nWait: 17.747s\nLock state: 42.626us\nEmpty ready list: 414.115ms\nDequeue+Exec: 40.965ms\nExec/Element: 134.169us",shape=rect,color="#0013ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcce690 [label="VelFluxBlockKernel x 40\nElements: Min: 119 / Avg: 190 +- 35.7358 / Max: 268
-Wait Time: Min: 18.125s / Avg: 18.147s +- 8.146ms / Max: 18.165s\nDequeue+Exec: Min: 36.825ms / Avg: 54.930ms +- 8.258ms / Max: 77.571ms\nExec:   Min: 210.411us / Avg: 292.446us +- 46.982us / Max: 450.653us\n",shape=rect,color="#0014ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcced20 [label="VelFluxCollector\nElements: 7600\nWait: 18.189s\nLock state: 584.460us\nEmpty ready list: 5.919ms\nDequeue+Exec: 4.065ms\nExec/Element: 196ns",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcce220MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcce690MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afcced20MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=96", shape=rect];
+x0x647da32ba660 [label="VelFluxOrch\nElements: 312\nWait: 19.751s\nLock state: 44.214us\nEmpty ready list: 417.279ms\nDequeue+Exec: 41.986ms\nExec/Element: 134.010us",shape=rect,color="#0013ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32baad0 [label="VelFluxBlockKernel x 40\nElements: Min: 105 / Avg: 195 +- 39.748 / Max: 268
+Wait Time: Min: 20.117s / Avg: 20.143s +- 13.174ms / Max: 20.168s\nDequeue+Exec: Min: 42.133ms / Avg: 67.427ms +- 13.220ms / Max: 92.707ms\nExec:   Min: 246.735us / Avg: 349.592us +- 59.924us / Max: 508.332us\n",shape=rect,color="#0029ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bb160 [label="VelFluxCollector\nElements: 7800\nWait: 20.197s\nLock state: 532.723us\nEmpty ready list: 4.188ms\nDequeue+Exec: 4.512ms\nExec/Element: 190ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32ba660MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32baad0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
+"edgex0x647da32bb160MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=94", shape=rect];
 }
-subgraph clusterx0x5607afccf180 {
+subgraph clusterx0x647da32bb5c0 {
 label="DivPart2Block"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afccf2c0 [label="DivPart2Orch\nElements: 304\nWait: 18.081s\nLock state: 41.302us\nEmpty ready list: 120.358ms\nDequeue+Exec: 1.798ms\nExec/Element: 5.530us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccf730 [label="DivPart2BlockKernel x 40\nElements: Min: 62 / Avg: 190 +- 65.8088 / Max: 349
-Wait Time: Min: 18.172s / Avg: 18.182s +- 4.038ms / Max: 18.191s\nDequeue+Exec: Min: 12.802ms / Avg: 20.556ms +- 3.905ms / Max: 30.112ms\nExec:   Min: 65.139us / Avg: 118.513us +- 41.109us / Max: 230.150us\n",shape=rect,color="#000aff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afccfdc0 [label="DivPart2Reassemble\nElements: 7600\nWait: 18.189s\nLock state: 644.913us\nEmpty ready list: 5.377ms\nDequeue+Exec: 4.415ms\nExec/Element: 223ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afccf2c0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afccf730MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afccfdc0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
+x0x647da32bb700 [label="DivPart2Orch\nElements: 312\nWait: 20.092s\nLock state: 42.807us\nEmpty ready list: 117.072ms\nDequeue+Exec: 1.912ms\nExec/Element: 5.770us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bbb70 [label="DivPart2BlockKernel x 40\nElements: Min: 50 / Avg: 195 +- 64.4717 / Max: 346
+Wait Time: Min: 20.177s / Avg: 20.189s +- 4.283ms / Max: 20.197s\nDequeue+Exec: Min: 13.717ms / Avg: 20.929ms +- 3.746ms / Max: 28.984ms\nExec:   Min: 69.041us / Avg: 118.705us +- 54.717us / Max: 400.056us\n",shape=rect,color="#0008ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bc200 [label="DivPart2Reassemble\nElements: 7800\nWait: 20.196s\nLock state: 846.628us\nEmpty ready list: 3.553ms\nDequeue+Exec: 5.645ms\nExec/Element: 214ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32bb700MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32bbb70MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=98", shape=rect];
+"edgex0x647da32bc200MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
 }
-subgraph clusterx0x5607afcd0220 {
+subgraph clusterx0x647da32bc660 {
 label="PressureIteration"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd0360 [label="PressurePreKernel\nElements: 168
-Wait Time: 17.996s\nDequeue+Exec: 205.759ms\nExec: 1.222ms\n",shape=rect,color="#0060ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd0a20 [label="PressureSolveKernel x 4\nElements: Min: 156 / Avg: 168 +- 8.48528 / Max: 176
-Wait Time: Min: 17.908s / Avg: 17.921s +- 13.229ms / Max: 17.938s\nDequeue+Exec: Min: 264.884ms / Avg: 282.452ms +- 13.156ms / Max: 295.294ms\nExec:   Min: 1.673ms / Avg: 1.680ms +- 9.552us / Max: 1.697ms\n",shape=rect,color="#007cff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd10b0 [label="PressureSolveCollector\nElements: 672\nWait: 18.203s\nLock state: 108.504us\nEmpty ready list: 1.083ms\nDequeue+Exec: 928.282us\nExec/Element: 857ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd1940 [label="PressurePostLoop\nElements: 168\nWait: 17.828s\nLock state: 22.695us\nEmpty ready list: 16.546ms\nDequeue+Exec: 201.653ms\nExec/Element: 1.198ms",shape=rect,color="#005eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd0360BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcd0360PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcd0a20MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd10b0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd1940PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
+x0x647da32bc7a0 [label="PressurePreKernel\nElements: 243
+Wait Time: 19.979s\nDequeue+Exec: 230.268ms\nExec: 945.791us\n",shape=rect,color="#0069ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bce60 [label="PressureSolveKernel x 4\nElements: Min: 237 / Avg: 243 +- 5.09902 / Max: 249
+Wait Time: Min: 19.822s / Avg: 19.843s +- 14.207ms / Max: 19.860s\nDequeue+Exec: Min: 350.780ms / Avg: 367.760ms +- 14.122ms / Max: 389.178ms\nExec:   Min: 1.462ms / Avg: 1.511ms +- 42.462us / Max: 1.574ms\n",shape=rect,color="#00b2ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bd4f0 [label="PressureSolveCollector\nElements: 972\nWait: 20.207s\nLock state: 149.848us\nEmpty ready list: 1.989ms\nDequeue+Exec: 1.281ms\nExec/Element: 832ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bdd80 [label="PressurePostLoop\nElements: 243\nWait: 19.719s\nLock state: 44.215us\nEmpty ready list: 35.521ms\nDequeue+Exec: 282.515ms\nExec/Element: 1.160ms",shape=rect,color="#0081ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32bc7a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32bc7a0PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32bce60MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32bd4f0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32bdd80PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
 }
-"edgex0x5607afb2ba20MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afb2c5c0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc23e0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc41a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcca160MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcca5d0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afccac60MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
-"edgex0x5607afccb0d0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afccb760MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afccbbd0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afccc260MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afccc8e0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcccf60MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afccd3d0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afccd850BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da31179e0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da3118580MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32ae3a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b0160MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b65a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b6a10BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b70a0MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
+"edgex0x647da32b7510BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b7ba0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b8010BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b86a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b8d20MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b93a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b9810BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32b9c90BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
 }
-subgraph clusterx0x5607afcd1db0 {
+subgraph clusterx0x647da32aea80 {
 label="Corrector"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcc2860 [label="CorrStep1Kernel x 4\nElements: Min: 76 / Avg: 76 +- 0 / Max: 76
-Wait Time: Min: 16.574s / Avg: 16.642s +- 46.642ms / Max: 16.688s\nDequeue+Exec: Min: 1.382s / Avg: 1.428s +- 46.120ms / Max: 1.495s\nExec:   Min: 18.185ms / Avg: 18.791ms +- 606.964us / Max: 19.679ms\n",shape=rect,color="#a7ff00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc4620 [label="CorrCondensKernel x 4\nElements: Min: 67 / Avg: 76 +- 5.91608 / Max: 83
-Wait Time: Min: 18.072s / Avg: 18.074s +- 2.687ms / Max: 18.079s\nDequeue+Exec: Min: 4.506ms / Avg: 8.352ms +- 2.306ms / Max: 10.608ms\nExec:   Min: 66.620us / Avg: 107.505us +- 23.886us / Max: 127.087us\n",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcc63e0 [label="CorrDivPart1Kernel x 4\nElements: Min: 76 / Avg: 76 +- 0 / Max: 76
-Wait Time: Min: 15.961s / Avg: 16.002s +- 36.588ms / Max: 16.060s\nDequeue+Exec: Min: 2.076s / Avg: 2.135s +- 37.114ms / Max: 2.176s\nExec:   Min: 27.317ms / Avg: 28.095ms +- 488.399us / Max: 28.641ms\n",shape=rect,color="#ff0b00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd23d0 [label="ParticleMassEnergy x 4\nElements: Min: 61 / Avg: 76 +- 13.6565 / Max: 92
-Wait Time: Min: 18.013s / Avg: 18.023s +- 6.643ms / Max: 18.030s\nDequeue+Exec: Min: 54.788ms / Avg: 62.682ms +- 6.938ms / Max: 73.360ms\nExec:   Min: 692.680us / Avg: 838.545us +- 96.385us / Max: 963.368us\n",shape=rect,color="#0022ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd2850 [label="ParticleRemoveMoveCollector\nElements: 304\nWait: 18.086s\nLock state: 66.974us\nEmpty ready list: 406.780us\nDequeue+Exec: 385.498us\nExec/Element: 815ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd2cc0 [label="RemoveMove\nElements: 76
-Wait Time: 17.938s\nDequeue+Exec: 151.473ms\nExec: 1.991ms\n",shape=rect,color="#0046ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-subgraph clusterx0x5607afcd3130 {
+x0x647da32ae820 [label="CorrStep1Kernel x 4\nElements: Min: 78 / Avg: 78 +- 0 / Max: 78
+Wait Time: Min: 18.526s / Avg: 18.567s +- 31.262ms / Max: 18.605s\nDequeue+Exec: Min: 1.455s / Avg: 1.489s +- 30.241ms / Max: 1.534s\nExec:   Min: 18.656ms / Avg: 19.096ms +- 387.746us / Max: 19.673ms\n",shape=rect,color="#a4ff00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b05e0 [label="CorrCondensKernel x 4\nElements: Min: 74 / Avg: 78 +- 2.34521 / Max: 80
+Wait Time: Min: 19.993s / Avg: 20.017s +- 21.731ms / Max: 20.041s\nDequeue+Exec: Min: 36.671ms / Avg: 60.740ms +- 21.935ms / Max: 84.382ms\nExec:   Min: 373.078us / Avg: 754.320us +- 297.741us / Max: 1.067ms\n",shape=rect,color="#0025ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32b23a0 [label="CorrDivPart1Kernel x 4\nElements: Min: 78 / Avg: 78 +- 0 / Max: 78
+Wait Time: Min: 17.919s / Avg: 17.943s +- 16.204ms / Max: 17.965s\nDequeue+Exec: Min: 2.177s / Avg: 2.193s +- 16.410ms / Max: 2.217s\nExec:   Min: 27.916ms / Avg: 28.124ms +- 210.304us / Max: 28.423ms\n",shape=rect,color="#ff0a00", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32be470 [label="ParticleMassEnergy x 4\nElements: Min: 71 / Avg: 78 +- 5.19615 / Max: 83
+Wait Time: Min: 19.576s / Avg: 19.602s +- 18.541ms / Max: 19.628s\nDequeue+Exec: Min: 454.625ms / Avg: 479.178ms +- 17.521ms / Max: 504.166ms\nExec:   Min: 5.762ms / Avg: 6.162ms +- 362.846us / Max: 6.752ms\n",shape=rect,color="#00e7ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32be8f0 [label="ParticleRemoveMoveCollector\nElements: 312\nWait: 20.083s\nLock state: 67.790us\nEmpty ready list: 505.630us\nDequeue+Exec: 528.638us\nExec/Element: 1.074us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bed60 [label="RemoveMove\nElements: 78
+Wait Time: 19.452s\nDequeue+Exec: 643.965ms\nExec: 8.254ms\n",shape=rect,color="#00ffd6", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+subgraph clusterx0x647da32bf1d0 {
 label="ParticleMomentumBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd3690 [label="PartMomDecompose\nElements: 304\nWait: 18.043s\nLock state: 48.488us\nEmpty ready list: 60.850ms\nDequeue+Exec: 1.819ms\nExec/Element: 5.350us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd3b00 [label="PartMomBlockKernel x 40\nElements: Min: 74 / Avg: 190 +- 81.2887 / Max: 422
-Wait Time: Min: 18.102s / Avg: 18.104s +- 625.540us / Max: 18.105s\nDequeue+Exec: Min: 1.053ms / Avg: 1.798ms +- 412.228us / Max: 2.794ms\nExec:   Min: 4.233us / Avg: 9.855us +- 4.375us / Max: 22.414us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd4190 [label="PartMomReassemble\nElements: 7600\nWait: 18.090s\nLock state: 1.332ms\nEmpty ready list: 5.043ms\nDequeue+Exec: 4.678ms\nExec/Element: 162ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd3690MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd3b00MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=92", shape=rect];
-"edgex0x5607afcd4190MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
+x0x647da32bf730 [label="PartMomDecompose\nElements: 312\nWait: 20.041s\nLock state: 54.062us\nEmpty ready list: 68.502ms\nDequeue+Exec: 2.365ms\nExec/Element: 6.538us",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32bfba0 [label="PartMomBlockKernel x 40\nElements: Min: 64 / Avg: 195 +- 69.4691 / Max: 435
+Wait Time: Min: 20.106s / Avg: 20.108s +- 1.070ms / Max: 20.110s\nDequeue+Exec: Min: 1.818ms / Avg: 3.808ms +- 876.783us / Max: 6.085ms\nExec:   Min: 9.991us / Avg: 20.820us +- 7.365us / Max: 42.975us\n",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c0230 [label="PartMomReassemble\nElements: 7800\nWait: 20.100s\nLock state: 640.867us\nEmpty ready list: 3.294ms\nDequeue+Exec: 4.821ms\nExec/Element: 207ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32bf730MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32bfba0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=93", shape=rect];
+"edgex0x647da32c0230MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
 }
-subgraph clusterx0x5607afcd4a70 {
+subgraph clusterx0x647da32c0b10 {
 label="VelocityCorrectorBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd4fd0 [label="VelCorrDecompose\nElements: 304\nWait: 18.029s\nLock state: 46.986us\nEmpty ready list: 137.396ms\nDequeue+Exec: 2.889ms\nExec/Element: 8.348us",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd5440 [label="VelCorrBlockKernel x 40\nElements: Min: 106 / Avg: 190 +- 53.4813 / Max: 387
-Wait Time: Min: 18.157s / Avg: 18.160s +- 1.757ms / Max: 18.164s\nDequeue+Exec: Min: 5.797ms / Avg: 8.999ms +- 1.390ms / Max: 12.226ms\nExec:   Min: 30.881us / Avg: 49.298us +- 12.106us / Max: 77.351us\n",shape=rect,color="#0005ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd5ad0 [label="VelCorrReassemble\nElements: 7600\nWait: 18.154s\nLock state: 656.598us\nEmpty ready list: 7.333ms\nDequeue+Exec: 5.861ms\nExec/Element: 269ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd5f40 [label="CheckDivKernel x 40\nElements: Min: 3 / Avg: 7.6 +- 2.18861 / Max: 15
-Wait Time: Min: 18.166s / Avg: 18.172s +- 2.286ms / Max: 18.175s\nDequeue+Exec: Min: 1.513ms / Avg: 3.693ms +- 1.475ms / Max: 8.707ms\nExec:   Min: 316.281us / Avg: 480.258us +- 105.944us / Max: 835.109us\n",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd4fd0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd5440MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=94", shape=rect];
-"edgex0x5607afcd5ad0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
-"edgex0x5607afcd5f40MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+x0x647da32c1070 [label="VelCorrDecompose\nElements: 312\nWait: 20.050s\nLock state: 49.796us\nEmpty ready list: 122.838ms\nDequeue+Exec: 3.098ms\nExec/Element: 9.315us",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c14e0 [label="VelCorrBlockKernel x 40\nElements: Min: 91 / Avg: 195 +- 51.1302 / Max: 292
+Wait Time: Min: 20.163s / Avg: 20.167s +- 1.633ms / Max: 20.170s\nDequeue+Exec: Min: 6.509ms / Avg: 8.912ms +- 1.513ms / Max: 12.421ms\nExec:   Min: 24.440us / Avg: 48.320us +- 15.513us / Max: 86.839us\n",shape=rect,color="#0003ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c1b70 [label="VelCorrReassemble\nElements: 7800\nWait: 20.161s\nLock state: 895.614us\nEmpty ready list: 4.711ms\nDequeue+Exec: 5.505ms\nExec/Element: 312ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c1fe0 [label="CheckDivKernel x 40\nElements: Min: 3 / Avg: 7.8 +- 2.502 / Max: 18
+Wait Time: Min: 20.169s / Avg: 20.172s +- 1.384ms / Max: 20.175s\nDequeue+Exec: Min: 1.063ms / Avg: 3.635ms +- 1.160ms / Max: 6.844ms\nExec:   Min: 328.566us / Avg: 469.832us +- 85.133us / Max: 651.057us\n",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32c1070MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c14e0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=93", shape=rect];
+"edgex0x647da32c1b70MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
+"edgex0x647da32c1fe0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
 }
-subgraph clusterx0x5607afcd6830 {
+subgraph clusterx0x647da32c2d50 {
 label="WallBCBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd6d90 [label="WallBCBlockOrch\nElements: 304\nWait: 17.450s\nLock state: 46.157us\nEmpty ready list: 249.434ms\nDequeue+Exec: 410.088ms\nExec/Element: 1.348ms",shape=rect,color="#00c0ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd7200 [label="WallBCBlockKernel x 40\nElements: Min: 95 / Avg: 190 +- 50.8011 / Max: 341
-Wait Time: Min: 18.058s / Avg: 18.075s +- 7.285ms / Max: 18.091s\nDequeue+Exec: Min: 20.892ms / Avg: 36.305ms +- 7.205ms / Max: 52.195ms\nExec:   Min: 142.375us / Avg: 196.181us +- 33.516us / Max: 280.447us\n",shape=rect,color="#000dff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd7890 [label="WallBCBlockColl\nElements: 7600\nWait: 18.090s\nLock state: 4.677ms\nEmpty ready list: 1.112ms\nDequeue+Exec: 13.898ms\nExec/Element: 1.169us",shape=rect,color="#0006ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd6d90MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd7200WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afcd7890WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
+x0x647da32c32b0 [label="WallBCBlockOrch\nElements: 312\nWait: 19.394s\nLock state: 49.619us\nEmpty ready list: 280.855ms\nDequeue+Exec: 438.160ms\nExec/Element: 1.403ms",shape=rect,color="#00c8ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c3720 [label="WallBCBlockKernel x 40\nElements: Min: 109 / Avg: 195 +- 38.7324 / Max: 309
+Wait Time: Min: 20.056s / Avg: 20.071s +- 6.838ms / Max: 20.086s\nDequeue+Exec: Min: 32.177ms / Avg: 45.142ms +- 6.914ms / Max: 61.005ms\nExec:   Min: 171.470us / Avg: 233.487us +- 37.577us / Max: 327.845us\n",shape=rect,color="#0015ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c3db0 [label="WallBCBlockColl\nElements: 7800\nWait: 20.101s\nLock state: 568.161us\nEmpty ready list: 1.184ms\nDequeue+Exec: 11.366ms\nExec/Element: 916ns",shape=rect,color="#0005ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32c32b0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c3720WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
+"edgex0x647da32c3db0WallBCBlockWork"[label="WallBCBlockWork\nQS=0\nMQS=99", shape=rect];
 }
-subgraph clusterx0x5607afcd7cf0 {
+subgraph clusterx0x647da32c4210 {
 label="CorrRadiation"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd8250 [label="CorrRadOrch\nElements: 304\nWait: 18.109s\nLock state: 41.960us\nEmpty ready list: 2.337ms\nDequeue+Exec: 385.208us\nExec/Element: 808ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd86c0 [label="CorrRadiationKernel x 4\nElements: Min: 65 / Avg: 76 +- 11.6833 / Max: 95
-Wait Time: Min: 18.107s / Avg: 18.110s +- 1.656ms / Max: 18.111s\nDequeue+Exec: Min: 968.147us / Avg: 1.984ms +- 1.652ms / Max: 4.845ms\nExec:   Min: 10.005us / Avg: 26.240us +- 24.762us / Max: 69.035us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd8d50 [label="CorrRadCollector\nElements: 304\nWait: 18.111s\nLock state: 43.495us\nEmpty ready list: 470.127us\nDequeue+Exec: 357.532us\nExec/Element: 495ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd8250MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd86c0CorrRadiationWork"[label="CorrRadiationWork\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd8d50CorrRadiationWork"[label="CorrRadiationWork\nQS=0\nMQS=4", shape=rect];
+x0x647da32c4770 [label="CorrRadOrch\nElements: 312\nWait: 20.114s\nLock state: 45.751us\nEmpty ready list: 2.333ms\nDequeue+Exec: 386.569us\nExec/Element: 829ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c4be0 [label="CorrRadiationKernel x 4\nElements: Min: 70 / Avg: 78 +- 12.145 / Max: 99
+Wait Time: Min: 20.109s / Avg: 20.113s +- 2.873ms / Max: 20.116s\nDequeue+Exec: Min: 1.290ms / Avg: 4.489ms +- 2.415ms / Max: 8.097ms\nExec:   Min: 15.129us / Avg: 45.197us +- 38.599us / Max: 109.533us\n",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c5270 [label="CorrRadCollector\nElements: 312\nWait: 20.119s\nLock state: 42.367us\nEmpty ready list: 499.221us\nDequeue+Exec: 485.854us\nExec/Element: 592ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32c4770MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c4be0CorrRadiationWork"[label="CorrRadiationWork\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c5270CorrRadiationWork"[label="CorrRadiationWork\nQS=0\nMQS=4", shape=rect];
 }
-subgraph clusterx0x5607afcd91b0 {
+subgraph clusterx0x647da32c56d0 {
 label="CorrFinal"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcd9710 [label="CorrFinalBlockOrch\nElements: 304\nWait: 17.686s\nLock state: 44.108us\nEmpty ready list: 411.394ms\nDequeue+Exec: 78.659ms\nExec/Element: 258.151us",shape=rect,color="#0024ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd9b80 [label="VelBCEdgesBlockKernel x 40\nElements: Min: 108 / Avg: 190 +- 47.1429 / Max: 312
-Wait Time: Min: 18.096s / Avg: 18.122s +- 13.868ms / Max: 18.147s\nDequeue+Exec: Min: 29.380ms / Avg: 53.499ms +- 13.730ms / Max: 80.919ms\nExec:   Min: 175.370us / Avg: 281.937us +- 52.855us / Max: 389.696us\n",shape=rect,color="#0018ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcda210 [label="CorrFinalBlockColl\nElements: 7600\nWait: 17.640s\nLock state: 651.917us\nEmpty ready list: 1.198ms\nDequeue+Exec: 538.987ms\nExec/Element: 70.346us",shape=rect,color="#00fcff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcd9710MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd9b80VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afcda210VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=97", shape=rect];
+x0x647da32c5c30 [label="CorrFinalBlockOrch\nElements: 312\nWait: 19.644s\nLock state: 41.486us\nEmpty ready list: 453.852ms\nDequeue+Exec: 79.490ms\nExec/Element: 254.258us",shape=rect,color="#0024ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c60a0 [label="VelBCEdgesBlockKernel x 40\nElements: Min: 91 / Avg: 195 +- 41.4656 / Max: 291
+Wait Time: Min: 20.099s / Avg: 20.122s +- 10.441ms / Max: 20.144s\nDequeue+Exec: Min: 37.777ms / Avg: 59.112ms +- 10.472ms / Max: 83.317ms\nExec:   Min: 214.541us / Avg: 306.768us +- 52.479us / Max: 425.197us\n",shape=rect,color="#001bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c6730 [label="CorrFinalBlockColl\nElements: 7800\nWait: 19.633s\nLock state: 557.456us\nEmpty ready list: 1.281ms\nDequeue+Exec: 540.702ms\nExec/Element: 68.725us",shape=rect,color="#00f8ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32c5c30MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c60a0VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=100", shape=rect];
+"edgex0x647da32c6730VelocityBCEdgesBlockWork"[label="VelocityBCEdgesBlockWork\nQS=0\nMQS=98", shape=rect];
 }
-x0x5607afcda890 [label="Collector(4)\nElements: 304\nWait: 18.071s\nLock state: 97.804us\nEmpty ready list: 510.510us\nDequeue+Exec: 752.421us\nExec/Element: 1.552us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdad00 [label="MeshExchange(4)\nElements: 76
-Wait Time: 18.019s\nDequeue+Exec: 54.162ms\nExec: 710.845us\n",shape=rect,color="#0019ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdb180 [label="CombustionKernel x 4\nElements: Min: 74 / Avg: 76 +- 2.34521 / Max: 80
-Wait Time: Min: 18.075s / Avg: 18.078s +- 2.354ms / Max: 18.081s\nDequeue+Exec: Min: 1.252ms / Avg: 4.080ms +- 2.717ms / Max: 7.777ms\nExec:   Min: 9.300us / Avg: 49.487us +- 39.224us / Max: 104.229us\n",shape=rect,color="#0003ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdb810 [label="SootHvacCollector\nElements: 304\nWait: 18.080s\nLock state: 524.662us\nEmpty ready list: 454.739us\nDequeue+Exec: 1.419ms\nExec/Element: 4.120us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdbc80 [label="Soot+Hvac\nElements: 76
-Wait Time: 18.079s\nDequeue+Exec: 3.750ms\nExec: 48.327us\n",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdc310 [label="Collector(7)\nElements: 304\nWait: 18.090s\nLock state: 47.866us\nEmpty ready list: 475.676us\nDequeue+Exec: 353.484us\nExec/Element: 650ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdc780 [label="MeshExchange(7)\nElements: 76
-Wait Time: 18.032s\nDequeue+Exec: 60.031ms\nExec: 788.576us\n",shape=rect,color="#001cff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdce10 [label="Collector(6a)\nElements: 304\nWait: 18.103s\nLock state: 44.010us\nEmpty ready list: 401.297us\nDequeue+Exec: 334.462us\nExec/Element: 696ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdd280 [label="MeshExchange(6)\nElements: 76
-Wait Time: 18.074s\nDequeue+Exec: 30.295ms\nExec: 397.294us\n",shape=rect,color="#000eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdd700 [label="MeshExchange(2)\nElements: 76
-Wait Time: 18.071s\nDequeue+Exec: 33.452ms\nExec: 439.225us\n",shape=rect,color="#000fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcddd90 [label="CorrDivCollector\nElements: 304\nWait: 18.137s\nLock state: 92.715us\nEmpty ready list: 519.983us\nDequeue+Exec: 747.517us\nExec/Element: 1.563us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcde200 [label="DivergenceExchange\nElements: 76
-Wait Time: 18.137s\nDequeue+Exec: 841.224us\nExec: 9.982us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcde890 [label="CorrPressureCollector\nElements: 304\nWait: 18.137s\nLock state: 60.003us\nEmpty ready list: 4.591ms\nDequeue+Exec: 751.330us\nExec/Element: 1.832us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdef10 [label="Collector(6b)\nElements: 304\nWait: 18.165s\nLock state: 80.029us\nEmpty ready list: 546.302us\nDequeue+Exec: 600.874us\nExec/Element: 1.312us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcdf380 [label="MeshExchange(6)\nElements: 76
-Wait Time: 18.136s\nDequeue+Exec: 30.050ms\nExec: 393.850us\n",shape=rect,color="#000eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-subgraph clusterx0x5607afcdf7f0 {
+x0x647da32c6db0 [label="Collector(4)\nElements: 312\nWait: 20.060s\nLock state: 113.234us\nEmpty ready list: 504.419us\nDequeue+Exec: 717.071us\nExec/Element: 1.517us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c7220 [label="MeshExchange(4)\nElements: 78
+Wait Time: 20.005s\nDequeue+Exec: 57.197ms\nExec: 731.774us\n",shape=rect,color="#001aff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c76a0 [label="CombustionKernel x 4\nElements: Min: 73 / Avg: 78 +- 3.80789 / Max: 83
+Wait Time: Min: 20.065s / Avg: 20.068s +- 2.435ms / Max: 20.071s\nDequeue+Exec: Min: 760.221us / Avg: 2.881ms +- 2.157ms / Max: 5.774ms\nExec:   Min: 8.489us / Avg: 37.351us +- 28.988us / Max: 75.124us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c7d30 [label="SootHvacCollector\nElements: 312\nWait: 20.070s\nLock state: 69.601us\nEmpty ready list: 449.161us\nDequeue+Exec: 493.324us\nExec/Element: 969ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c81a0 [label="Soot+Hvac\nElements: 78
+Wait Time: 20.052s\nDequeue+Exec: 26.412ms\nExec: 337.650us\n",shape=rect,color="#000cff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c8830 [label="Collector(7)\nElements: 312\nWait: 20.096s\nLock state: 50.251us\nEmpty ready list: 700.245us\nDequeue+Exec: 437.784us\nExec/Element: 908ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c8ca0 [label="MeshExchange(7)\nElements: 78
+Wait Time: 20.096s\nDequeue+Exec: 1.786ms\nExec: 22.022us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c9330 [label="Collector(6a)\nElements: 312\nWait: 20.108s\nLock state: 41.450us\nEmpty ready list: 413.660us\nDequeue+Exec: 328.958us\nExec/Element: 715ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c97a0 [label="MeshExchange(6)\nElements: 78
+Wait Time: 20.078s\nDequeue+Exec: 31.430ms\nExec: 401.716us\n",shape=rect,color="#000eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c9c20 [label="MeshExchange(2)\nElements: 78
+Wait Time: 20.079s\nDequeue+Exec: 33.384ms\nExec: 427.211us\n",shape=rect,color="#000fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32ca2b0 [label="CorrDivCollector\nElements: 312\nWait: 20.141s\nLock state: 93.397us\nEmpty ready list: 486.566us\nDequeue+Exec: 756.750us\nExec/Element: 1.603us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32ca720 [label="DivergenceExchange\nElements: 78
+Wait Time: 20.142s\nDequeue+Exec: 922.448us\nExec: 10.851us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cadb0 [label="CorrPressureCollector\nElements: 312\nWait: 20.143s\nLock state: 57.732us\nEmpty ready list: 2.674ms\nDequeue+Exec: 535.400us\nExec/Element: 1.152us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cb430 [label="Collector(6b)\nElements: 312\nWait: 20.164s\nLock state: 65.004us\nEmpty ready list: 744.247us\nDequeue+Exec: 514.557us\nExec/Element: 1.130us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cb8a0 [label="MeshExchange(6)\nElements: 78
+Wait Time: 20.134s\nDequeue+Exec: 31.355ms\nExec: 400.643us\n",shape=rect,color="#000eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+subgraph clusterx0x647da32cbd10 {
 label="VelocityFluxBlock"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afcdfd50 [label="VelFluxOrch\nElements: 304\nWait: 17.671s\nLock state: 42.869us\nEmpty ready list: 369.658ms\nDequeue+Exec: 41.066ms\nExec/Element: 134.440us",shape=rect,color="#0013ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce01c0 [label="VelFluxBlockKernel x 40\nElements: Min: 109 / Avg: 190 +- 38.1831 / Max: 281
-Wait Time: Min: 17.989s / Avg: 18.012s +- 10.619ms / Max: 18.036s\nDequeue+Exec: Min: 38.636ms / Avg: 64.942ms +- 10.942ms / Max: 98.275ms\nExec:   Min: 224.509us / Avg: 346.016us +- 62.777us / Max: 511.608us\n",shape=rect,color="#002eff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce0850 [label="VelFluxCollector\nElements: 7600\nWait: 18.067s\nLock state: 519.127us\nEmpty ready list: 12.414ms\nDequeue+Exec: 4.257ms\nExec/Element: 222ns",shape=rect,color="#0001ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afcdfd50MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afce01c0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afce0850MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=97", shape=rect];
+x0x647da32cc270 [label="VelFluxOrch\nElements: 312\nWait: 19.626s\nLock state: 51.714us\nEmpty ready list: 401.174ms\nDequeue+Exec: 42.305ms\nExec/Element: 134.965us",shape=rect,color="#0013ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cc6e0 [label="VelFluxBlockKernel x 40\nElements: Min: 102 / Avg: 195 +- 45.0999 / Max: 351
+Wait Time: Min: 19.990s / Avg: 20.019s +- 9.978ms / Max: 20.042s\nDequeue+Exec: Min: 33.303ms / Avg: 55.300ms +- 10.086ms / Max: 84.629ms\nExec:   Min: 217.659us / Avg: 287.896us +- 39.319us / Max: 387.982us\n",shape=rect,color="#001cff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32ccd70 [label="VelFluxCollector\nElements: 7800\nWait: 20.039s\nLock state: 4.125ms\nEmpty ready list: 12.186ms\nDequeue+Exec: 15.942ms\nExec/Element: 964ns",shape=rect,color="#0007ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32cc270MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cc6e0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
+"edgex0x647da32ccd70MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=98", shape=rect];
 }
-subgraph clusterx0x5607afce0cb0 {
+subgraph clusterx0x647da32cd1d0 {
 label="DivPart2Block"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afce0df0 [label="DivPart2Orch\nElements: 304\nWait: 18.011s\nLock state: 45.803us\nEmpty ready list: 131.332ms\nDequeue+Exec: 1.772ms\nExec/Element: 5.456us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce1050 [label="DivPart2BlockKernel x 40\nElements: Min: 70 / Avg: 190 +- 55.6354 / Max: 328
-Wait Time: Min: 18.111s / Avg: 18.123s +- 3.795ms / Max: 18.131s\nDequeue+Exec: Min: 11.777ms / Avg: 20.637ms +- 3.991ms / Max: 33.198ms\nExec:   Min: 68.402us / Avg: 112.470us +- 27.641us / Max: 205.929us\n",shape=rect,color="#000bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce14d0 [label="DivPart2Reassemble\nElements: 7600\nWait: 18.127s\nLock state: 1.453ms\nEmpty ready list: 5.629ms\nDequeue+Exec: 7.162ms\nExec/Element: 339ns",shape=rect,color="#0003ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afce0df0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afce1050MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
-"edgex0x5607afce14d0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
+x0x647da32cd310 [label="DivPart2Orch\nElements: 312\nWait: 20.010s\nLock state: 53.630us\nEmpty ready list: 134.315ms\nDequeue+Exec: 1.870ms\nExec/Element: 5.596us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cd570 [label="DivPart2BlockKernel x 40\nElements: Min: 104 / Avg: 195 +- 64.476 / Max: 352
+Wait Time: Min: 20.116s / Avg: 20.126s +- 4.165ms / Max: 20.133s\nDequeue+Exec: Min: 12.418ms / Avg: 20.218ms +- 4.253ms / Max: 30.904ms\nExec:   Min: 56.545us / Avg: 105.642us +- 22.757us / Max: 171.736us\n",shape=rect,color="#000bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cd9f0 [label="DivPart2Reassemble\nElements: 7800\nWait: 20.134s\nLock state: 645.243us\nEmpty ready list: 3.852ms\nDequeue+Exec: 5.502ms\nExec/Element: 314ns",shape=rect,color="#0002ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32cd310MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cd570MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=99", shape=rect];
+"edgex0x647da32cd9f0MeshBlockData"[label="MeshBlockData\nQS=0\nMQS=100", shape=rect];
 }
-subgraph clusterx0x5607afce1930 {
+subgraph clusterx0x647da32cde50 {
 label="PressureIteration"; fontsize=25; penwidth=5; fillcolor="#ffffffff";
-x0x5607afce1a70 [label="PressurePreKernel\nElements: 141
-Wait Time: 17.951s\nDequeue+Exec: 203.047ms\nExec: 1.438ms\n",shape=rect,color="#005fff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce2130 [label="PressureSolveKernel x 4\nElements: Min: 116 / Avg: 141 +- 14.543 / Max: 152
-Wait Time: Min: 17.885s / Avg: 17.902s +- 16.251ms / Max: 17.926s\nDequeue+Exec: Min: 228.077ms / Avg: 252.372ms +- 16.163ms / Max: 268.954ms\nExec:   Min: 1.670ms / Avg: 1.795ms +- 108.701us / Max: 1.965ms\n",shape=rect,color="#0073ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce27c0 [label="PressureSolveCollector\nElements: 564\nWait: 18.151s\nLock state: 92.877us\nEmpty ready list: 2.240ms\nDequeue+Exec: 766.580us\nExec/Element: 893ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce3050 [label="PressurePostLoop\nElements: 141\nWait: 17.941s\nLock state: 17.064us\nEmpty ready list: 16.804ms\nDequeue+Exec: 195.830ms\nExec/Element: 1.386ms",shape=rect,color="#005bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607afce1a70BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afce1a70PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afce2130MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afce27c0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afce3050PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
+x0x647da32cdf90 [label="PressurePreKernel\nElements: 192
+Wait Time: 19.962s\nDequeue+Exec: 199.534ms\nExec: 1.037ms\n",shape=rect,color="#005bff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32ce650 [label="PressureSolveKernel x 4\nElements: Min: 174 / Avg: 192 +- 21.6679 / Max: 229
+Wait Time: Min: 19.808s / Avg: 19.854s +- 26.896ms / Max: 19.871s\nDequeue+Exec: Min: 290.350ms / Avg: 306.898ms +- 26.932ms / Max: 353.533ms\nExec:   Min: 1.542ms / Avg: 1.601ms +- 48.144us / Max: 1.676ms\n",shape=rect,color="#00a2ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cece0 [label="PressureSolveCollector\nElements: 768\nWait: 20.158s\nLock state: 111.945us\nEmpty ready list: 1.896ms\nDequeue+Exec: 1.053ms\nExec/Element: 892ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cf570 [label="PressurePostLoop\nElements: 192\nWait: 19.877s\nLock state: 26.060us\nEmpty ready list: 21.074ms\nDequeue+Exec: 262.899ms\nExec/Element: 1.366ms",shape=rect,color="#0078ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da32cdf90BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32cdf90PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32ce650MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cece0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cf570PressureIterData"[label="PressureIterData\nQS=0\nMQS=1", shape=rect];
 }
-"edgex0x5607afcc2860MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc4620MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcc63e0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd23d0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd2850MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd2cc0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcda890MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcdad00BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcdb180MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
-"edgex0x5607afcdb810MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
-"edgex0x5607afcdbc80BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcdc310MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcdc780BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcdce10MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcdd280BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcdd700BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcddd90MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcde200BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcde890MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcdef10MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcdf380BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32ae820MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b05e0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32b23a0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32be470MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32be8f0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32bed60BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32c6db0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c7220BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32c76a0MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
+"edgex0x647da32c7d30MeshData"[label="MeshData\nQS=0\nMQS=3", shape=rect];
+"edgex0x647da32c81a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32c8830MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c8ca0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32c9330MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c97a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32c9c20BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32ca2b0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32ca720BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32cadb0MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cb430MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32cb8a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
 }
-x0x5607afcd1ef0 [label="TimestepGlobal\nElements: 76
-Wait Time: 18.175s\nDequeue+Exec: 1.339ms\nExec: 16.342us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd2160 [label="DumpMeshOutputs\nElements: 304
-Wait Time: 18.033s\nDequeue+Exec: 146.071ms\nExec: 479.103us\n",shape=rect,color="#0044ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afcd4600 [label="TimestepLoop\nElements: 76\nWait: 18.178s\nLock state: 13.217us\nEmpty ready list: 1.388ms\nDequeue+Exec: 135.414us\nExec/Element: 1.143us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce34d0 [label="TimestepDumpCollector\nElements: 304\nWait: 18.168s\nLock state: 83.441us\nEmpty ready list: 508.624us\nDequeue+Exec: 10.017ms\nExec/Element: 32.137us",shape=rect,color="#0004ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-x0x5607afce3940 [label="TerminationSink\nElements: 1\nWait: 18.179s\nLock state: 330ns\nEmpty ready list: 5.914us\nDequeue+Exec: 1.481us\nExec/Element: 589ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
-"edgex0x5607acbe4d00BarrierData"[label="BarrierData\nQS=1\nMQS=1", shape=rect];
-"edgex0x5607afcd1ef0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afcd2160MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
-"edgex0x5607afcd4600BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afce34d0MeshData"[label="MeshData\nQS=0\nMQS=1", shape=rect];
-"edgex0x5607afce3940BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
-"x0x5607afce3940" -> "edgex0x5607acbe4d00BarrierData"[penwidth=1, dir=none];
-"edgex0x5607acbe4d00BarrierData" -> "x0x5607acbe4d00"[penwidth=1];
-"x0x5607acbe4ab0" -> "edgex0x5607afb2ba20MeshData"[penwidth=1, dir=none];
-"x0x5607afcd4600" -> "edgex0x5607afb2ba20MeshData"[penwidth=1, dir=none];
-"edgex0x5607afb2ba20MeshData" -> "x0x5607afb2ba20"[penwidth=1];
-"x0x5607afb2ba20" -> "edgex0x5607afb2c5c0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afb2c5c0MeshData" -> "x0x5607afb2c5c0"[penwidth=1];
-"x0x5607afb2c5c0" -> "edgex0x5607afcc23e0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc23e0MeshData" -> "x0x5607afcc23e0"[penwidth=1];
-"x0x5607afccb0d0" -> "edgex0x5607afcc3230MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc3230MeshData" -> "x0x5607afcc3230"[penwidth=1];
-"x0x5607afcc3230" -> "edgex0x5607afcc36a0WallBCBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcc36a0WallBCBlockWork" -> "x0x5607afcc36a0"[penwidth=1];
-"x0x5607afcc36a0" -> "edgex0x5607afcc3d30WallBCBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcc3d30WallBCBlockWork" -> "x0x5607afcc3d30"[penwidth=1];
-"x0x5607afcc3d30" -> "edgex0x5607afcc41a0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc41a0MeshData" -> "x0x5607afcc41a0"[penwidth=1];
-"x0x5607afcd1940" -> "edgex0x5607afcc4ff0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc4ff0MeshData" -> "x0x5607afcc4ff0"[penwidth=1];
-"x0x5607afcc4ff0" -> "edgex0x5607afcc5460MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcc5460MeshBlockData" -> "x0x5607afcc5460"[penwidth=1];
-"x0x5607afcc5460" -> "edgex0x5607afcc5af0MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcc5af0MeshBlockData" -> "x0x5607afcc5af0"[penwidth=1];
-"x0x5607afcc5af0" -> "edgex0x5607afcc5f60MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc5f60MeshData" -> "x0x5607afcc5f60"[penwidth=1];
-"x0x5607afccd3d0" -> "edgex0x5607afcc6db0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc6db0MeshData" -> "x0x5607afcc6db0"[penwidth=1];
-"x0x5607afcc6db0" -> "edgex0x5607afcc7220VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcc7220VelocityBCEdgesBlockWork" -> "x0x5607afcc7220"[penwidth=1];
-"x0x5607afcc7220" -> "edgex0x5607afcc78b0VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcc78b0VelocityBCEdgesBlockWork" -> "x0x5607afcc78b0"[penwidth=1];
-"x0x5607afccc8e0" -> "edgex0x5607afcc8060BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcc8060BarrierData" -> "x0x5607afcc8060"[penwidth=1];
-"x0x5607afcc9ad0" -> "edgex0x5607afcc8060RetrySequenceData"[penwidth=1, dir=none];
-"edgex0x5607afcc8060RetrySequenceData" -> "x0x5607afcc8060"[penwidth=1];
-"x0x5607afcc8060" -> "edgex0x5607afcc8730MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc8730MeshData" -> "x0x5607afcc8730"[penwidth=1];
-"x0x5607afcc8730" -> "edgex0x5607afcc8dc0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc8dc0MeshData" -> "x0x5607afcc8dc0"[penwidth=1];
-"x0x5607afcc8060" -> "edgex0x5607afcc9230RetrySequenceData"[penwidth=1, dir=none];
-"x0x5607afcc8dc0" -> "edgex0x5607afcc9230RetrySequenceData"[penwidth=1, dir=none];
-"edgex0x5607afcc9230RetrySequenceData" -> "x0x5607afcc9230"[penwidth=1];
-"x0x5607afcc9230" -> "edgex0x5607afcc9ad0RetrySequenceData"[penwidth=1, dir=none];
-"edgex0x5607afcc9ad0RetrySequenceData" -> "x0x5607afcc9ad0"[penwidth=1];
-"x0x5607afcc23e0" -> "edgex0x5607afcca160MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcca160MeshData" -> "x0x5607afcca160"[penwidth=1];
-"x0x5607afcca160" -> "edgex0x5607afcca5d0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcca5d0BarrierData" -> "x0x5607afcca5d0"[penwidth=1];
-"x0x5607afcced20" -> "edgex0x5607afccac60MeshData"[penwidth=1, dir=none];
-"edgex0x5607afccac60MeshData" -> "x0x5607afccac60"[penwidth=1];
-"x0x5607afccac60" -> "edgex0x5607afccb0d0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afccb0d0BarrierData" -> "x0x5607afccb0d0"[penwidth=1];
-"x0x5607afcc41a0" -> "edgex0x5607afccb760MeshData"[penwidth=1, dir=none];
-"edgex0x5607afccb760MeshData" -> "x0x5607afccb760"[penwidth=1];
-"x0x5607afccb760" -> "edgex0x5607afccbbd0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afccbbd0BarrierData" -> "x0x5607afccbbd0"[penwidth=1];
-"x0x5607afccfdc0" -> "edgex0x5607afccc260MeshData"[penwidth=1, dir=none];
-"edgex0x5607afccc260MeshData" -> "x0x5607afccc260"[penwidth=1];
-"x0x5607afcc5f60" -> "edgex0x5607afccc8e0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afccc8e0MeshData" -> "x0x5607afccc8e0"[penwidth=1];
-"x0x5607afcc9ad0" -> "edgex0x5607afcccf60MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcccf60MeshData" -> "x0x5607afcccf60"[penwidth=1];
-"x0x5607afcccf60" -> "edgex0x5607afccd3d0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afccd3d0BarrierData" -> "x0x5607afccd3d0"[penwidth=1];
-"x0x5607afcc78b0" -> "edgex0x5607afccd850BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afccd850BarrierData" -> "x0x5607afccd850"[penwidth=1];
-"x0x5607afcca5d0" -> "edgex0x5607afcce220MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcce220MeshData" -> "x0x5607afcce220"[penwidth=1];
-"x0x5607afcce220" -> "edgex0x5607afcce690MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcce690MeshBlockData" -> "x0x5607afcce690"[penwidth=1];
-"x0x5607afcce690" -> "edgex0x5607afcced20MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcced20MeshBlockData" -> "x0x5607afcced20"[penwidth=1];
-"x0x5607afccbbd0" -> "edgex0x5607afccf2c0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afccf2c0MeshData" -> "x0x5607afccf2c0"[penwidth=1];
-"x0x5607afccf2c0" -> "edgex0x5607afccf730MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afccf730MeshBlockData" -> "x0x5607afccf730"[penwidth=1];
-"x0x5607afccf730" -> "edgex0x5607afccfdc0MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afccfdc0MeshBlockData" -> "x0x5607afccfdc0"[penwidth=1];
-"x0x5607afccc260" -> "edgex0x5607afcd0360BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcd0360BarrierData" -> "x0x5607afcd0360"[penwidth=1];
-"x0x5607afcd1940" -> "edgex0x5607afcd0360PressureIterData"[penwidth=1, dir=none];
-"edgex0x5607afcd0360PressureIterData" -> "x0x5607afcd0360"[penwidth=1];
-"x0x5607afcd0360" -> "edgex0x5607afcd0a20MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd0a20MeshData" -> "x0x5607afcd0a20"[penwidth=1];
-"x0x5607afcd0a20" -> "edgex0x5607afcd10b0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd10b0MeshData" -> "x0x5607afcd10b0"[penwidth=1];
-"x0x5607afcd10b0" -> "edgex0x5607afcd1940PressureIterData"[penwidth=1, dir=none];
-"edgex0x5607afcd1940PressureIterData" -> "x0x5607afcd1940"[penwidth=1];
-"x0x5607afccd850" -> "edgex0x5607afcc2860MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc2860MeshData" -> "x0x5607afcc2860"[penwidth=1];
-"x0x5607afcdbc80" -> "edgex0x5607afcc4620MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc4620MeshData" -> "x0x5607afcc4620"[penwidth=1];
-"x0x5607afcdd700" -> "edgex0x5607afcc63e0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcc63e0MeshData" -> "x0x5607afcc63e0"[penwidth=1];
-"x0x5607afcc4620" -> "edgex0x5607afcd23d0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd23d0MeshData" -> "x0x5607afcd23d0"[penwidth=1];
-"x0x5607afcd23d0" -> "edgex0x5607afcd2850MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd2850MeshData" -> "x0x5607afcd2850"[penwidth=1];
-"x0x5607afcd2850" -> "edgex0x5607afcd2cc0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcd2cc0BarrierData" -> "x0x5607afcd2cc0"[penwidth=1];
-"x0x5607afcd2cc0" -> "edgex0x5607afcd3690MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd3690MeshData" -> "x0x5607afcd3690"[penwidth=1];
-"x0x5607afcd3690" -> "edgex0x5607afcd3b00MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcd3b00MeshBlockData" -> "x0x5607afcd3b00"[penwidth=1];
-"x0x5607afcd3b00" -> "edgex0x5607afcd4190MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcd4190MeshBlockData" -> "x0x5607afcd4190"[penwidth=1];
-"x0x5607afce3050" -> "edgex0x5607afcd4fd0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd4fd0MeshData" -> "x0x5607afcd4fd0"[penwidth=1];
-"x0x5607afcd4fd0" -> "edgex0x5607afcd5440MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcd5440MeshBlockData" -> "x0x5607afcd5440"[penwidth=1];
-"x0x5607afcd5440" -> "edgex0x5607afcd5ad0MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afcd5ad0MeshBlockData" -> "x0x5607afcd5ad0"[penwidth=1];
-"x0x5607afcd5ad0" -> "edgex0x5607afcd5f40MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd5f40MeshData" -> "x0x5607afcd5f40"[penwidth=1];
-"x0x5607afcdc780" -> "edgex0x5607afcd6d90MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd6d90MeshData" -> "x0x5607afcd6d90"[penwidth=1];
-"x0x5607afcd6d90" -> "edgex0x5607afcd7200WallBCBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcd7200WallBCBlockWork" -> "x0x5607afcd7200"[penwidth=1];
-"x0x5607afcd7200" -> "edgex0x5607afcd7890WallBCBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcd7890WallBCBlockWork" -> "x0x5607afcd7890"[penwidth=1];
-"x0x5607afcdd280" -> "edgex0x5607afcd8250MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd8250MeshData" -> "x0x5607afcd8250"[penwidth=1];
-"x0x5607afcd8250" -> "edgex0x5607afcd86c0CorrRadiationWork"[penwidth=1, dir=none];
-"edgex0x5607afcd86c0CorrRadiationWork" -> "x0x5607afcd86c0"[penwidth=1];
-"x0x5607afcd86c0" -> "edgex0x5607afcd8d50CorrRadiationWork"[penwidth=1, dir=none];
-"edgex0x5607afcd8d50CorrRadiationWork" -> "x0x5607afcd8d50"[penwidth=1];
-"x0x5607afcdf380" -> "edgex0x5607afcd9710MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd9710MeshData" -> "x0x5607afcd9710"[penwidth=1];
-"x0x5607afcd9710" -> "edgex0x5607afcd9b80VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcd9b80VelocityBCEdgesBlockWork" -> "x0x5607afcd9b80"[penwidth=1];
-"x0x5607afcd9b80" -> "edgex0x5607afcda210VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
-"edgex0x5607afcda210VelocityBCEdgesBlockWork" -> "x0x5607afcda210"[penwidth=1];
-"x0x5607afcc2860" -> "edgex0x5607afcda890MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcda890MeshData" -> "x0x5607afcda890"[penwidth=1];
-"x0x5607afcda890" -> "edgex0x5607afcdad00BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdad00BarrierData" -> "x0x5607afcdad00"[penwidth=1];
-"x0x5607afce0850" -> "edgex0x5607afcdb180MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdb180MeshData" -> "x0x5607afcdb180"[penwidth=1];
-"x0x5607afcdb180" -> "edgex0x5607afcdb810MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdb810MeshData" -> "x0x5607afcdb810"[penwidth=1];
-"x0x5607afcdb810" -> "edgex0x5607afcdbc80BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdbc80BarrierData" -> "x0x5607afcdbc80"[penwidth=1];
-"x0x5607afcd4190" -> "edgex0x5607afcdc310MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdc310MeshData" -> "x0x5607afcdc310"[penwidth=1];
-"x0x5607afcdc310" -> "edgex0x5607afcdc780BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdc780BarrierData" -> "x0x5607afcdc780"[penwidth=1];
-"x0x5607afcd7890" -> "edgex0x5607afcdce10MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdce10MeshData" -> "x0x5607afcdce10"[penwidth=1];
-"x0x5607afcdce10" -> "edgex0x5607afcdd280BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdd280BarrierData" -> "x0x5607afcdd280"[penwidth=1];
-"x0x5607afcd8d50" -> "edgex0x5607afcdd700BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdd700BarrierData" -> "x0x5607afcdd700"[penwidth=1];
-"x0x5607afcc63e0" -> "edgex0x5607afcddd90MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcddd90MeshData" -> "x0x5607afcddd90"[penwidth=1];
-"x0x5607afcddd90" -> "edgex0x5607afcde200BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcde200BarrierData" -> "x0x5607afcde200"[penwidth=1];
-"x0x5607afce14d0" -> "edgex0x5607afcde890MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcde890MeshData" -> "x0x5607afcde890"[penwidth=1];
-"x0x5607afcd5f40" -> "edgex0x5607afcdef10MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdef10MeshData" -> "x0x5607afcdef10"[penwidth=1];
-"x0x5607afcdef10" -> "edgex0x5607afcdf380BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcdf380BarrierData" -> "x0x5607afcdf380"[penwidth=1];
-"x0x5607afcdad00" -> "edgex0x5607afcdfd50MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcdfd50MeshData" -> "x0x5607afcdfd50"[penwidth=1];
-"x0x5607afcdfd50" -> "edgex0x5607afce01c0MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afce01c0MeshBlockData" -> "x0x5607afce01c0"[penwidth=1];
-"x0x5607afce01c0" -> "edgex0x5607afce0850MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afce0850MeshBlockData" -> "x0x5607afce0850"[penwidth=1];
-"x0x5607afcde200" -> "edgex0x5607afce0df0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afce0df0MeshData" -> "x0x5607afce0df0"[penwidth=1];
-"x0x5607afce0df0" -> "edgex0x5607afce1050MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afce1050MeshBlockData" -> "x0x5607afce1050"[penwidth=1];
-"x0x5607afce1050" -> "edgex0x5607afce14d0MeshBlockData"[penwidth=1, dir=none];
-"edgex0x5607afce14d0MeshBlockData" -> "x0x5607afce14d0"[penwidth=1];
-"x0x5607afcde890" -> "edgex0x5607afce1a70BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afce1a70BarrierData" -> "x0x5607afce1a70"[penwidth=1];
-"x0x5607afce3050" -> "edgex0x5607afce1a70PressureIterData"[penwidth=1, dir=none];
-"edgex0x5607afce1a70PressureIterData" -> "x0x5607afce1a70"[penwidth=1];
-"x0x5607afce1a70" -> "edgex0x5607afce2130MeshData"[penwidth=1, dir=none];
-"edgex0x5607afce2130MeshData" -> "x0x5607afce2130"[penwidth=1];
-"x0x5607afce2130" -> "edgex0x5607afce27c0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afce27c0MeshData" -> "x0x5607afce27c0"[penwidth=1];
-"x0x5607afce27c0" -> "edgex0x5607afce3050PressureIterData"[penwidth=1, dir=none];
-"edgex0x5607afce3050PressureIterData" -> "x0x5607afce3050"[penwidth=1];
-"x0x5607afcda210" -> "edgex0x5607afcd1ef0BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcd1ef0BarrierData" -> "x0x5607afcd1ef0"[penwidth=1];
-"x0x5607afcd1ef0" -> "edgex0x5607afcd2160MeshData"[penwidth=1, dir=none];
-"edgex0x5607afcd2160MeshData" -> "x0x5607afcd2160"[penwidth=1];
-"x0x5607afce34d0" -> "edgex0x5607afcd4600BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afcd4600BarrierData" -> "x0x5607afcd4600"[penwidth=1];
-"x0x5607afcd2160" -> "edgex0x5607afce34d0MeshData"[penwidth=1, dir=none];
-"edgex0x5607afce34d0MeshData" -> "x0x5607afce34d0"[penwidth=1];
-"x0x5607afcd4600" -> "edgex0x5607afce3940BarrierData"[penwidth=1, dir=none];
-"edgex0x5607afce3940BarrierData" -> "x0x5607afce3940"[penwidth=1];
+x0x647da32b2820 [label="TimestepGlobal\nElements: 78
+Wait Time: 20.181s\nDequeue+Exec: 1.480ms\nExec: 17.730us\n",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32be200 [label="DumpMeshOutputs\nElements: 312
+Wait Time: 19.931s\nDequeue+Exec: 255.418ms\nExec: 817.316us\n",shape=rect,color="#0075ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32c06a0 [label="TimestepLoop\nElements: 78\nWait: 20.185s\nLock state: 9.718us\nEmpty ready list: 1.618ms\nDequeue+Exec: 141.675us\nExec/Element: 1.130us",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cf9f0 [label="TimestepDumpCollector\nElements: 312\nWait: 20.176s\nLock state: 100.079us\nEmpty ready list: 495.347us\nDequeue+Exec: 10.538ms\nExec/Element: 32.924us",shape=rect,color="#0004ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+x0x647da32cfc50 [label="TerminationSink\nElements: 1\nWait: 20.187s\nLock state: 434ns\nEmpty ready list: 8.242us\nDequeue+Exec: 1.206us\nExec/Element: 515ns",shape=rect,color="#0000ff", penwidth=3, style=filled, fillcolor="#ffffffff", fontcolor="#000000ff"];
+"edgex0x647da01d0cc0BarrierData"[label="BarrierData\nQS=1\nMQS=1", shape=rect];
+"edgex0x647da32b2820BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32be200MeshData"[label="MeshData\nQS=0\nMQS=4", shape=rect];
+"edgex0x647da32c06a0BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32cf9f0MeshData"[label="MeshData\nQS=0\nMQS=1", shape=rect];
+"edgex0x647da32cfc50BarrierData"[label="BarrierData\nQS=0\nMQS=1", shape=rect];
+"x0x647da32cfc50" -> "edgex0x647da01d0cc0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da01d0cc0BarrierData" -> "x0x647da01d0cc0"[penwidth=1];
+"x0x647da01d0a70" -> "edgex0x647da31179e0MeshData"[penwidth=1, dir=none];
+"x0x647da32c06a0" -> "edgex0x647da31179e0MeshData"[penwidth=1, dir=none];
+"edgex0x647da31179e0MeshData" -> "x0x647da31179e0"[penwidth=1];
+"x0x647da31179e0" -> "edgex0x647da3118580MeshData"[penwidth=1, dir=none];
+"edgex0x647da3118580MeshData" -> "x0x647da3118580"[penwidth=1];
+"x0x647da3118580" -> "edgex0x647da32ae3a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32ae3a0MeshData" -> "x0x647da32ae3a0"[penwidth=1];
+"x0x647da32b7510" -> "edgex0x647da32af1f0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32af1f0MeshData" -> "x0x647da32af1f0"[penwidth=1];
+"x0x647da32af1f0" -> "edgex0x647da32af660WallBCBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32af660WallBCBlockWork" -> "x0x647da32af660"[penwidth=1];
+"x0x647da32af660" -> "edgex0x647da32afcf0WallBCBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32afcf0WallBCBlockWork" -> "x0x647da32afcf0"[penwidth=1];
+"x0x647da32afcf0" -> "edgex0x647da32b0160MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b0160MeshData" -> "x0x647da32b0160"[penwidth=1];
+"x0x647da32bdd80" -> "edgex0x647da32b0fb0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b0fb0MeshData" -> "x0x647da32b0fb0"[penwidth=1];
+"x0x647da32b0fb0" -> "edgex0x647da32b1420MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32b1420MeshBlockData" -> "x0x647da32b1420"[penwidth=1];
+"x0x647da32b1420" -> "edgex0x647da32b1ab0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32b1ab0MeshBlockData" -> "x0x647da32b1ab0"[penwidth=1];
+"x0x647da32b1ab0" -> "edgex0x647da32b1f20MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b1f20MeshData" -> "x0x647da32b1f20"[penwidth=1];
+"x0x647da32b9810" -> "edgex0x647da32b31f0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b31f0MeshData" -> "x0x647da32b31f0"[penwidth=1];
+"x0x647da32b31f0" -> "edgex0x647da32b3660VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32b3660VelocityBCEdgesBlockWork" -> "x0x647da32b3660"[penwidth=1];
+"x0x647da32b3660" -> "edgex0x647da32b3cf0VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32b3cf0VelocityBCEdgesBlockWork" -> "x0x647da32b3cf0"[penwidth=1];
+"x0x647da32b8d20" -> "edgex0x647da32b44a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b44a0BarrierData" -> "x0x647da32b44a0"[penwidth=1];
+"x0x647da32b5f10" -> "edgex0x647da32b44a0RetrySequenceData"[penwidth=1, dir=none];
+"edgex0x647da32b44a0RetrySequenceData" -> "x0x647da32b44a0"[penwidth=1];
+"x0x647da32b44a0" -> "edgex0x647da32b4b70MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b4b70MeshData" -> "x0x647da32b4b70"[penwidth=1];
+"x0x647da32b4b70" -> "edgex0x647da32b5200MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b5200MeshData" -> "x0x647da32b5200"[penwidth=1];
+"x0x647da32b44a0" -> "edgex0x647da32b5670RetrySequenceData"[penwidth=1, dir=none];
+"x0x647da32b5200" -> "edgex0x647da32b5670RetrySequenceData"[penwidth=1, dir=none];
+"edgex0x647da32b5670RetrySequenceData" -> "x0x647da32b5670"[penwidth=1];
+"x0x647da32b5670" -> "edgex0x647da32b5f10RetrySequenceData"[penwidth=1, dir=none];
+"edgex0x647da32b5f10RetrySequenceData" -> "x0x647da32b5f10"[penwidth=1];
+"x0x647da32ae3a0" -> "edgex0x647da32b65a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b65a0MeshData" -> "x0x647da32b65a0"[penwidth=1];
+"x0x647da32b65a0" -> "edgex0x647da32b6a10BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b6a10BarrierData" -> "x0x647da32b6a10"[penwidth=1];
+"x0x647da32bb160" -> "edgex0x647da32b70a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b70a0MeshData" -> "x0x647da32b70a0"[penwidth=1];
+"x0x647da32b70a0" -> "edgex0x647da32b7510BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b7510BarrierData" -> "x0x647da32b7510"[penwidth=1];
+"x0x647da32b0160" -> "edgex0x647da32b7ba0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b7ba0MeshData" -> "x0x647da32b7ba0"[penwidth=1];
+"x0x647da32b7ba0" -> "edgex0x647da32b8010BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b8010BarrierData" -> "x0x647da32b8010"[penwidth=1];
+"x0x647da32bc200" -> "edgex0x647da32b86a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b86a0MeshData" -> "x0x647da32b86a0"[penwidth=1];
+"x0x647da32b1f20" -> "edgex0x647da32b8d20MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b8d20MeshData" -> "x0x647da32b8d20"[penwidth=1];
+"x0x647da32b5f10" -> "edgex0x647da32b93a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b93a0MeshData" -> "x0x647da32b93a0"[penwidth=1];
+"x0x647da32b93a0" -> "edgex0x647da32b9810BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b9810BarrierData" -> "x0x647da32b9810"[penwidth=1];
+"x0x647da32b3cf0" -> "edgex0x647da32b9c90BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b9c90BarrierData" -> "x0x647da32b9c90"[penwidth=1];
+"x0x647da32b6a10" -> "edgex0x647da32ba660MeshData"[penwidth=1, dir=none];
+"edgex0x647da32ba660MeshData" -> "x0x647da32ba660"[penwidth=1];
+"x0x647da32ba660" -> "edgex0x647da32baad0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32baad0MeshBlockData" -> "x0x647da32baad0"[penwidth=1];
+"x0x647da32baad0" -> "edgex0x647da32bb160MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32bb160MeshBlockData" -> "x0x647da32bb160"[penwidth=1];
+"x0x647da32b8010" -> "edgex0x647da32bb700MeshData"[penwidth=1, dir=none];
+"edgex0x647da32bb700MeshData" -> "x0x647da32bb700"[penwidth=1];
+"x0x647da32bb700" -> "edgex0x647da32bbb70MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32bbb70MeshBlockData" -> "x0x647da32bbb70"[penwidth=1];
+"x0x647da32bbb70" -> "edgex0x647da32bc200MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32bc200MeshBlockData" -> "x0x647da32bc200"[penwidth=1];
+"x0x647da32b86a0" -> "edgex0x647da32bc7a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32bc7a0BarrierData" -> "x0x647da32bc7a0"[penwidth=1];
+"x0x647da32bdd80" -> "edgex0x647da32bc7a0PressureIterData"[penwidth=1, dir=none];
+"edgex0x647da32bc7a0PressureIterData" -> "x0x647da32bc7a0"[penwidth=1];
+"x0x647da32bc7a0" -> "edgex0x647da32bce60MeshData"[penwidth=1, dir=none];
+"edgex0x647da32bce60MeshData" -> "x0x647da32bce60"[penwidth=1];
+"x0x647da32bce60" -> "edgex0x647da32bd4f0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32bd4f0MeshData" -> "x0x647da32bd4f0"[penwidth=1];
+"x0x647da32bd4f0" -> "edgex0x647da32bdd80PressureIterData"[penwidth=1, dir=none];
+"edgex0x647da32bdd80PressureIterData" -> "x0x647da32bdd80"[penwidth=1];
+"x0x647da32b9c90" -> "edgex0x647da32ae820MeshData"[penwidth=1, dir=none];
+"edgex0x647da32ae820MeshData" -> "x0x647da32ae820"[penwidth=1];
+"x0x647da32c81a0" -> "edgex0x647da32b05e0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b05e0MeshData" -> "x0x647da32b05e0"[penwidth=1];
+"x0x647da32c9c20" -> "edgex0x647da32b23a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32b23a0MeshData" -> "x0x647da32b23a0"[penwidth=1];
+"x0x647da32b05e0" -> "edgex0x647da32be470MeshData"[penwidth=1, dir=none];
+"edgex0x647da32be470MeshData" -> "x0x647da32be470"[penwidth=1];
+"x0x647da32be470" -> "edgex0x647da32be8f0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32be8f0MeshData" -> "x0x647da32be8f0"[penwidth=1];
+"x0x647da32be8f0" -> "edgex0x647da32bed60BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32bed60BarrierData" -> "x0x647da32bed60"[penwidth=1];
+"x0x647da32bed60" -> "edgex0x647da32bf730MeshData"[penwidth=1, dir=none];
+"edgex0x647da32bf730MeshData" -> "x0x647da32bf730"[penwidth=1];
+"x0x647da32bf730" -> "edgex0x647da32bfba0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32bfba0MeshBlockData" -> "x0x647da32bfba0"[penwidth=1];
+"x0x647da32bfba0" -> "edgex0x647da32c0230MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32c0230MeshBlockData" -> "x0x647da32c0230"[penwidth=1];
+"x0x647da32cf570" -> "edgex0x647da32c1070MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c1070MeshData" -> "x0x647da32c1070"[penwidth=1];
+"x0x647da32c1070" -> "edgex0x647da32c14e0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32c14e0MeshBlockData" -> "x0x647da32c14e0"[penwidth=1];
+"x0x647da32c14e0" -> "edgex0x647da32c1b70MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32c1b70MeshBlockData" -> "x0x647da32c1b70"[penwidth=1];
+"x0x647da32c1b70" -> "edgex0x647da32c1fe0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c1fe0MeshData" -> "x0x647da32c1fe0"[penwidth=1];
+"x0x647da32c8ca0" -> "edgex0x647da32c32b0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c32b0MeshData" -> "x0x647da32c32b0"[penwidth=1];
+"x0x647da32c32b0" -> "edgex0x647da32c3720WallBCBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32c3720WallBCBlockWork" -> "x0x647da32c3720"[penwidth=1];
+"x0x647da32c3720" -> "edgex0x647da32c3db0WallBCBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32c3db0WallBCBlockWork" -> "x0x647da32c3db0"[penwidth=1];
+"x0x647da32c97a0" -> "edgex0x647da32c4770MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c4770MeshData" -> "x0x647da32c4770"[penwidth=1];
+"x0x647da32c4770" -> "edgex0x647da32c4be0CorrRadiationWork"[penwidth=1, dir=none];
+"edgex0x647da32c4be0CorrRadiationWork" -> "x0x647da32c4be0"[penwidth=1];
+"x0x647da32c4be0" -> "edgex0x647da32c5270CorrRadiationWork"[penwidth=1, dir=none];
+"edgex0x647da32c5270CorrRadiationWork" -> "x0x647da32c5270"[penwidth=1];
+"x0x647da32cb8a0" -> "edgex0x647da32c5c30MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c5c30MeshData" -> "x0x647da32c5c30"[penwidth=1];
+"x0x647da32c5c30" -> "edgex0x647da32c60a0VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32c60a0VelocityBCEdgesBlockWork" -> "x0x647da32c60a0"[penwidth=1];
+"x0x647da32c60a0" -> "edgex0x647da32c6730VelocityBCEdgesBlockWork"[penwidth=1, dir=none];
+"edgex0x647da32c6730VelocityBCEdgesBlockWork" -> "x0x647da32c6730"[penwidth=1];
+"x0x647da32ae820" -> "edgex0x647da32c6db0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c6db0MeshData" -> "x0x647da32c6db0"[penwidth=1];
+"x0x647da32c6db0" -> "edgex0x647da32c7220BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c7220BarrierData" -> "x0x647da32c7220"[penwidth=1];
+"x0x647da32ccd70" -> "edgex0x647da32c76a0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c76a0MeshData" -> "x0x647da32c76a0"[penwidth=1];
+"x0x647da32c76a0" -> "edgex0x647da32c7d30MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c7d30MeshData" -> "x0x647da32c7d30"[penwidth=1];
+"x0x647da32c7d30" -> "edgex0x647da32c81a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c81a0BarrierData" -> "x0x647da32c81a0"[penwidth=1];
+"x0x647da32c0230" -> "edgex0x647da32c8830MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c8830MeshData" -> "x0x647da32c8830"[penwidth=1];
+"x0x647da32c8830" -> "edgex0x647da32c8ca0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c8ca0BarrierData" -> "x0x647da32c8ca0"[penwidth=1];
+"x0x647da32c3db0" -> "edgex0x647da32c9330MeshData"[penwidth=1, dir=none];
+"edgex0x647da32c9330MeshData" -> "x0x647da32c9330"[penwidth=1];
+"x0x647da32c9330" -> "edgex0x647da32c97a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c97a0BarrierData" -> "x0x647da32c97a0"[penwidth=1];
+"x0x647da32c5270" -> "edgex0x647da32c9c20BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c9c20BarrierData" -> "x0x647da32c9c20"[penwidth=1];
+"x0x647da32b23a0" -> "edgex0x647da32ca2b0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32ca2b0MeshData" -> "x0x647da32ca2b0"[penwidth=1];
+"x0x647da32ca2b0" -> "edgex0x647da32ca720BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32ca720BarrierData" -> "x0x647da32ca720"[penwidth=1];
+"x0x647da32cd9f0" -> "edgex0x647da32cadb0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cadb0MeshData" -> "x0x647da32cadb0"[penwidth=1];
+"x0x647da32c1fe0" -> "edgex0x647da32cb430MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cb430MeshData" -> "x0x647da32cb430"[penwidth=1];
+"x0x647da32cb430" -> "edgex0x647da32cb8a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32cb8a0BarrierData" -> "x0x647da32cb8a0"[penwidth=1];
+"x0x647da32c7220" -> "edgex0x647da32cc270MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cc270MeshData" -> "x0x647da32cc270"[penwidth=1];
+"x0x647da32cc270" -> "edgex0x647da32cc6e0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32cc6e0MeshBlockData" -> "x0x647da32cc6e0"[penwidth=1];
+"x0x647da32cc6e0" -> "edgex0x647da32ccd70MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32ccd70MeshBlockData" -> "x0x647da32ccd70"[penwidth=1];
+"x0x647da32ca720" -> "edgex0x647da32cd310MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cd310MeshData" -> "x0x647da32cd310"[penwidth=1];
+"x0x647da32cd310" -> "edgex0x647da32cd570MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32cd570MeshBlockData" -> "x0x647da32cd570"[penwidth=1];
+"x0x647da32cd570" -> "edgex0x647da32cd9f0MeshBlockData"[penwidth=1, dir=none];
+"edgex0x647da32cd9f0MeshBlockData" -> "x0x647da32cd9f0"[penwidth=1];
+"x0x647da32cadb0" -> "edgex0x647da32cdf90BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32cdf90BarrierData" -> "x0x647da32cdf90"[penwidth=1];
+"x0x647da32cf570" -> "edgex0x647da32cdf90PressureIterData"[penwidth=1, dir=none];
+"edgex0x647da32cdf90PressureIterData" -> "x0x647da32cdf90"[penwidth=1];
+"x0x647da32cdf90" -> "edgex0x647da32ce650MeshData"[penwidth=1, dir=none];
+"edgex0x647da32ce650MeshData" -> "x0x647da32ce650"[penwidth=1];
+"x0x647da32ce650" -> "edgex0x647da32cece0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cece0MeshData" -> "x0x647da32cece0"[penwidth=1];
+"x0x647da32cece0" -> "edgex0x647da32cf570PressureIterData"[penwidth=1, dir=none];
+"edgex0x647da32cf570PressureIterData" -> "x0x647da32cf570"[penwidth=1];
+"x0x647da32c6730" -> "edgex0x647da32b2820BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32b2820BarrierData" -> "x0x647da32b2820"[penwidth=1];
+"x0x647da32b2820" -> "edgex0x647da32be200MeshData"[penwidth=1, dir=none];
+"edgex0x647da32be200MeshData" -> "x0x647da32be200"[penwidth=1];
+"x0x647da32cf9f0" -> "edgex0x647da32c06a0BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32c06a0BarrierData" -> "x0x647da32c06a0"[penwidth=1];
+"x0x647da32be200" -> "edgex0x647da32cf9f0MeshData"[penwidth=1, dir=none];
+"edgex0x647da32cf9f0MeshData" -> "x0x647da32cf9f0"[penwidth=1];
+"x0x647da32c06a0" -> "edgex0x647da32cfc50BarrierData"[penwidth=1, dir=none];
+"edgex0x647da32cfc50BarrierData" -> "x0x647da32cfc50"[penwidth=1];
 }

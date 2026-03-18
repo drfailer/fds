@@ -50,7 +50,7 @@ public:
             for (auto &md : collected_) {
                 // CC_IBM: CC_VELOCITY_BC must run before velocity flux
                 if (fds_is_cc_ibm())
-                    fds_cc_velocity_bc(md->t, md->nm, md->phase);
+                    fds_cc_velocity_bc(md->t, md->nm, md->phase, 0);  // DO_IBEDGES=FALSE (velocity flux context)
                 fds_set_baroclinic_false(md->nm);
                 fds_viscosity_bc_kernel(md->nm, md->phase);
                 // CC_IBM: set cutface velocities before block kernels

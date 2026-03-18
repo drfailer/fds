@@ -24,7 +24,7 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             // Sequential pre-processing (only CC_IBM remains)
             for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 0);  // CC_IBM: sequential (pending conversion)
+                fds_cc_velocity_bc(md->t, md->nm, 0, 0);  // CC_IBM: DO_IBEDGES=FALSE (velocity flux context)
             }
 
             // Dispatch for parallel kernel execution
@@ -60,7 +60,7 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             // Sequential pre-processing (only CC_IBM remains)
             for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 1);  // CC_IBM: sequential (pending conversion)
+                fds_cc_velocity_bc(md->t, md->nm, 1, 0);  // CC_IBM: DO_IBEDGES=FALSE (velocity flux context)
             }
 
             // Dispatch for parallel kernel execution

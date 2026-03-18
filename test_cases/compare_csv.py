@@ -99,7 +99,8 @@ def compare_values(val1: str, val2: str, tolerance: float) -> Tuple[bool, Option
 
 def compare_csv_files(file1: str, file2: str, tolerance: float = 1e-10,
                       verbose: bool = False,
-                      ignore_columns: list = None) -> Tuple[bool, dict]:
+                      ignore_columns: list = None,
+                      allow_row_diff: int = 0) -> Tuple[bool, dict]:
     """
     Compare two CSV files.
 
@@ -186,6 +187,12 @@ def compare_csv_files(file1: str, file2: str, tolerance: float = 1e-10,
 
     success = stats['failed'] == 0 and not row_count_mismatch
 
+    # Override row count mismatch check if allowed
+    if row_count_mismatch and allow_row_diff > 0:
+        actual_diff = len(data2) - len(data1)
+        if actual_diff <= allow_row_diff:
+            success = stats['failed'] == 0
+
     if verbose or not success:
         print(f"\nComparison Statistics:")
         print(f"  Total comparisons: {stats['total_comparisons']}")
@@ -213,6 +220,8 @@ def main():
                         help='Verbose output')
     parser.add_argument('--ignore-columns', nargs='*', default=None,
                         help='Column names to ignore in comparison')
+    parser.add_argument('--allow-row-diff', type=int, default=0,
+                        help='Allow up to N fewer rows in test vs gold (default: 0)')
 
     args = parser.parse_args()
 
@@ -222,7 +231,8 @@ def main():
 
     success, stats = compare_csv_files(args.file1, args.file2,
                                        args.tolerance, args.verbose,
-                                       args.ignore_columns)
+                                       args.ignore_columns,
+                                       args.allow_row_diff)
 
     if success:
         print("✓ Files match within tolerance")
