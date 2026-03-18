@@ -8,6 +8,50 @@
 #include "../state/mesh_block_state.h"
 #include "../fds_fortran_interface.h"
 
+/// Mesh-level CC_PROJECT_VELOCITY store for CC_IBM (runs before block decomposition).
+/// Saves current projected velocities so the corrector fix can compute the average.
+/// No-op for non-CC_IBM (checked in Fortran C wrapper).
+class CCProjectVelocityCorrStoreTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
+public:
+    explicit CCProjectVelocityCorrStoreTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData, MeshData>(
+              "CCProjectVel_CorrStore", numThreads) {}
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        fds_cc_project_velocity_kernel(data->nm, data->dt,
+                                        /*store=*/1, /*predictor=*/0);
+        this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    copy() override {
+        return std::make_shared<CCProjectVelocityCorrStoreTask>(this->numberThreads());
+    }
+};
+
+/// Mesh-level CC_PROJECT_VELOCITY fix for CC_IBM (runs after block reassembly).
+/// Applies projected velocity correction after corrector kernel.
+/// No-op for non-CC_IBM (checked in Fortran C wrapper).
+class CCProjectVelocityCorrFixTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
+public:
+    explicit CCProjectVelocityCorrFixTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData, MeshData>(
+              "CCProjectVel_CorrFix", numThreads) {}
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        fds_cc_project_velocity_kernel(data->nm, data->dt,
+                                        /*store=*/0, /*predictor=*/0);
+        this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    copy() override {
+        return std::make_shared<CCProjectVelocityCorrFixTask>(this->numberThreads());
+    }
+};
+
 /// Block kernel task for velocity corrector.
 /// Processes a K-range sub-block of a single mesh.
 class VelocityCorrectorBlockKernelTask
@@ -97,8 +141,10 @@ public:
 /// Build the velocity corrector sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> WallVelStore (no-op for FFT, stores wall vels for sparse solvers)
+///   MeshData -> CCProjectVelStore (no-op for non-CC_IBM)
+///            -> WallVelStore (no-op for FFT, stores wall vels for sparse solvers)
 ///            -> Decompose -> VelCorrBlockKernel(parallel) -> Reassemble
+///            -> CCProjectVelFix (no-op for non-CC_IBM)
 ///            -> WallVelFix (no-op for FFT, fixes wall vels for sparse solvers)
 ///            -> CheckDivKernel(parallel) -> MeshData
 ///
@@ -110,20 +156,24 @@ public:
 inline auto buildVelocityCorrectorBlockSubgraph(size_t kernelThreads, int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityCorrectorBlock");
 
+    auto ccProjectVelStore = std::make_shared<CCProjectVelocityCorrStoreTask>(kernelThreads);
     auto wallVelStore = std::make_shared<WallVelNoGradHCorrStoreTask>(kernelThreads);
     auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
         std::make_shared<MeshBlockDecomposeState>(numBlocks), "VelCorrDecompose");
     auto blockKernel = std::make_shared<VelocityCorrectorBlockKernelTask>(kernelThreads);
     auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
         std::make_shared<MeshBlockReassembleState>(), "VelCorrReassemble");
+    auto ccProjectVelFix = std::make_shared<CCProjectVelocityCorrFixTask>(kernelThreads);
     auto wallVelFix = std::make_shared<WallVelNoGradHCorrFixTask>(kernelThreads);
     auto checkDivTask = std::make_shared<CheckDivergenceKernelTask>(kernelThreads);
 
-    subgraph->inputs(wallVelStore);
+    subgraph->inputs(ccProjectVelStore);
+    subgraph->edges(ccProjectVelStore, wallVelStore);
     subgraph->edges(wallVelStore, decomposeSM);
     subgraph->edges(decomposeSM, blockKernel);
     subgraph->edges(blockKernel, reassembleSM);
-    subgraph->edges(reassembleSM, wallVelFix);
+    subgraph->edges(reassembleSM, ccProjectVelFix);
+    subgraph->edges(ccProjectVelFix, wallVelFix);
     subgraph->edges(wallVelFix, checkDivTask);
     subgraph->outputs(checkDivTask);
 

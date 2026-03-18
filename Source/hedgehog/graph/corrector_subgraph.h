@@ -7,7 +7,6 @@
 #include "../data/barrier_data.h"
 #include "../state/collector_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/velocity_corrector_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -15,13 +14,11 @@
 #include "../task/combustion_kernel_task.h"
 #include "../task/corr_condens_kernel_task.h"
 #include "../task/particle_mass_energy_kernel_task.h"
-#include "../task/corr_particle_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "compute_viscosity_block_subgraph.h"
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "divergence_part2_block_subgraph.h"
-#include "../task/velocity_corrector_kernel_task.h"
 #include "velocity_corrector_block_subgraph.h"
 #include "particle_momentum_block_subgraph.h"
 #include "wallbc_subgraph.h"
@@ -79,20 +76,16 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto particleRemoveMoveCollSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ParticleRemoveMoveCollector");
     auto particleRemoveMoveTask = std::make_shared<RemoveMoveParticlesTask>();
-    // ParticleMomentum: block-decomposed for non-CC_IBM, mesh-level fallback for CC_IBM
+    // ParticleMomentum: always block-decomposed (K-blocks are particle-safe)
     auto partMomSubgraph = buildParticleMomentumBlockSubgraph(
         blockThreads, numBlocks);
-    auto corrParticleKernelTask = std::make_shared<CorrParticleKernelTask>(kernelThreads);
 
-    // VelocityCorrector: block-decomposed kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
-    // Block decomposition splits each mesh into K-range blocks for intra-mesh parallelism.
+    // VelocityCorrector: block-decomposed kernel
+    // CC_PROJECT_VELOCITY and WALL_VELOCITY_NO_GRADH are no-op tasks in the pipeline
+    // for non-CC_IBM / FFT respectively (checked in Fortran C wrapper).
     // CHECK_DIVERGENCE_KERNEL runs at mesh level after block reassembly.
-    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH runs inside
-    // the block subgraph (store before decompose, fix after reassembly).
     auto velCorrSubgraph = buildVelocityCorrectorBlockSubgraph(
         blockThreads, numBlocks);
-    // Fallback: original mesh-level kernel task for CC_IBM path
-    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
 
     // --- Named sub-graphs ---
 
@@ -189,13 +182,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(corrCondensKernelTask, particleMassEnergyKernelTask);
     subgraph->edges(particleMassEnergyKernelTask, particleRemoveMoveCollSM);
     subgraph->edges(particleRemoveMoveCollSM, particleRemoveMoveTask);
-    if (ccIBM) {
-        subgraph->edges(particleRemoveMoveTask, corrParticleKernelTask);
-        subgraph->edges(corrParticleKernelTask, collector7SM);
-    } else {
-        subgraph->edges(particleRemoveMoveTask, partMomSubgraph);
-        subgraph->edges(partMomSubgraph, collector7SM);
-    }
+    subgraph->edges(particleRemoveMoveTask, partMomSubgraph);
+    subgraph->edges(partMomSubgraph, collector7SM);
     subgraph->edges(collector7SM, meshExchange7);
 
     // WallBC sub-graph
@@ -226,35 +214,18 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     }
 
     // Pressure iteration: parallel sub-graph or sequential fallback
-    // VelocityCorrector: parallel kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, kernelThreads, /*predictor=*/false, termSignal,
             fds_get_pres_flag());
         subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
-        // CC_IBM is always false when useParallelPressure is true
         subgraph->edges(corrPressureSubgraph, velCorrSubgraph);
-        subgraph->edges(velCorrSubgraph, collector6bSM);
     } else {
         auto corrPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/false);
         subgraph->edges(corrPressureCollectorSM, corrPressureTask);
-        if (ccIBM) {
-            // CC_IBM uses mesh-level kernel (CC_PROJECT_VELOCITY requires full mesh)
-            auto velCorrCCOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-                std::make_shared<VelocityCorrectorCCOrchestrator>(nmeshes), "VelCorrCCOrch");
-            auto velCorrCCCollSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-                std::make_shared<VelocityCorrectorCCCollector>(nmeshes), "VelCorrCCCollector");
-            subgraph->edges(corrPressureTask, velCorrCCOrchSM);
-            subgraph->edges(velCorrCCOrchSM, velCorrKernelTask);
-            subgraph->edges(velCorrKernelTask, velCorrCCCollSM);
-            subgraph->edges(velCorrCCCollSM, collector6bSM);
-        } else {
-            // Non-CC_IBM: use block-decomposed sub-graph for intra-mesh parallelism
-            // (WallVelStore/Fix for sparse solvers handled inside the block subgraph)
-            subgraph->edges(corrPressureTask, velCorrSubgraph);
-            subgraph->edges(velCorrSubgraph, collector6bSM);
-        }
+        subgraph->edges(corrPressureTask, velCorrSubgraph);
     }
+    subgraph->edges(velCorrSubgraph, collector6bSM);
     subgraph->edges(collector6bSM, meshExchange6b);
 
     // CorrFinal sub-graph (outputs BarrierData directly — no external collector needed)

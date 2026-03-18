@@ -93,7 +93,7 @@ void fds_velocity_bc_process_edges_block_kernel(int nm, double t, int apply_to_e
 void fds_set_drag_uvwmax(int nm, double val);
 void fds_synthetic_turbulence_if_enabled(double dt, double t, int nm);
 void fds_cc_velocity_bc(double t, int nm, int estimated, int do_ibedges);
-void fds_cc_project_velocity(int nm, double dt, int store_flag);
+void fds_cc_project_velocity_kernel(int nm, double dt, int store_flag, int predictor_flag);
 void fds_wall_velocity_no_gradh_kernel(int nm, double dt, int store_flag, int predictor_flag);
 
 // Corrector phase per-mesh subroutines

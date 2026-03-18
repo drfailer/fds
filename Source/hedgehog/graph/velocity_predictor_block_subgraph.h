@@ -30,6 +30,27 @@ public:
     }
 };
 
+/// Mesh-level CC_PROJECT_VELOCITY fix for CC_IBM (runs after block reassembly).
+/// No-op for non-CC_IBM (handled inside the Fortran wrapper).
+class CCProjectVelocityPredFixTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
+public:
+    explicit CCProjectVelocityPredFixTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData, MeshData>(
+              "CCProjectVel_PredFix", numThreads) {}
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        fds_cc_project_velocity_kernel(data->nm, data->dt,
+                                        /*store=*/0, /*predictor=*/1);
+        this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    copy() override {
+        return std::make_shared<CCProjectVelocityPredFixTask>(this->numberThreads());
+    }
+};
+
 /// Mesh-level wall velocity fix for sparse solvers (runs after block reassembly).
 /// No-op for FFT solver (handled inside the Fortran wrapper).
 class WallVelNoGradHPredFixTask
@@ -75,14 +96,13 @@ public:
 ///
 /// Pipeline:
 ///   MeshData -> Decompose -> VelPredBlockKernel(parallel) -> Reassemble
-///            -> WallVelNoGradH_PredFix (no-op for FFT, fixes wall vels for sparse solvers)
-///            -> CheckStabilityKernel(parallel, if !skipCFL) -> MeshData
+///            -> CCProjectVel_PredFix (no-op for non-CC_IBM)
+///            -> WallVelNoGradH_PredFix (no-op for FFT)
+///            -> CheckStabilityKernel -> MeshData
 ///
 /// @param kernelThreads Number of threads for parallel tasks
 /// @param numBlocks Target number of blocks per mesh
-/// @param skipCFL If true, skip CHECK_STABILITY_KERNEL (CC_IBM path)
-inline auto buildVelocityPredictorBlockSubgraph(size_t kernelThreads, int numBlocks,
-                                                 bool skipCFL) {
+inline auto buildVelocityPredictorBlockSubgraph(size_t kernelThreads, int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityPredictorBlock");
 
     auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
@@ -90,20 +110,17 @@ inline auto buildVelocityPredictorBlockSubgraph(size_t kernelThreads, int numBlo
     auto blockKernel = std::make_shared<VelocityPredictorBlockKernelTask>(kernelThreads);
     auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
         std::make_shared<MeshBlockReassembleState>(), "VelPredReassemble");
+    auto ccProjectVelFix = std::make_shared<CCProjectVelocityPredFixTask>(kernelThreads);
     auto wallVelPredFix = std::make_shared<WallVelNoGradHPredFixTask>(kernelThreads);
+    auto checkStabilityTask = std::make_shared<CheckStabilityKernelTask>(kernelThreads);
 
     subgraph->inputs(decomposeSM);
     subgraph->edges(decomposeSM, blockKernel);
     subgraph->edges(blockKernel, reassembleSM);
-    subgraph->edges(reassembleSM, wallVelPredFix);
-
-    if (skipCFL) {
-        subgraph->outputs(wallVelPredFix);
-    } else {
-        auto checkStabilityTask = std::make_shared<CheckStabilityKernelTask>(kernelThreads);
-        subgraph->edges(wallVelPredFix, checkStabilityTask);
-        subgraph->outputs(checkStabilityTask);
-    }
+    subgraph->edges(reassembleSM, ccProjectVelFix);
+    subgraph->edges(ccProjectVelFix, wallVelPredFix);
+    subgraph->edges(wallVelPredFix, checkStabilityTask);
+    subgraph->outputs(checkStabilityTask);
 
     return subgraph;
 }

@@ -8,7 +8,6 @@
 #include "../state/collector_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/velocity_predictor_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -19,7 +18,6 @@
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "divergence_part2_block_subgraph.h"
-#include "../task/velocity_predictor_kernel_task.h"
 #include "velocity_predictor_block_subgraph.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
@@ -82,15 +80,12 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool canBlockDivP2 = fds_divergence_part_2_can_block_decompose() != 0 && numBlocks > 1;
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
-    // VelocityPredictor: block-decomposed kernel (+ CC post-processing collector if CC_IBM)
-    // For CC_IBM: skip CFL check in kernel (runs later in collector after CC_PROJECT_VELOCITY)
-    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH runs inside
-    // the block subgraph (after reassembly, before CHECK_STABILITY).
+    // VelocityPredictor: block-decomposed kernel
+    // CC_PROJECT_VELOCITY and WALL_VELOCITY_NO_GRADH are no-op tasks in the pipeline
+    // for non-CC_IBM / FFT respectively (checked in Fortran C wrapper).
+    // CHECK_STABILITY runs at mesh level after reassembly.
     auto velPredSubgraph = buildVelocityPredictorBlockSubgraph(
-        blockThreads, numBlocks, /*skipCFL=*/ccIBM);
-    // Fallback: original mesh-level kernel task for CC_IBM path
-    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(
-        kernelThreads, /*skipCFL=*/ccIBM);
+        blockThreads, numBlocks);
 
     // PredFinal sub-graph (Pattern B, outputs BarrierData)
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, kernelThreads, blockThreads, numBlocks);
@@ -200,27 +195,15 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal,
             fds_get_pres_flag());
         subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
-        // CC_IBM is always false when useParallelPressure is true
         subgraph->edges(predPressureSubgraph, velPredSubgraph);
     } else {
         auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
         subgraph->edges(predPressureCollectorSM, predPressureTask);
-        if (ccIBM) {
-            subgraph->edges(predPressureTask, velPredKernelTask);
-        } else {
-            subgraph->edges(predPressureTask, velPredSubgraph);
-        }
+        subgraph->edges(predPressureTask, velPredSubgraph);
     }
 
-    // VelocityPredictor -> ChangeTimeStep: CC_IBM collector or block sub-graph
-    if (ccIBM) {
-        auto velPredCCSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<VelocityPredictorCCCollector>(nmeshes), "VelPredCCCollector");
-        subgraph->edges(velPredKernelTask, velPredCCSM);
-        subgraph->edges(velPredCCSM, changeTimeStepCollectorSM);
-    } else {
-        subgraph->edges(velPredSubgraph, changeTimeStepCollectorSM);
-    }
+    // VelocityPredictor -> ChangeTimeStep
+    subgraph->edges(velPredSubgraph, changeTimeStepCollectorSM);
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
     subgraph->edges(changeTimeStepSubgraph, collector3SM);
     subgraph->edges(collector3SM, meshExchange3);
