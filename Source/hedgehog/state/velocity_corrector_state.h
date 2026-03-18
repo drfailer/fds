@@ -27,7 +27,7 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 1);  // STORE=.TRUE.
-                fds_wall_velocity_no_gradh(md->nm, md->dt, 1);  // STORE=.TRUE.
+                fds_wall_velocity_no_gradh_kernel(md->nm, md->dt, 1, 0);  // store=1, predictor=0
             }
 
             for (auto &md : collected_) {
@@ -66,7 +66,7 @@ public:
         if (count_ == nmeshes_) {
             for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 0);  // STORE=.FALSE.
-                fds_wall_velocity_no_gradh(md->nm, md->dt, 0);  // STORE=.FALSE.
+                fds_wall_velocity_no_gradh_kernel(md->nm, md->dt, 0, 0);  // store=0, predictor=0
             }
 
             for (auto &md : collected_) {

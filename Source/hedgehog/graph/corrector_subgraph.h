@@ -87,14 +87,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // VelocityCorrector: block-decomposed kernel (+ CC_PROJECT_VELOCITY orch/collector if CC_IBM)
     // Block decomposition splits each mesh into K-range blocks for intra-mesh parallelism.
     // CHECK_DIVERGENCE_KERNEL runs at mesh level after block reassembly.
-    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH must run
-    // before and after the kernel (velo.f90:652-668). The block subgraph cannot do this,
-    // so sparse solvers use the full VELOCITY_CORRECTOR subroutine instead.
-    int presFlag = fds_get_pres_flag();
-    bool needsFullVelocity = !ccIBM && (presFlag >= 1 && presFlag <= 3);
+    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH runs inside
+    // the block subgraph (store before decompose, fix after reassembly).
     auto velCorrSubgraph = buildVelocityCorrectorBlockSubgraph(
         blockThreads, numBlocks);
-    auto velCorrFullTask = std::make_shared<VelocityCorrectorFullTask>();
     // Fallback: original mesh-level kernel task for CC_IBM path
     auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(kernelThreads);
 
@@ -237,13 +233,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             fds_get_pres_flag());
         subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
         // CC_IBM is always false when useParallelPressure is true
-        if (needsFullVelocity) {
-            subgraph->edges(corrPressureSubgraph, velCorrFullTask);
-            subgraph->edges(velCorrFullTask, collector6bSM);
-        } else {
-            subgraph->edges(corrPressureSubgraph, velCorrSubgraph);
-            subgraph->edges(velCorrSubgraph, collector6bSM);
-        }
+        subgraph->edges(corrPressureSubgraph, velCorrSubgraph);
+        subgraph->edges(velCorrSubgraph, collector6bSM);
     } else {
         auto corrPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/false);
         subgraph->edges(corrPressureCollectorSM, corrPressureTask);
@@ -257,11 +248,9 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             subgraph->edges(velCorrCCOrchSM, velCorrKernelTask);
             subgraph->edges(velCorrKernelTask, velCorrCCCollSM);
             subgraph->edges(velCorrCCCollSM, collector6bSM);
-        } else if (needsFullVelocity) {
-            subgraph->edges(corrPressureTask, velCorrFullTask);
-            subgraph->edges(velCorrFullTask, collector6bSM);
         } else {
-            // Non-CC_IBM, FFT: use block-decomposed sub-graph for intra-mesh parallelism
+            // Non-CC_IBM: use block-decomposed sub-graph for intra-mesh parallelism
+            // (WallVelStore/Fix for sparse solvers handled inside the block subgraph)
             subgraph->edges(corrPressureTask, velCorrSubgraph);
             subgraph->edges(velCorrSubgraph, collector6bSM);
         }

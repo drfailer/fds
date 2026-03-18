@@ -30,6 +30,27 @@ public:
     }
 };
 
+/// Mesh-level wall velocity fix for sparse solvers (runs after block reassembly).
+/// No-op for FFT solver (handled inside the Fortran wrapper).
+class WallVelNoGradHPredFixTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
+public:
+    explicit WallVelNoGradHPredFixTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData, MeshData>(
+              "WallVelNoGradH_PredFix", numThreads) {}
+
+    void execute(std::shared_ptr<MeshData> data) override {
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt,
+                                           /*store=*/0, /*predictor=*/1);
+        this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    copy() override {
+        return std::make_shared<WallVelNoGradHPredFixTask>(this->numberThreads());
+    }
+};
+
 /// Mesh-level CFL/VN stability check task (runs after block reassembly).
 class CheckStabilityKernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
@@ -54,12 +75,8 @@ public:
 ///
 /// Pipeline:
 ///   MeshData -> Decompose -> VelPredBlockKernel(parallel) -> Reassemble
+///            -> WallVelNoGradH_PredFix (no-op for FFT, fixes wall vels for sparse solvers)
 ///            -> CheckStabilityKernel(parallel, if !skipCFL) -> MeshData
-///
-/// Note: This sub-graph does NOT call WALL_VELOCITY_NO_GRADH, so it must
-/// not be used for sparse pressure solvers (ULMAT/GLMAT/UGLMAT) which
-/// require that call between the kernel and CHECK_STABILITY.
-/// For those solvers, use VelocityPredictorFullTask instead.
 ///
 /// @param kernelThreads Number of threads for parallel tasks
 /// @param numBlocks Target number of blocks per mesh
@@ -73,16 +90,18 @@ inline auto buildVelocityPredictorBlockSubgraph(size_t kernelThreads, int numBlo
     auto blockKernel = std::make_shared<VelocityPredictorBlockKernelTask>(kernelThreads);
     auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
         std::make_shared<MeshBlockReassembleState>(), "VelPredReassemble");
+    auto wallVelPredFix = std::make_shared<WallVelNoGradHPredFixTask>(kernelThreads);
 
     subgraph->inputs(decomposeSM);
     subgraph->edges(decomposeSM, blockKernel);
     subgraph->edges(blockKernel, reassembleSM);
+    subgraph->edges(reassembleSM, wallVelPredFix);
 
     if (skipCFL) {
-        subgraph->outputs(reassembleSM);
+        subgraph->outputs(wallVelPredFix);
     } else {
         auto checkStabilityTask = std::make_shared<CheckStabilityKernelTask>(kernelThreads);
-        subgraph->edges(reassembleSM, checkStabilityTask);
+        subgraph->edges(wallVelPredFix, checkStabilityTask);
         subgraph->outputs(checkStabilityTask);
     }
 

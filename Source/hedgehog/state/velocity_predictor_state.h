@@ -30,7 +30,7 @@ public:
         if (count_ == nmeshes_) {
             for (auto &md : collected_) {
                 fds_cc_project_velocity(md->nm, md->dt, 0);  // STORE=.FALSE.
-                fds_wall_velocity_no_gradh(md->nm, md->dt, 0);  // STORE=.FALSE.
+                fds_wall_velocity_no_gradh_kernel(md->nm, md->dt, 0, 1);  // store=0, predictor=1
                 fds_check_stability_kernel_only(md->nm, md->t + md->dt, md->dt);
             }
 

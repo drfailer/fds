@@ -84,15 +84,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // VelocityPredictor: block-decomposed kernel (+ CC post-processing collector if CC_IBM)
     // For CC_IBM: skip CFL check in kernel (runs later in collector after CC_PROJECT_VELOCITY)
-    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH must run
-    // between VELOCITY_PREDICTOR_KERNEL and CHECK_STABILITY (velo.f90:580-582).
-    // The block subgraph cannot do this (WALL_VELOCITY_NO_GRADH uses POINT_TO_MESH),
-    // so sparse solvers use the full VELOCITY_PREDICTOR subroutine instead.
-    int presFlag = fds_get_pres_flag();
-    bool needsFullVelocity = !ccIBM && (presFlag >= 1 && presFlag <= 3);
+    // For sparse solvers (ULMAT/GLMAT/UGLMAT), WALL_VELOCITY_NO_GRADH runs inside
+    // the block subgraph (after reassembly, before CHECK_STABILITY).
     auto velPredSubgraph = buildVelocityPredictorBlockSubgraph(
         blockThreads, numBlocks, /*skipCFL=*/ccIBM);
-    auto velPredFullTask = std::make_shared<VelocityPredictorFullTask>();
     // Fallback: original mesh-level kernel task for CC_IBM path
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(
         kernelThreads, /*skipCFL=*/ccIBM);
@@ -206,31 +201,23 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             fds_get_pres_flag());
         subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
         // CC_IBM is always false when useParallelPressure is true
-        if (needsFullVelocity) {
-            subgraph->edges(predPressureSubgraph, velPredFullTask);
-        } else {
-            subgraph->edges(predPressureSubgraph, velPredSubgraph);
-        }
+        subgraph->edges(predPressureSubgraph, velPredSubgraph);
     } else {
         auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
         subgraph->edges(predPressureCollectorSM, predPressureTask);
         if (ccIBM) {
             subgraph->edges(predPressureTask, velPredKernelTask);
-        } else if (needsFullVelocity) {
-            subgraph->edges(predPressureTask, velPredFullTask);
         } else {
             subgraph->edges(predPressureTask, velPredSubgraph);
         }
     }
 
-    // VelocityPredictor -> ChangeTimeStep: CC_IBM collector, full task, or block sub-graph
+    // VelocityPredictor -> ChangeTimeStep: CC_IBM collector or block sub-graph
     if (ccIBM) {
         auto velPredCCSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<VelocityPredictorCCCollector>(nmeshes), "VelPredCCCollector");
         subgraph->edges(velPredKernelTask, velPredCCSM);
         subgraph->edges(velPredCCSM, changeTimeStepCollectorSM);
-    } else if (needsFullVelocity) {
-        subgraph->edges(velPredFullTask, changeTimeStepCollectorSM);
     } else {
         subgraph->edges(velPredSubgraph, changeTimeStepCollectorSM);
     }
