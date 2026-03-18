@@ -98,7 +98,8 @@ def compare_values(val1: str, val2: str, tolerance: float) -> Tuple[bool, Option
     return passed, max(abs_diff, rel_diff)
 
 def compare_csv_files(file1: str, file2: str, tolerance: float = 1e-10,
-                      verbose: bool = False) -> Tuple[bool, dict]:
+                      verbose: bool = False,
+                      ignore_columns: list = None) -> Tuple[bool, dict]:
     """
     Compare two CSV files.
 
@@ -138,8 +139,10 @@ def compare_csv_files(file1: str, file2: str, tolerance: float = 1e-10,
     ignore_patterns = ['Time', 'Step', 'cpu', 'CPU', 'Clock', 'time', 'step',
                        'Q_CONV', 'Q_TOTAL', 'Q_COND', 'Q_DIFF', 'Q_ENTH',
                        'Q_PRES', 'Q_RADI', 'Q_PART', 'MLR_', 'ZONE_']
+    extra_ignore = ignore_columns or []
     data_col_indices = [i for i, h in enumerate(headers1)
-                        if not any(p in h for p in ignore_patterns)]
+                        if not any(p in h for p in ignore_patterns)
+                        and h.strip('"') not in extra_ignore]
 
     # Compare data rows
     stats = {
@@ -208,6 +211,8 @@ def main():
                         help='Tolerance for numeric comparisons (default: 1e-10)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Verbose output')
+    parser.add_argument('--ignore-columns', nargs='*', default=None,
+                        help='Column names to ignore in comparison')
 
     args = parser.parse_args()
 
@@ -216,7 +221,8 @@ def main():
     print(f"Tolerance: {args.tolerance:.2e}\n")
 
     success, stats = compare_csv_files(args.file1, args.file2,
-                                       args.tolerance, args.verbose)
+                                       args.tolerance, args.verbose,
+                                       args.ignore_columns)
 
     if success:
         print("✓ Files match within tolerance")

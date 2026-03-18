@@ -77,7 +77,17 @@ int main(int argc, char *argv[]) {
     // kernelThreads: for mesh-level kernel tasks (1 thread per mesh)
     // blockThreads: for block-decomposed kernel tasks (intra-mesh parallelism)
     // numBlocks: number of K-blocks per mesh (granularity of block decomposition)
-    size_t kernelThreads = local_nmeshes;
+    // Parse --kernel-threads option (default: local_nmeshes)
+    int cliKernelThreads = 0;
+    for (int i = 1; i < argc; ++i) {
+        std::string karg(argv[i]);
+        if (karg == "--kernel-threads" && i + 1 < argc) {
+            cliKernelThreads = std::atoi(argv[++i]);
+        }
+    }
+    size_t kernelThreads = (cliKernelThreads > 0)
+        ? static_cast<size_t>(cliKernelThreads)
+        : static_cast<size_t>(local_nmeshes);
     size_t blockThreads = (cliBlockThreads > 0)
         ? static_cast<size_t>(cliBlockThreads)
         : std::max(static_cast<size_t>(local_nmeshes),

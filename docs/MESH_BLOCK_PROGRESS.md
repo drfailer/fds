@@ -93,14 +93,22 @@ Note: `fds_set_baroclinic_false` and `fds_viscosity_bc_kernel` are called before
 ### DivergencePart2KernelTask (predictor instance)
 
 **Graph location:** After DivergenceExchange barrier
-**File:** `task/divergence_part2_kernel_task.h`
+**File:** `task/divergence_part2_kernel_task.h`, `graph/divergence_part2_block_subgraph.h`
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Mesh** | Zone loops (D_PBAR_DT, pressure averaging) + I,J,K cell loops + wall loops (BC_LOOP) |
+| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Block (2-phase)** | Zone ops sequential in orchestrator; cell loops + BC_LOOP block-decomposed along K |
 
-**Task classification:** Mesh — zone-dependent pressure calculations must run before cell loops; wall loops for boundary corrections.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Block (conditional) — zone ops (R_PBAR, USUM, D_PBAR_DT_P) run sequentially per-mesh in orchestrator; pressure zone DP, solid zeroing, BC_LOOP, DIV+DDDT decomposed into K-blocks. CC_IBM falls back to mesh-level.
+**Status:** DONE
+
+**Implementation:**
+- Preprocessing: `DIVERGENCE_PART_2_PREPROCESSING(M, DT, NM)` in divg_kernels.f90 — R_PBAR computation, zone ops (USUM_ADD, USUM modification), D_PBAR_DT_P computation, CC_IBM GET_LINKED_VELOCITIES
+- Block kernel: `DIVERGENCE_PART_2_BLOCK_KERNEL(M, DT, NM, K1, K2)` in divg_kernels.f90 — pressure zone DP (K1:K2), solid cell zeroing (K1:K2), BC_LOOP (K-filtered), DIV+DDDT computation (K1:K2)
+- K-partition: BC_LOOP wall cells filtered by BC%KK coordinate; first block includes K=0 ghost cells via `K_MIN = MERGE(0, K1, K1==1)`
+- Sub-graph: `graph/divergence_part2_block_subgraph.h` — Orchestrator(preprocessing + decompose) → BlockKernel(parallel) → Reassemble
+- CC_IBM path: uses original mesh-level `DivergencePart2KernelTask` (GET_LINKED_VELOCITIES/GET_CUTCELL_DDDT require full mesh)
+- Verified: 8/12 custom pass (same 4 pre-existing failures), 42/59 verification pass (no regressions)
 
 ---
 
@@ -328,14 +336,14 @@ Note: `fds_combustion_bc_kernel` runs before this kernel in the same task.
 ### DivergencePart2KernelTask (corrector instance)
 
 **Graph location:** After DivergenceExchange barrier
-**File:** `task/divergence_part2_kernel_task.h`
+**File:** `task/divergence_part2_kernel_task.h`, `graph/divergence_part2_block_subgraph.h`
 
 | # | Fortran Kernel | Source | Classification | Notes |
 |---|----------------|--------|----------------|-------|
-| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Mesh** | Same as predictor instance — zone loops + wall loops |
+| 1 | `DIVERGENCE_PART_2_KERNEL` | divg_kernels.f90:1396 | **Block (2-phase)** | Same as predictor instance — block-decomposed with orchestrator preprocessing |
 
-**Task classification:** Mesh — same as predictor instance.
-**Status:** DONE (classified, no conversion needed)
+**Task classification:** Block (conditional) — same as predictor instance. Shares block kernel implementation.
+**Status:** DONE
 
 ---
 
@@ -415,7 +423,7 @@ Same kernels as predictor instance (see above).
 | 4 | PredStep1/CorrStep1KernelTask | COMPUTE_VISCOSITY, MASS_FINITE_DIFFS, DENSITY | **Mesh** — all have wall loops |
 | 5 | DivSetupKernelTask | VELOCITY_FLUX_KERNEL | **DONE** — block kernel (conditional), mesh fallback for Coriolis/patch/CTRL/wind/periodic |
 | 6 | PredWallDivKernelTask | PARTICLE_MOMENTUM + DIVERGENCE_PART_1 | **Mixed** — PART_MOM block-able but lightweight; DIV_PART_1 mesh |
-| 7 | DivergencePart2KernelTask | DIVERGENCE_PART_2_KERNEL | **Mesh** — zone loops, wall loops |
+| 7 | DivergencePart2KernelTask | DIVERGENCE_PART_2_KERNEL | **DONE** — block kernel (zone ops sequential), CC_IBM mesh fallback |
 | 8 | CombustionKernelTask | COMBUSTION_GENERAL_KERNEL | **Mesh** — cell list, STOP_STATUS, CONTAINS host association |
 | 9 | CorrCondensKernelTask | CONDENSATION_EVAPORATION_KERNEL | **Mesh** — wall+cell loops interleaved in species loop |
 | 10 | ParticleMassEnergyKernelTask | PARTICLE_MASS_ENERGY_TRANSFER_KERNEL | **Mesh** — particle loop (DO IP=1,NLP) |
@@ -430,8 +438,8 @@ Same kernels as predictor instance (see above).
 
 - **Total unique kernel tasks:** 16
 - **Classified:** 16 / 16
-- **Converted to mesh block:** 7 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux, ComputeViscosity, WallBC, VelocityBCEdges)
-- **Confirmed mesh-only:** 7
+- **Converted to mesh block:** 8 (VelocityPredictor, VelocityCorrector, CorrParticleMomentum, DivSetup/VelocityFlux, ComputeViscosity, WallBC, VelocityBCEdges, DivergencePart2)
+- **Confirmed mesh-only:** 6
 - **Mixed (no conversion):** 2 (PredWallDiv, RetryMomentumDiv — PART_MOM lightweight relative to DIV_PART_1)
 
 ### Phase 4: Remaining Block Decomposition Targets
@@ -440,8 +448,8 @@ Ranked by estimated impact (runtime × feasibility):
 
 | Priority | Kernel | Combined Time (ms) | Decomposable % | Feasibility | Blocker |
 |----------|--------|-------------------|----------------|-------------|---------|
-| 1 | DIVERGENCE_PART_1_KERNEL | 824 (pred 286 + corr 294 + retry 244) | 77% | HIGH | Wall preprocessing/postprocessing sequential; cell+species loops block-decomposable |
-| 2 | DIVERGENCE_PART_2_KERNEL | 140 (pred + corr) | 98% | HIGH | Only zone ops (D_PBAR_DT) sequential; cell loops + BC_LOOP fully decomposable |
+| ~~1~~ | ~~DIVERGENCE_PART_1_KERNEL~~ | ~~824~~ | ~~15-25%~~ | ~~LOW~~ | GET_SCALAR_FACE_VALUE stencils require full K-domain; wall+cell loops interleaved within species loops; wall corrections create race conditions at block boundaries |
+| ~~2~~ | **DIVERGENCE_PART_2_KERNEL** | 140 (pred + corr) | 98% | **DONE** | Zone ops sequential in orchestrator; cell loops + BC_LOOP K-decomposed |
 | 3 | DENSITY_KERNEL | ~150 | 70% | MODERATE | CHECK_MASS_DENSITY needs K±1 halo; zone PBAR updates sequential |
 | 4 | MASS_FINITE_DIFFERENCES | ~100 | LOW | LOW | GET_SCALAR_FACE_VALUE stencils require full K-domain neighbor access |
 | 5 | COMPUTE_RADIATION_KERNEL | ~250 | ~30% | LOW | Complex FVM solver (1300+ lines, CONTAINS, angle sweeps, wall+particle loops) |

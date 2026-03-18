@@ -148,8 +148,7 @@ endif()
 
 # Set compiler flags for various compilers
 if (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-    # Note: Using RECURSIVE keyword in subroutines instead of -frecursive flag for thread-safety
-    target_compile_options(fds PRIVATE -cpp -std=f2018 -ffpe-summary=none -fall-intrinsics)
+    target_compile_options(fds PRIVATE -cpp -std=f2018 -ffpe-summary=none -fall-intrinsics -frecursive)
 elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "Intel" OR CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
     target_compile_options(fds PRIVATE -fpp )
     # When compiling with Intel on Linux, enable the IFPORT library
