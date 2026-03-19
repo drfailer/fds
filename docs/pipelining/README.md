@@ -166,6 +166,150 @@ A collector state waits for both results before emitting downstream.
 3. **Thread budget**: Pipelining adds concurrency orthogonal to mesh parallelism. With N meshes and 2 branches, the thread pool must accommodate up to 2N simultaneous tasks.
 4. **Barrier semantics**: Mesh exchanges remain barriers across all meshes. Pipelining only applies *between* exchanges.
 
+## Array Lifetime and Scratch Analysis
+
+A second pass of analysis classifies each data array by its **lifetime** (persistent vs ephemeral) and **visibility** (output-visible vs purely internal). This matters for pipelining because ephemeral, internal arrays can be duplicated per-branch to eliminate false sharing.
+
+### Array Persistence Classification
+
+**Persistent arrays** carry meaningful state across timesteps. They are the "real" simulation state:
+
+| Array | Output-Visible | Notes |
+|-------|----------------|-------|
+| U, V, W (velocity) | Yes (U/V/W-VELOCITY) | Updated by VEL_CORRECTOR |
+| RHO (density) | Yes (DENSITY) | Updated by DENSITY each corrector |
+| ZZ (species) | Yes (mass fractions) | Updated by DENSITY each corrector |
+| TMP (temperature) | Yes (TEMPERATURE) | Recomputed from equation of state |
+| H, HS (pressure head) | Yes (H, HS) | Updated by PRESSURE_SOLVE |
+| PBAR, D_PBAR_DT | Yes (PRESSURE) | Background pressure, persistent |
+| DEL_RHO_D_DEL_Z (diff) | Restart only | Mixed: zeroed in DIV_P1 but old value saved in DENSITY |
+| EDGE | Indirect (via velocities) | Set at initialization, persists |
+| WALL | Yes (BNDF) | Boundary cell data |
+| LAGRANGIAN_PARTICLE | Yes (PART files) | Particle state |
+
+**Ephemeral arrays** are fully recomputed each predictor or corrector phase. Their previous values are never carried forward:
+
+| Array | Zeroed/Overwritten By | Output-Visible | Lifespan |
+|-------|----------------------|----------------|----------|
+| FVX, FVY, FVZ (flux) | Overwritten by VELOCITY_FLUX | Yes (F_X/F_Y/F_Z) | VFLUX -> PRESSURE_SOLVE + VEL_PRED/CORR |
+| FVX_D, FVY_D, FVZ_D (drag) | Explicitly zeroed by MOVE_PARTICLES | Yes (DRAG FORCE) | MOVE -> PART_MOM (very short) |
+| D / DS (divergence) | Zeroed by DIV_P1 | Yes (DIVERGENCE) | DIV_P1 -> PRESSURE_SOLVE |
+| **DDDT** | Recomputed by DIV_P2 | **No** | DIV_P2 -> PRESSURE_SOLVE only |
+| MU (viscosity) | Overwritten by COMPUTE_VISCOSITY | Yes (VISCOSITY) | VISC -> VFLUX + DIV_P1 |
+| KRES (kinetic energy) | Overwritten by COMPUTE_VISCOSITY | Yes (RESOLVED KE) | VISC -> PRESSURE_SOLVE |
+| US, VS, WS (vel_s) | Overwritten by VEL_PREDICTOR | Partial (CFL) | VEL_PRED -> corrector input |
+| RHOS (density_s) | Overwritten by DENSITY | No | DENSITY -> corrector input |
+| ZZS (species_s) | Overwritten by DENSITY | No | DENSITY -> corrector input |
+| Q (energy source) | Reset by COMBUSTION/WALL_BC | Yes (HRRPUV) | Written -> consumed by DIV_P1 |
+| M_DOT_PPP | Zeroed in DENSITY | Restart only | PART_MASS_ENERGY -> DENSITY/DIV_P1 |
+| QR (radiation) | Zeroed by RADIATION | Yes (RAD LOSS) | RADIATION -> DIV_P1 |
+| **DSUM, PSUM, USUM** | Zeroed by InitDiv | **No** | DIV_P1 -> DIV_EXCHANGE -> DIV_P2 |
+| **D_PBAR_DT_S** | Recomputed by DIV_P2 | **No** | DIV_P2 -> PRESSURE_SOLVE |
+| PBAR_S | Computed from PBAR in DENSITY | No | DENSITY -> DIV_P1/P2 |
+
+### Scratch Arrays (WORK)
+
+MESH_TYPE contains shared scratch arrays reused across routines:
+
+| Scratch Pool | Dimensions | Used By |
+|-------------|------------|---------|
+| WORK1-9 | 3D (0:IBP1, 0:JBP1, 0:KBP1) | VELOCITY_FLUX (1-6), COMPUTE_VISCOSITY (1-6), DIV_P1 (1-7,9), DENSITY (4-5), RADIATION (1-9), PART_MASS_ENERGY (1-2,4-7) |
+| SWORK1-4 | 4D (+ N_SCALARS) | DIV_P1 (1-3), DENSITY (4), PART_MASS_ENERGY (1) |
+| TURB_WORK1-10 | 3D | COMPUTE_VISCOSITY only |
+| PRHS, BX\*/BY\*/BZ\* | Solver-specific | PRESSURE_SOLVE only |
+| IWORK1 | 3D integer | COMPUTE_VISCOSITY only |
+| WALL_WORK1-2 | 1D (N_WALL_CELLS) | RADIATION only |
+| FACE_WORK1-3 | 1D | RADIATION only |
+
+These arrays are not persistent -- they are overwritten at the start of each routine that uses them. They exist solely to avoid repeated allocation.
+
+### WORK Array Conflict Matrix for Pipeline Candidates
+
+Because WORK1-9 are shared per-mesh, two routines that use overlapping WORK arrays cannot run concurrently on the same mesh without corruption. This is a **hidden dependency** not visible in the logical data-flow graph:
+
+| Parallel Pair | WORK Conflicts | Safe? |
+|---------------|----------------|-------|
+| VELOCITY_FLUX \|\| WALL_BC | None (WALL_BC uses no WORK arrays) | **Yes** |
+| PARTICLE_MOMENTUM \|\| DIV_P1 | **Needs investigation** | **Unknown** |
+| VELOCITY_FLUX \|\| COMBUSTION | None (COMBUSTION uses no WORK arrays) | **Yes** |
+| VELOCITY_FLUX \|\| CONDENSATION | **Needs investigation** | **Unknown** |
+| VELOCITY_FLUX \|\| PART_MASS_ENERGY | WORK1-2, 4-7 conflict | No (without mitigation) |
+| VELOCITY_FLUX \|\| RADIATION | WORK1-9 all conflict | No (without mitigation) |
+| DIV_P1 \|\| RADIATION | WORK1-9 all conflict | No (without mitigation) |
+
+For our identified pipeline candidates:
+- **Predictor Level 1** (VELOCITY_FLUX \|\| WALL_BC): **Confirmed safe** -- no WORK conflicts.
+- **Predictor Level 2** (PARTICLE_MOMENTUM \|\| DIV_P1): PARTICLE_MOMENTUM_TRANSFER in part.f90 does not use WORK arrays directly, but **further investigation is needed** to confirm no indirect WORK usage through called subroutines.
+- **Corrector** (VELOCITY_FLUX \|\| COMBUSTION->COND->PME->MOVE): COMBUSTION and CONDENSATION don't use WORK arrays, so they are safe to overlap with VELOCITY_FLUX. PART_MASS_ENERGY uses WORK1-2,4-7, but VELOCITY_FLUX is expected to complete before PME begins (it is on the short branch). However, **if VELOCITY_FLUX is slow for a particular mesh, a timing-dependent race is possible** -- this needs a synchronization guarantee or mitigation.
+
+### Mitigation: Per-Branch Scratch Allocation
+
+The WORK array conflicts can be eliminated entirely by allocating **separate scratch pools per pipeline branch**. Since these arrays are:
+- Ephemeral (overwritten at the start of each routine)
+- Not output-visible (never appear in result files)
+- Not persistent (no state carries between routines)
+
+They can be duplicated without affecting simulation correctness.
+
+**Approach**: Allocate a second set of scratch arrays (WORK1B-9B, SWORK1B-4B, etc.) on each mesh. Each pipeline branch uses its own pool:
+
+```
+Branch A (VELOCITY_FLUX path):  uses WORK1-9 (original)
+Branch B (WALL_BC/DIV_P1 path): uses WORK1B-9B (new)
+```
+
+This eliminates all WORK conflicts and opens up additional pipelining candidates that were blocked by false sharing. The memory cost is modest -- 9 3D arrays per mesh (~72 bytes/cell for double precision, or ~4.5 MB for a 64^3 mesh).
+
+The same principle applies to any purely internal ephemeral array that creates a false dependency between branches. Candidates for duplication:
+
+| Array | Duplicable? | Reason |
+|-------|-------------|--------|
+| WORK1-9 | Yes | Pure scratch, no output, no persistence |
+| SWORK1-4 | Yes | Pure scratch for species computations |
+| TURB_WORK1-10 | Yes | Pure scratch for viscosity model |
+| PRHS | Yes | Pressure solver internal |
+| BXS/BXF/BYS/BYF/BZS/BZF | Yes | Pressure solver boundary conditions |
+| DDDT | Yes | Never output, only flows DIV_P2 -> PRESSURE_SOLVE |
+| D_PBAR_DT_S | Yes | Never output, internal pressure derivative |
+| DSUM/PSUM/USUM (local) | Yes | Per-mesh accumulators, zeroed each phase |
+
+**Not duplicable** (true shared state read by multiple branches):
+
+| Array | Why Not |
+|-------|---------|
+| U, V, W | Read by both VELOCITY_FLUX and WALL_BC |
+| RHO, RHOS | Read by both branches |
+| TMP | Read by both branches |
+| ZZ, ZZS | Read by both branches |
+| MU | Read by both VELOCITY_FLUX and DIV_P1 |
+| PBAR_S | Read by both WALL_BC and DIV_P1 |
+
+These shared reads are safe (R\|\|R) and don't need duplication.
+
+### Expanded Pipeline Candidates (With Scratch Duplication)
+
+With per-branch scratch pools, the following additional pipeline candidates become feasible:
+
+| Parallel Pair | Previously Blocked By | Status |
+|---------------|----------------------|--------|
+| DIV_P1 \|\| RADIATION | WORK1-9 conflict | **Feasible with scratch duplication** -- but logical data dependency needs verification (does DIV_P1 read QR from RADIATION?) |
+| VELOCITY_FLUX \|\| PART_MASS_ENERGY | WORK1-2,4-7 conflict | **Feasible with scratch duplication** -- but only useful if VELOCITY_FLUX hasn't already completed |
+| VELOCITY_FLUX \|\| RADIATION | WORK1-9 conflict | **Feasible with scratch duplication** -- but logical data flow must be verified |
+
+**Important**: Scratch duplication removes the *mechanical* conflict but does not override *logical* data dependencies. Each candidate above still requires verification that the routines don't share logical read-write dependencies on physics arrays (the Read/Write Summary table above). Scratch duplication only helps when the sole blocking dependency was the shared WORK arrays.
+
+### Items Requiring Further Investigation
+
+1. **PARTICLE_MOMENTUM WORK usage**: Verify that PARTICLE_MOMENTUM_TRANSFER and its callees in part.f90 do not use any WORK arrays through indirect calls. If confirmed clean, predictor Level 2 parallelism is fully safe.
+
+2. **CONDENSATION scratch usage**: Determine whether CONDENSATION (fire.f90) uses WORK arrays. If not, the full corrector Branch B chain (COMBUSTION->CONDENSATION->PME->MOVE) is clean for overlap with VELOCITY_FLUX without needing scratch duplication.
+
+3. **Corrector timing guarantee**: In the corrector pipeline, VELOCITY_FLUX (Branch A) is expected to finish before PART_MASS_ENERGY (Branch B) starts using WORK arrays. This assumption depends on VELOCITY_FLUX being faster than COMBUSTION+CONDENSATION combined. If this timing assumption is unreliable, scratch duplication is needed as a safety measure.
+
+4. **EDGE array thread safety**: EDGE is persistent and read by VELOCITY_FLUX. If any routine on the parallel branch writes to EDGE, this creates a hidden conflict. Needs verification that WALL_BC and DIV_P1 do not modify EDGE.
+
+5. **DEL_RHO_D_DEL_Z history dependency**: This array is zeroed in DIV_P1 but its previous value is saved by DENSITY (into SWORK4) at the start of the phase. Since the save happens before the pipeline fork, both branches can safely read the saved copy. Needs confirmation that no branch writes to DEL_RHO_D_DEL_Z before DIV_P1.
+
 ## Source Files Analyzed
 
 - `Source/main.f90` -- predictor/corrector phase sequencing
