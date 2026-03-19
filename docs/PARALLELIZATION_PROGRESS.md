@@ -308,12 +308,10 @@ All verified byte-identical on CC_IBM test cases.
 - two_spheres_cc: 1-mesh Two Spheres (tolerance 1e-4, minor numerical difference)
 - sphere_helium_1mesh_cc: 1-mesh Sphere Helium (byte-identical)
 
-## Intra-Mesh Block Decomposition (7 kernels converted)
+## Intra-Mesh Block Decomposition (8 kernels converted)
 
 K-block decomposition partitions each mesh along the K dimension into sub-blocks [K1:K2],
 enabling intra-mesh parallelism. Each block is processed by a separate thread.
-
-See [MESH_BLOCK_PROGRESS.md](MESH_BLOCK_PROGRESS.md) for detailed per-kernel status.
 
 ### Completed Block Decompositions
 
@@ -326,12 +324,11 @@ See [MESH_BLOCK_PROGRESS.md](MESH_BLOCK_PROGRESS.md) for detailed per-kernel sta
 | WALL_BC_PROCESS_CELLS_KERNEL | wallbc_block_subgraph.h | Wall cells filtered by KKG range | CC_IBM falls back to mesh-level |
 | PARTICLE_MOMENTUM_KERNEL | particle_momentum_block_subgraph.h | Cells K1:K2 (first block extends to K=0) | CC_IBM falls back to mesh-level |
 | VELOCITY_BC_PROCESS_EDGES_KERNEL | velocity_bc_edges_block_subgraph.h | Edges filtered by ED%K; DRAG_UVWMAX MAX-reduced | Used by PredFinal + CorrFinal |
+| DENSITY_BLOCK_KERNEL_COMPUTE | density_block_subgraph.h | Species density K1:K2, M_DOT_PPP, RHO sum | Conditional: no CC_IBM, no PERIODIC_TEST |
 
 ## Future Work
 
 ### 1. Phase 3: Easy Parallelization Targets — COMPLETE
-
-See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for details.
 
 - ✅ **Combustion** — ODE chemistry solver parallelized (Target 1)
 - ✅ **Particle Mass/Energy** — per-particle heat transfer parallelized (Target 2)
@@ -464,10 +461,4 @@ approach for the predictor-corrector scheme.
 
 ### Implementation Details
 - WALL_BC_PARALLELIZATION_PLAN.md - Complete WallBC implementation (reference)
-- PHASE3_EASY_PARALLELIZATION.md - Phase 3 easy parallelization targets
-- test_cases/WALLBC_TEST_REPORT.md - WallBC verification results
-
-### Progress Tracking
-- PARALLELIZATION_PROGRESS.md - This file (current status)
-- MESH_BLOCK_PROGRESS.md - Intra-mesh K-block decomposition (7 converted, Phase 4 roadmap)
-- PHASE3_EASY_PARALLELIZATION.md - Phase 3 targets (2 complete, 1 blocked)
+- CHANGE_TIMESTEP_REFACTORING.md - CFL retry loop refactoring
