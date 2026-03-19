@@ -12,7 +12,8 @@ USE TYPES, ONLY: WALL_TYPE,BOUNDARY_COORD_TYPE,BOUNDARY_PROP1_TYPE,EXTERNAL_WALL
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC MASS_FINITE_DIFFERENCES_NEW_KERNEL,DENSITY_KERNEL
+PUBLIC MASS_FINITE_DIFFERENCES_NEW_KERNEL,DENSITY_KERNEL, &
+       DENSITY_BLOCK_PREPROCESSING,DENSITY_BLOCK_KERNEL_COMPUTE,DENSITY_BLOCK_POSTPROCESSING
 
 CONTAINS
 
@@ -918,5 +919,596 @@ ENDDO
 END SUBROUTINE CLIP_PASSIVE_SCALARS
 
 END SUBROUTINE DENSITY_KERNEL
+
+
+!> \brief Sequential preprocessing for density block decomposition.
+!> Sets up work arrays (UU/VV/WW), handles wall boundary corrections,
+!> and calls SETTLING_VELOCITY. Must run sequentially per mesh before
+!> K-block parallel execution.
+!> \param M Mesh data structure
+!> \param T Current time
+!> \param DT Time step
+!> \param NM Mesh index
+
+RECURSIVE SUBROUTINE DENSITY_BLOCK_PREPROCESSING(M,T,DT,NM)
+
+USE SOOT_ROUTINES, ONLY: SETTLING_VELOCITY
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+REAL(EB), INTENT(IN) :: T,DT
+INTEGER :: IW
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW
+REAL(EB), POINTER, DIMENSION(:,:,:,:) :: DEL_RHO_D_DEL_Z__0
+TYPE(WALL_TYPE), POINTER :: WC
+TYPE(EXTERNAL_WALL_TYPE), POINTER :: EWC
+TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
+
+IF (SOLID_PHASE_ONLY) RETURN
+
+SELECT CASE (PERIODIC_TEST)
+   CASE DEFAULT
+      IF (ICYC<=1) RETURN
+   CASE (5,8)
+      RETURN
+   CASE (4,7,11,21,22)
+END SELECT
+
+UU=>M%WORK_U
+VV=>M%WORK_V
+WW=>M%WORK_W
+DEL_RHO_D_DEL_Z__0=>M%SWORK4
+
+IF (PREDICTOR) THEN
+
+   IF (FIRST_PASS) THEN
+      IF (ANY(SPECIES_MIXTURE%DEPOSITING) .AND. (GRAVITATIONAL_SETTLING .OR. THERMOPHORETIC_SETTLING)) CALL SETTLING_VELOCITY(NM)
+      DEL_RHO_D_DEL_Z__0 = M%DEL_RHO_D_DEL_Z
+   ENDIF
+
+   UU=M%U
+   VV=M%V
+   WW=M%W
+
+   DO IW=1,M%N_EXTERNAL_WALL_CELLS
+      WC=>M%WALL(IW)
+      IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE
+      BC=>M%BOUNDARY_COORD(WC%BC_INDEX)
+      SELECT CASE(BC%IOR)
+         CASE( 1); UU(BC%IIG-1,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE(-1); UU(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE( 2); VV(BC%IIG  ,BC%JJG-1,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE(-2); VV(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE( 3); WW(BC%IIG  ,BC%JJG  ,BC%KKG-1) = M%UVW_SAVE(IW)
+         CASE(-3); WW(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+      END SELECT
+   ENDDO
+
+ELSE ! CORRECTOR
+
+   IF (ANY(SPECIES_MIXTURE%DEPOSITING) .AND. (GRAVITATIONAL_SETTLING .OR. THERMOPHORETIC_SETTLING)) CALL SETTLING_VELOCITY(NM)
+
+   UU=M%US
+   VV=M%VS
+   WW=M%WS
+
+   DO IW=1,M%N_EXTERNAL_WALL_CELLS
+      WC => M%WALL(IW)
+      EWC => M%EXTERNAL_WALL(IW)
+      IF (EWC%BOUNDARY_TYPE_PREVIOUS/=INTERPOLATED_BOUNDARY) CYCLE
+      BC => M%BOUNDARY_COORD(WC%BC_INDEX)
+      SELECT CASE(BC%IOR)
+         CASE( 1); UU(BC%IIG-1,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE(-1); UU(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE( 2); VV(BC%IIG  ,BC%JJG-1,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE(-2); VV(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+         CASE( 3); WW(BC%IIG  ,BC%JJG  ,BC%KKG-1) = M%UVW_SAVE(IW)
+         CASE(-3); WW(BC%IIG  ,BC%JJG  ,BC%KKG  ) = M%UVW_SAVE(IW)
+      END SELECT
+   ENDDO
+
+ENDIF
+
+END SUBROUTINE DENSITY_BLOCK_PREPROCESSING
+
+
+!> \brief K-block parallel kernel for density computation.
+!> Computes species mass density and total density for cells in [K1,K2].
+!> Must be called after DENSITY_BLOCK_PREPROCESSING sets up work arrays.
+!> \param M Mesh data structure
+!> \param T Current time
+!> \param DT Time step
+!> \param NM Mesh index
+!> \param K1 Start of K-range (1-based inclusive)
+!> \param K2 End of K-range (1-based inclusive)
+
+RECURSIVE SUBROUTINE DENSITY_BLOCK_KERNEL_COMPUTE(M,T,DT,NM,K1,K2)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM,K1,K2
+REAL(EB), INTENT(IN) :: T,DT
+REAL(EB) :: RHS
+INTEGER :: I,J,K,N
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW
+REAL(EB), POINTER, DIMENSION(:,:,:,:) :: DEL_RHO_D_DEL_Z__0
+
+IF (SOLID_PHASE_ONLY) RETURN
+
+SELECT CASE (PERIODIC_TEST)
+   CASE DEFAULT
+      IF (ICYC<=1) RETURN
+   CASE (5,8)
+      RETURN
+   CASE (4,7,11,21,22)
+END SELECT
+
+UU=>M%WORK_U
+VV=>M%WORK_V
+WW=>M%WORK_W
+DEL_RHO_D_DEL_Z__0=>M%SWORK4
+
+PREDICTOR_STEP: IF (PREDICTOR) THEN
+
+   ! Species mass density (K1:K2)
+   DO N=1,N_TOTAL_SCALARS
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+               RHS = - DEL_RHO_D_DEL_Z__0(I,J,K,N) &
+                   + (M%FX(I,J,K,N)*UU(I,J,K)*M%R(I) - M%FX(I-1,J,K,N)*UU(I-1,J,K)*M%R(I-1))*M%RDX(I)*M%RRN(I) &
+                   + (M%FY(I,J,K,N)*VV(I,J,K)        - M%FY(I,J-1,K,N)*VV(I,J-1,K)           )*M%RDY(J)           &
+                   + (M%FZ(I,J,K,N)*WW(I,J,K)        - M%FZ(I,J,K-1,N)*WW(I,J,K-1)           )*M%RDZ(K)
+               M%ZZS(I,J,K,N) = M%RHO(I,J,K)*M%ZZ(I,J,K,N) - DT*RHS
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! Add gas production source term (K1:K2, interior only)
+   IF (ALLOCATED(M%M_DOT_PPP)) THEN
+      DO N=1,N_TRACKED_SPECIES
+         DO K=K1,K2
+            DO J=1,M%JBAR
+               DO I=1,M%IBAR
+                  M%ZZS(I,J,K,N) = M%ZZS(I,J,K,N) + DT*M%M_DOT_PPP(I,J,K,N)
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+   ! Get rho = sum(rho*Y_alpha) (K1:K2)
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%RHOS(I,J,K) = SUM(M%ZZS(I,J,K,1:N_TRACKED_SPECIES))
+         ENDDO
+      ENDDO
+   ENDDO
+
+ELSE PREDICTOR_STEP ! CORRECTOR
+
+   ! Species mass density (K1:K2)
+   DO N=1,N_TOTAL_SCALARS
+      DO K=K1,K2
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+               RHS = - M%DEL_RHO_D_DEL_Z(I,J,K,N) &
+                   + (M%FX(I,J,K,N)*UU(I,J,K)*M%R(I) - M%FX(I-1,J,K,N)*UU(I-1,J,K)*M%R(I-1))*M%RDX(I)*M%RRN(I) &
+                   + (M%FY(I,J,K,N)*VV(I,J,K)        - M%FY(I,J-1,K,N)*VV(I,J-1,K)           )*M%RDY(J)           &
+                   + (M%FZ(I,J,K,N)*WW(I,J,K)        - M%FZ(I,J,K-1,N)*WW(I,J,K-1)           )*M%RDZ(K)
+               M%ZZ(I,J,K,N) = .5_EB*( M%RHO(I,J,K)*M%ZZ(I,J,K,N) + M%RHOS(I,J,K)*M%ZZS(I,J,K,N) - DT*RHS )
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! Add gas production source term (K1:K2, interior only)
+   IF (ALLOCATED(M%M_DOT_PPP)) THEN
+      DO N=1,N_TRACKED_SPECIES
+         DO K=K1,K2
+            DO J=1,M%JBAR
+               DO I=1,M%IBAR
+                  M%ZZ(I,J,K,N) = M%ZZ(I,J,K,N) + 0.5_EB*DT*M%M_DOT_PPP(I,J,K,N)
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+   ! Get rho = sum(rho*Y_alpha) (K1:K2)
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%RHO(I,J,K) = SUM(M%ZZ(I,J,K,1:N_TRACKED_SPECIES))
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDIF PREDICTOR_STEP
+
+END SUBROUTINE DENSITY_BLOCK_KERNEL_COMPUTE
+
+
+!> \brief Sequential postprocessing for density block decomposition.
+!> Runs CHECK_MASS_DENSITY, extracts mass fractions, updates pressure/temperature.
+!> Must run sequentially per mesh after all K-blocks complete.
+!> \param M Mesh data structure
+!> \param T Current time
+!> \param DT Time step
+!> \param NM Mesh index
+
+RECURSIVE SUBROUTINE DENSITY_BLOCK_POSTPROCESSING(M,T,DT,NM)
+
+USE PHYSICAL_FUNCTIONS, ONLY : GET_SPECIFIC_GAS_CONSTANT
+USE MANUFACTURED_SOLUTIONS, ONLY: VD2D_MMS_Z_OF_RHO,VD2D_MMS_Z_SRC,UF_MMS,WF_MMS,VD2D_MMS_RHO_OF_Z,VD2D_MMS_Z_SRC
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+REAL(EB), INTENT(IN) :: T,DT
+REAL(EB), ALLOCATABLE, DIMENSION(:) :: ZZ_GET
+INTEGER :: I,J,K,N
+REAL(EB), POINTER, DIMENSION(:,:,:) :: UU,VV,WW
+
+IF (SOLID_PHASE_ONLY) RETURN
+
+SELECT CASE (PERIODIC_TEST)
+   CASE DEFAULT
+      IF (ICYC<=1) RETURN
+   CASE (5,8)
+      RETURN
+   CASE (4,7,11,21,22)
+END SELECT
+
+UU=>M%WORK_U
+VV=>M%WORK_V
+WW=>M%WORK_W
+
+IF (PREDICTOR) THEN
+
+   IF (STORE_SPECIES_FLUX) THEN
+      DO N=1,N_TOTAL_SCALARS
+         DO K=0,M%KBAR
+            DO J=0,M%JBAR
+               DO I=0,M%IBAR
+                  M%ADV_FX(I,J,K,N) = M%FX(I,J,K,N)*UU(I,J,K)
+                  M%ADV_FY(I,J,K,N) = M%FY(I,J,K,N)*VV(I,J,K)
+                  M%ADV_FZ(I,J,K,N) = M%FZ(I,J,K,N)*WW(I,J,K)
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+   CALL CHECK_MASS_DENSITY_POST
+
+   ALLOCATE(ZZ_GET(1:N_TOTAL_SCALARS))
+
+   ! Extract mass fraction from RHO * ZZ
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%ZZS(I,J,K,1:N_TOTAL_SCALARS) = M%ZZS(I,J,K,1:N_TOTAL_SCALARS)/M%RHOS(I,J,K)
+         ENDDO
+      ENDDO
+   ENDDO
+
+   CALL CLIP_PASSIVE_SCALARS_POST
+
+   ! Predict background pressure at next time step
+   DO I=1,N_ZONE
+      M%PBAR_S(:,I) = M%PBAR(:,I) + M%D_PBAR_DT(I)*DT
+   ENDDO
+
+   ! Compute molecular weight term RSUM=R0*SUM(Y_i/W_i)
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            ZZ_GET(1:N_TRACKED_SPECIES) = M%ZZS(I,J,K,1:N_TRACKED_SPECIES)
+            CALL GET_SPECIFIC_GAS_CONSTANT(ZZ_GET,M%RSUM(I,J,K))
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! Extract predicted temperature at next time step from Equation of State
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%TMP(I,J,K) = M%PBAR_S(K,M%PRESSURE_ZONE(I,J,K))/(M%RSUM(I,J,K)*M%RHOS(I,J,K))
+         ENDDO
+      ENDDO
+   ENDDO
+
+   DEALLOCATE(ZZ_GET)
+
+ELSE ! CORRECTOR
+
+   ! Clear M_DOT_PPP and D_SOURCE after corrector addition
+   IF (ALLOCATED(M%M_DOT_PPP)) THEN
+      M%M_DOT_PPP = 0._EB
+      M%D_SOURCE  = 0._EB
+   ENDIF
+
+   IF (STORE_SPECIES_FLUX) THEN
+      DO N=1,N_TOTAL_SCALARS
+         DO K=0,M%KBAR
+            DO J=0,M%JBAR
+               DO I=0,M%IBAR
+                  M%ADV_FX(I,J,K,N) = 0.5_EB*( M%ADV_FX(I,J,K,N) + M%FX(I,J,K,N)*UU(I,J,K) )
+                  M%ADV_FY(I,J,K,N) = 0.5_EB*( M%ADV_FY(I,J,K,N) + M%FY(I,J,K,N)*VV(I,J,K) )
+                  M%ADV_FZ(I,J,K,N) = 0.5_EB*( M%ADV_FZ(I,J,K,N) + M%FZ(I,J,K,N)*WW(I,J,K) )
+               ENDDO
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
+
+   CALL CHECK_MASS_DENSITY_POST
+
+   ALLOCATE(ZZ_GET(1:N_TOTAL_SCALARS))
+
+   ! Extract Y_n from rho*Y_n
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%ZZ(I,J,K,1:N_TOTAL_SCALARS) = M%ZZ(I,J,K,1:N_TOTAL_SCALARS)/M%RHO(I,J,K)
+         ENDDO
+      ENDDO
+   ENDDO
+
+   CALL CLIP_PASSIVE_SCALARS_POST
+
+   ! Correct background pressure
+   DO I=1,N_ZONE
+      M%PBAR(:,I) = 0.5_EB*(M%PBAR(:,I) + M%PBAR_S(:,I) + M%D_PBAR_DT_S(I)*DT)
+   ENDDO
+
+   ! Compute molecular weight term RSUM=R0*SUM(Y_i/W_i)
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            ZZ_GET(1:N_TRACKED_SPECIES) = M%ZZ(I,J,K,1:N_TRACKED_SPECIES)
+            CALL GET_SPECIFIC_GAS_CONSTANT(ZZ_GET,M%RSUM(I,J,K))
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! Extract predicted temperature at next time step from Equation of State
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            M%TMP(I,J,K) = M%PBAR(K,M%PRESSURE_ZONE(I,J,K))/(M%RSUM(I,J,K)*M%RHO(I,J,K))
+         ENDDO
+      ENDDO
+   ENDDO
+
+   DEALLOCATE(ZZ_GET)
+
+ENDIF
+
+CONTAINS
+
+!> \brief Redistribute mass from cells below or above the density cut-off limits
+!> \details Do not apply OpenMP to this routine. Cross-K scatter prevents K-blocking.
+
+SUBROUTINE CHECK_MASS_DENSITY_POST
+
+REAL(EB) :: MASS_N(-3:3),CONST,MASS_C,RHO_ZZ_CUT,RHO_CUT,VC(-3:3),SIGN_FACTOR,SUM_MASS_N,VC1(-3:3),&
+            RHO_ZZ_MIN,RHO_ZZ_MAX,SUM_RHO_ZZ,RHO_ZZ_TEST
+INTEGER :: IC
+LOGICAL :: CLIP_RHO_ZZ(N_TRACKED_SPECIES)
+REAL(EB), POINTER, DIMENSION(:,:,:) :: DELTA_RHO,DELTA_RHO_ZZ,RHOP
+REAL(EB), POINTER, DIMENSION(:,:,:,:) :: RHO_ZZ
+
+DELTA_RHO => M%WORK4
+DELTA_RHO =  0._EB
+M%CLIP_RHOMIN = .FALSE.
+M%CLIP_RHOMAX = .FALSE.
+
+IF (PREDICTOR) THEN
+   RHO_ZZ => M%ZZS
+   RHOP   => M%RHOS
+ELSE
+   RHO_ZZ => M%ZZ
+   RHOP   => M%RHO
+ENDIF
+
+DO K=1,M%KBAR
+   DO J=1,M%JBAR
+      VC1( 0)  = M%DY(J)  *M%DZ(K)
+      VC1(-1)  = VC1( 0)
+      VC1( 1)  = VC1( 0)
+      VC1(-2)  = M%DY(J-1)*M%DZ(K)
+      VC1( 2)  = M%DY(J+1)*M%DZ(K)
+      VC1(-3)  = M%DY(J)  *M%DZ(K-1)
+      VC1( 3)  = M%DY(J)  *M%DZ(K+1)
+      DO I=1,M%IBAR
+         IF (RHOP(I,J,K)>=RHOMIN .AND. RHOP(I,J,K)<=RHOMAX) CYCLE
+         IC = M%CELL_INDEX(I,J,K)
+         IF (M%CELL(IC)%SOLID) CYCLE
+         IF (RHOP(I,J,K)<RHOMIN) THEN
+            RHO_CUT = RHOMIN
+            SIGN_FACTOR = 1._EB
+            M%CLIP_RHOMIN = .TRUE.
+         ELSE
+            RHO_CUT = RHOMAX
+            SIGN_FACTOR = -1._EB
+            M%CLIP_RHOMAX = .TRUE.
+         ENDIF
+         MASS_N = 0._EB
+         VC( 0)  = M%DX(I)  * VC1( 0)
+         VC(-1)  = M%DX(I-1)* VC1(-1)
+         VC( 1)  = M%DX(I+1)* VC1( 1)
+         VC(-2)  = M%DX(I)  * VC1(-2)
+         VC( 2)  = M%DX(I)  * VC1( 2)
+         VC(-3)  = M%DX(I)  * VC1(-3)
+         VC( 3)  = M%DX(I)  * VC1( 3)
+
+         MASS_C = ABS(RHO_CUT-RHOP(I,J,K))*VC(0)
+         IF (M%CELL(IC)%WALL_INDEX(-1)==0) MASS_N(-1) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I-1,J,K)))-RHO_CUT)*VC(-1)
+         IF (M%CELL(IC)%WALL_INDEX( 1)==0) MASS_N( 1) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I+1,J,K)))-RHO_CUT)*VC( 1)
+         IF (M%CELL(IC)%WALL_INDEX(-2)==0) MASS_N(-2) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I,J-1,K)))-RHO_CUT)*VC(-2)
+         IF (M%CELL(IC)%WALL_INDEX( 2)==0) MASS_N( 2) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I,J+1,K)))-RHO_CUT)*VC( 2)
+         IF (M%CELL(IC)%WALL_INDEX(-3)==0) MASS_N(-3) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I,J,K-1)))-RHO_CUT)*VC(-3)
+         IF (M%CELL(IC)%WALL_INDEX( 3)==0) MASS_N( 3) = ABS(MIN(RHOMAX,MAX(RHOMIN,RHOP(I,J,K+1)))-RHO_CUT)*VC( 3)
+         SUM_MASS_N = SUM(MASS_N)
+         IF (SUM_MASS_N<=TWO_EPSILON_EB) CYCLE
+         CONST = SIGN_FACTOR*MIN(1._EB,MASS_C/SUM_MASS_N)
+         DELTA_RHO(I,J,K)   = DELTA_RHO(I,J,K)   + CONST*SUM_MASS_N/VC( 0)
+         DELTA_RHO(I-1,J,K) = DELTA_RHO(I-1,J,K) - CONST*MASS_N(-1)/VC(-1)
+         DELTA_RHO(I+1,J,K) = DELTA_RHO(I+1,J,K) - CONST*MASS_N( 1)/VC( 1)
+         DELTA_RHO(I,J-1,K) = DELTA_RHO(I,J-1,K) - CONST*MASS_N(-2)/VC(-2)
+         DELTA_RHO(I,J+1,K) = DELTA_RHO(I,J+1,K) - CONST*MASS_N( 2)/VC( 2)
+         DELTA_RHO(I,J,K-1) = DELTA_RHO(I,J,K-1) - CONST*MASS_N(-3)/VC(-3)
+         DELTA_RHO(I,J,K+1) = DELTA_RHO(I,J,K+1) - CONST*MASS_N( 3)/VC( 3)
+      ENDDO
+   ENDDO
+ENDDO
+
+IF (M%CLIP_RHOMIN .OR. M%CLIP_RHOMAX) &
+   RHOP(1:M%IBAR,1:M%JBAR,1:M%KBAR) = MIN(RHOMAX,MAX(RHOMIN,RHOP(1:M%IBAR,1:M%JBAR,1:M%KBAR) &
+                                        +DELTA_RHO(1:M%IBAR,1:M%JBAR,1:M%KBAR)))
+
+IF (N_TRACKED_SPECIES==1) THEN
+   IF (M%CLIP_RHOMIN .OR. M%CLIP_RHOMAX) RHO_ZZ(1:M%IBAR,1:M%JBAR,1:M%KBAR,1) = RHOP(1:M%IBAR,1:M%JBAR,1:M%KBAR)
+   RETURN
+ENDIF
+
+RHO_ZZ_MIN = 0._EB
+CLIP_RHO_ZZ = .FALSE.
+
+SPECIES_LOOP: DO N=1,N_TRACKED_SPECIES
+
+   DELTA_RHO_ZZ => M%WORK5
+   DELTA_RHO_ZZ = 0._EB
+
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         VC1( 0)  = M%DY(J)  *M%DZ(K)
+         VC1(-1)  = VC1( 0)
+         VC1( 1)  = VC1( 0)
+         VC1(-2)  = M%DY(J-1)*M%DZ(K)
+         VC1( 2)  = M%DY(J+1)*M%DZ(K)
+         VC1(-3)  = M%DY(J)  *M%DZ(K-1)
+         VC1( 3)  = M%DY(J)  *M%DZ(K+1)
+         DO I=1,M%IBAR
+
+            IC = M%CELL_INDEX(I,J,K)
+            IF (M%CELL(IC)%SOLID) CYCLE
+
+            RHO_ZZ_MAX = RHOP(I,J,K)
+            IF (RHO_ZZ(I,J,K,N)>=RHO_ZZ_MIN .AND. RHO_ZZ(I,J,K,N)<=RHO_ZZ_MAX) CYCLE
+            CLIP_RHO_ZZ(N) = .TRUE.
+            IF (RHO_ZZ(I,J,K,N)<RHO_ZZ_MIN) THEN
+               RHO_ZZ_CUT = RHO_ZZ_MIN
+               SIGN_FACTOR = 1._EB
+            ELSE
+               RHO_ZZ_CUT = RHO_ZZ_MAX
+               SIGN_FACTOR = -1._EB
+            ENDIF
+            MASS_N = 0._EB
+            VC( 0)  = M%DX(I)  * VC1( 0)
+            VC(-1)  = M%DX(I-1)* VC1(-1)
+            VC( 1)  = M%DX(I+1)* VC1( 1)
+            VC(-2)  = M%DX(I)  * VC1(-2)
+            VC( 2)  = M%DX(I)  * VC1( 2)
+            VC(-3)  = M%DX(I)  * VC1(-3)
+            VC( 3)  = M%DX(I)  * VC1( 3)
+
+            MASS_C = ABS(RHO_ZZ_CUT-RHO_ZZ(I,J,K,N))*VC(0)
+            IF (M%CELL(IC)%WALL_INDEX(-1)==0) &
+               MASS_N(-1) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I-1,J,K,N)))-RHO_ZZ_CUT)*VC(-1)
+            IF (M%CELL(IC)%WALL_INDEX( 1)==0) &
+               MASS_N( 1) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I+1,J,K,N)))-RHO_ZZ_CUT)*VC( 1)
+            IF (M%CELL(IC)%WALL_INDEX(-2)==0) &
+               MASS_N(-2) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I,J-1,K,N)))-RHO_ZZ_CUT)*VC(-2)
+            IF (M%CELL(IC)%WALL_INDEX( 2)==0) &
+               MASS_N( 2) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I,J+1,K,N)))-RHO_ZZ_CUT)*VC( 2)
+            IF (M%CELL(IC)%WALL_INDEX(-3)==0) &
+               MASS_N(-3) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I,J,K-1,N)))-RHO_ZZ_CUT)*VC(-3)
+            IF (M%CELL(IC)%WALL_INDEX( 3)==0) &
+               MASS_N( 3) = ABS(MIN(RHO_ZZ_MAX,MAX(RHO_ZZ_MIN,RHO_ZZ(I,J,K+1,N)))-RHO_ZZ_CUT)*VC( 3)
+            SUM_MASS_N = SUM(MASS_N)
+            IF (SUM_MASS_N<=TWO_EPSILON_EB) CYCLE
+            CONST = SIGN_FACTOR*MIN(1._EB,MASS_C/SUM_MASS_N)
+            DELTA_RHO_ZZ(I,J,K)   = DELTA_RHO_ZZ(I,J,K)   + CONST*SUM_MASS_N/VC( 0)
+            DELTA_RHO_ZZ(I-1,J,K) = DELTA_RHO_ZZ(I-1,J,K) - CONST*MASS_N(-1)/VC(-1)
+            DELTA_RHO_ZZ(I+1,J,K) = DELTA_RHO_ZZ(I+1,J,K) - CONST*MASS_N( 1)/VC( 1)
+            DELTA_RHO_ZZ(I,J-1,K) = DELTA_RHO_ZZ(I,J-1,K) - CONST*MASS_N(-2)/VC(-2)
+            DELTA_RHO_ZZ(I,J+1,K) = DELTA_RHO_ZZ(I,J+1,K) - CONST*MASS_N( 2)/VC( 2)
+            DELTA_RHO_ZZ(I,J,K-1) = DELTA_RHO_ZZ(I,J,K-1) - CONST*MASS_N(-3)/VC(-3)
+            DELTA_RHO_ZZ(I,J,K+1) = DELTA_RHO_ZZ(I,J,K+1) - CONST*MASS_N( 3)/VC( 3)
+         ENDDO
+      ENDDO
+   ENDDO
+
+   IF (.NOT.CLIP_RHO_ZZ(N)) CYCLE
+
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            RHO_ZZ(I,J,K,N) = MIN(RHOP(I,J,K),MAX(RHO_ZZ_MIN,RHO_ZZ(I,J,K,N)+DELTA_RHO_ZZ(I,J,K)))
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDDO SPECIES_LOOP
+
+IF (.NOT.M%CLIP_RHOMIN .AND. .NOT.M%CLIP_RHOMAX .AND. .NOT. ANY(CLIP_RHO_ZZ)) RETURN
+
+DO K=1,M%KBAR
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+         SUM_RHO_ZZ = SUM(RHO_ZZ(I,J,K,1:N_TRACKED_SPECIES))
+         N = MAXLOC(RHO_ZZ(I,J,K,1:N_TRACKED_SPECIES),1)
+         RHO_ZZ_TEST = RHO_ZZ(I,J,K,N) + RHOP(I,J,K) - SUM_RHO_ZZ
+         IF (RHO_ZZ_TEST<0._EB .OR. RHO_ZZ_TEST>RHOP(I,J,K)) THEN
+            RHO_ZZ(I,J,K,1:N_TRACKED_SPECIES) = RHOP(I,J,K) * RHO_ZZ(I,J,K,1:N_TRACKED_SPECIES)/SUM_RHO_ZZ
+         ELSE
+            RHO_ZZ(I,J,K,N) = RHO_ZZ_TEST
+         ENDIF
+      ENDDO
+   ENDDO
+ENDDO
+
+END SUBROUTINE CHECK_MASS_DENSITY_POST
+
+
+SUBROUTINE CLIP_PASSIVE_SCALARS_POST
+
+REAL(EB), POINTER, DIMENSION(:,:,:,:) :: ZZP
+
+IF (N_PASSIVE_SCALARS==0) RETURN
+
+IF (PREDICTOR) THEN
+   ZZP=>M%ZZS
+ELSE
+   ZZP=>M%ZZ
+ENDIF
+
+DO K=1,M%KBAR
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+         ZZP(I,J,K,ZETA_INDEX) = MAX(0._EB,MIN(1._EB,ZZP(I,J,K,ZETA_INDEX)))
+      ENDDO
+   ENDDO
+ENDDO
+
+END SUBROUTINE CLIP_PASSIVE_SCALARS_POST
+
+END SUBROUTINE DENSITY_BLOCK_POSTPROCESSING
+
 
 END MODULE MASS_KERNELS

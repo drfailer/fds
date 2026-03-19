@@ -26,6 +26,7 @@
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
 #include "pressure_iteration_subgraph.h"
+#include "density_block_subgraph.h"
 
 /// Build the Corrector sub-graph.
 ///
@@ -62,6 +63,9 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // Viscosity block decomposition: if non-DEARDORFF/DYNSMAG/CC_IBM, use K-block parallel
     bool canBlockVisc = fds_compute_viscosity_can_block_decompose() != 0;
+
+    // Density block decomposition: if non-CC_IBM and non-MMS, use K-block parallel
+    bool canBlockDensity = fds_density_can_block_decompose() != 0 && numBlocks > 1;
 
     // --- Sub-graphs with orchestrators (sequential pre-processing required) ---
 
@@ -135,19 +139,38 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Wire the sub-graph ---
 
-    // CorrStep1: viscosity -> mass_fd + density -> MESH_EXCHANGE(4)
+    // CorrStep1: viscosity -> mass_fd -> density -> MESH_EXCHANGE(4)
     if (canBlockVisc) {
-        // Block-decomposed viscosity -> separate mass_fd + density task
+        // Block-decomposed viscosity -> separate mass_fd task
         auto corrViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
             nmeshes, blockThreads, numBlocks);
-        auto corrMassFDDensityTask = std::make_shared<MassFDDensityKernelTask>(kernelThreads);
+        auto corrMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
         subgraph->inputs(corrViscBlockSubgraph);
-        subgraph->edges(corrViscBlockSubgraph, corrMassFDDensityTask);
-        subgraph->edges(corrMassFDDensityTask, collector4SM);
+        subgraph->edges(corrViscBlockSubgraph, corrMassFDKernelTask);
+        if (canBlockDensity) {
+            auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
+                nmeshes, blockThreads, numBlocks);
+            subgraph->edges(corrMassFDKernelTask, corrDensityBlockSubgraph);
+            subgraph->edges(corrDensityBlockSubgraph, collector4SM);
+        } else {
+            auto corrMassFDDensityFallback = std::make_shared<DensityPredKernelTask>(kernelThreads);
+            subgraph->edges(corrMassFDKernelTask, corrMassFDDensityFallback);
+            subgraph->edges(corrMassFDDensityFallback, collector4SM);
+        }
     } else {
-        // Mesh-level fallback: combined viscosity + mass_fd + density
-        subgraph->inputs(corrStep1KernelTask);
-        subgraph->edges(corrStep1KernelTask, collector4SM);
+        if (canBlockDensity) {
+            // Mesh-level viscosity + mass_fd, block-decomposed density
+            auto corrViscMassFDTask = std::make_shared<CorrViscMassFDKernelTask>(kernelThreads);
+            auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
+                nmeshes, blockThreads, numBlocks);
+            subgraph->inputs(corrViscMassFDTask);
+            subgraph->edges(corrViscMassFDTask, corrDensityBlockSubgraph);
+            subgraph->edges(corrDensityBlockSubgraph, collector4SM);
+        } else {
+            // Mesh-level fallback: combined viscosity + mass_fd + density
+            subgraph->inputs(corrStep1KernelTask);
+            subgraph->edges(corrStep1KernelTask, collector4SM);
+        }
     }
     subgraph->edges(collector4SM, meshExchange4);
 

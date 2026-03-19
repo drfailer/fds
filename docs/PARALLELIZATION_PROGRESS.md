@@ -26,7 +26,7 @@ Step-by-step procedures for parallelizing FDS routines:
    - Pattern B: Sequential pre/post + parallel kernel
 ```
 
-## Completed Sub-Graphs (19 sub-graphs)
+## Completed Sub-Graphs (20 sub-graphs)
 
 All verified byte-identical on 1-mesh through 5-mesh test configurations.
 
@@ -145,6 +145,12 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Files: part.f90, task/particle_mass_energy_kernel_task.h, task/barrier_tasks.h
     - Replaced: CorrParticleOrchestrator → ParticleMassEnergyKernelTask (parallel) + RemoveMoveParticlesTask (barrier) + CorrParticleKernelTask (parallel)
 
+20. **Density Block** (K-block decomposition for DENSITY_KERNEL, Phase 4 Target 3)
+    - 3-phase decomposition: Orchestrator (settling vel, work arrays, wall corr) → Block kernel (species density, M_DOT_PPP, RHO sum) → Collector (CHECK_MASS_DENSITY, mass fraction, PBAR, RSUM, TMP)
+    - Exclusions: CC_IBM, PERIODIC_TEST≠0 (fall back to mesh-level)
+    - Files: mass_kernels.f90, graph/density_block_subgraph.h, fds_c_interface.f90
+    - Wired in both predictor (DensityPredKernelTask) and corrector (CorrStep1/MassFDDensity paths)
+
 ## Kernel Extraction Summary
 
 ### Directly Used in Sub-Graphs
@@ -161,6 +167,7 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | VELOCITY_FLUX_KERNEL | velo_kernels.f90 | DivSetup (pred+corr) |
 | MASS_FINITE_DIFFERENCES_NEW_KERNEL | mass_kernels.f90 | CorrStep1, PredStep1 |
 | DENSITY_KERNEL | mass_kernels.f90 | CorrStep1, DensityPred |
+| DENSITY_BLOCK_KERNEL_COMPUTE | mass_kernels.f90 | DensityBlock (pred+corr) |
 | CONDENSATION_EVAPORATION_KERNEL | fire_kernels.f90 | CorrCondens |
 | PARTICLE_MOMENTUM_TRANSFER_KERNEL | part_kernels.f90 | PredWallDiv, CorrParticle |
 | WALL_BC_PROCESS_CELLS_KERNEL | wall.f90 | WallBC |
@@ -334,18 +341,22 @@ See [PHASE3_EASY_PARALLELIZATION.md](PHASE3_EASY_PARALLELIZATION.md) for details
 
 Ranked by estimated impact (combined runtime × decomposition feasibility):
 
-#### Target 1: DIVERGENCE_PART_1_KERNEL (HIGH priority)
+#### Target 1: DIVERGENCE_PART_1_KERNEL — NOT VIABLE for K-block decomposition
 
 **Combined runtime**: 824ms per timestep (pred 286 + corr 294 + retry 244)
-**Decomposable fraction**: ~77%
-**Feasibility**: HIGH
+**Feasibility**: NOT VIABLE (detailed analysis below)
 
-The kernel (divg_kernels.f90) has three sections:
-1. **Wall preprocessing** (~15%): `WALL_LOOP_1` reads wall properties, writes to gas cells at wall (II,JJ,KK) coordinates. Sequential — wall cells write to arbitrary (I,J,K) locations.
-2. **Cell+species loops** (~77%): `SPEC_LOOP` with I,J,K cell loops computing FX, RHO_D_DZDX/Y/Z, diffusive fluxes. Fully K-decomposable. Per-mesh local accumulators (D_SUM_LOC, P_SUM_LOC, U_SUM_LOC) need per-block locals + SUM reduction.
-3. **Wall postprocessing** (~8%): `WALL_LOOP_2` and `WALL_LOOP_3` correct species/enthalpy fluxes at wall cells. Sequential — same arbitrary (I,J,K) issue.
+Deep analysis reveals the kernel cannot be practically K-block decomposed:
 
-**Approach**: 3-stage pattern: Wall preprocessing (orchestrator) → K-block cell loops (parallel) → Wall postprocessing (collector). Accumulator reduction (SUM) in collector.
+1. **Interleaved wall+cell loops per species**: Wall loops (correcting face arrays) are sandwiched between cell loops within per-species iterations in DIFFUSIVE_FLUX_LOOP and SPECIES_LOOP. Cannot cleanly separate into preprocessing/kernel/postprocessing.
+
+2. **Face-array data races**: Wall corrections write to face arrays (RHO_D_DZDX/Y/Z, KDTDX/Y/Z, FX_H_S, FZ_ZZ) at positions determined by IOR (±1 cell from KKG). For IOR=±3, the corrected face is shared between adjacent cells at K-block boundaries. Off-wall corrections in ENTHALPY_ADVECTION_NEW and SPECIES_ADVECTION_PART_1_NEW write to face positions that neighboring K-blocks read concurrently.
+
+3. **Thin obstruction races**: `IF (WC%THIN .AND. IOR<0) CYCLE` means only one side processes a thin wall face. If that wall is at a K-block boundary, the processing block and the adjacent reading block race on the face value. Overlapping halos don't help because wall loops have accumulation operations (`DP(KKG) -= ...`) that would double-count.
+
+4. **Low parallelizable fraction**: Even with an idealized split (all wall+face operations sequential, only divergence assembly parallel), only ~25% of the kernel is K-decomposable. With 4 blocks: 75% + 25%/4 = 81% → 1.23× speedup. Not worth the complexity.
+
+5. **Shared work arrays**: H_RHO_D_DZDX (M%WORK5/6/7) is a 3D work array reused per species — cannot parallelize across species or restructure the per-species iteration order.
 
 **Appears in**: PredWallDivKernelTask, CorrDivPart1KernelTask, RetryMomentumDivKernelTask (3 graph nodes).
 
@@ -364,15 +375,25 @@ The kernel (divg_kernels.f90) has:
 
 **Appears in**: DivergencePart2KernelTask (2 graph nodes: pred + corr).
 
-#### Target 3: DENSITY_KERNEL (MODERATE priority)
+#### Target 3: DENSITY_KERNEL — ✅ COMPLETE
 
 **Combined runtime**: ~150ms per timestep
-**Decomposable fraction**: ~70%
-**Feasibility**: MODERATE
+**Decomposable fraction**: ~60% (species density loop)
+**Status**: COMPLETE — K-block decomposition implemented
 
-Main blocker: CHECK_MASS_DENSITY at end of kernel requires K±1 halo access (compares cell with neighbors). Zone PBAR_S updates are mesh-global. Species advection cell loops are fully K-decomposable.
+**Architecture**: 3-phase decomposition (orchestrator → block kernel → collector):
 
-**Approach**: Would need K±1 halo overlap between blocks OR run CHECK_MASS_DENSITY as mesh-level post-step.
+1. **Orchestrator** (sequential per mesh): SETTLING_VELOCITY, DEL_RHO_D_DEL_Z copy (predictor FIRST_PASS), UU/VV/WW work array setup, WALL_LOOP (INTERPOLATED_BOUNDARY corrections), K-decompose.
+
+2. **Block kernel** (parallel K-blocks): Species density cell loop (N_TOTAL_SCALARS × K1:K2), M_DOT_PPP gas production addition (K1:K2), RHOS/RHO = SUM (K1:K2). This is the dominant computation.
+
+3. **Collector** (sequential per mesh): STORE_SPECIES_FLUX, CHECK_MASS_DENSITY (cross-K scatter prevents K-blocking), ZZS/ZZ ÷ RHOS/RHO, CLIP_PASSIVE_SCALARS, PBAR update, RSUM computation, TMP from equation of state. Corrector: M_DOT_PPP/D_SOURCE zeroing.
+
+**Exclusions**: CC_IBM (SET_EXIMADVFLX_3D), PERIODIC_TEST≠0 (MMS, rotated cube). Falls back to mesh-level DensityPredKernelTask / CorrStep1KernelTask.
+
+**Files**: mass_kernels.f90 (DENSITY_BLOCK_PREPROCESSING, DENSITY_BLOCK_KERNEL_COMPUTE, DENSITY_BLOCK_POSTPROCESSING), graph/density_block_subgraph.h, fds_c_interface.f90 (4 wrappers).
+
+**Verification**: 12/12 custom tests pass, 46/58 verification pass (zero regressions).
 
 #### Not Viable for Block Decomposition
 
@@ -421,17 +442,17 @@ approach for the predictor-corrector scheme.
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 19 (including parallel pressure iteration with cycle)
-- **Block sub-graphs**: 7 (intra-mesh K-block decomposition for additional parallelism)
+- **Sub-graphs created**: 20 (including parallel pressure iteration with cycle)
+- **Block sub-graphs**: 8 (intra-mesh K-block decomposition for additional parallelism)
 - **Graph nodes replaced**: 22 (some tasks appear in both predictor/corrector)
 - **Kernels extracted**: 21 new kernels + utilizing ~30 existing kernels
-- **Block kernels**: 7 (VELOCITY_PREDICTOR, VELOCITY_CORRECTOR, VELOCITY_FLUX, COMPUTE_VISCOSITY, WALL_BC, PARTICLE_MOMENTUM, VELOCITY_BC_EDGES)
+- **Block kernels**: 8 (VELOCITY_PREDICTOR, VELOCITY_CORRECTOR, VELOCITY_FLUX, COMPUTE_VISCOSITY, WALL_BC, PARTICLE_MOMENTUM, VELOCITY_BC_EDGES, DENSITY)
 - **Thread-safe conversions**: 2900+ lines converted (including ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
-- **Test coverage**: 12 custom cases + 99 verification cases (73 pass at tol=1e-6)
+- **Test coverage**: 12 custom cases + 58 verification cases (46 pass at tol=1e-6)
 - **Overall speedup**: 5.35x on verification suite
 - **Sequential fraction**: reduced from 39% to ~23%
 - **Parallel fraction**: increased from 27% to ~63%
-- **Phase 4 targets identified**: 2 high priority (DIVERGENCE_PART_1: 824ms, DIVERGENCE_PART_2: 140ms), 1 moderate (DENSITY_KERNEL)
+- **Phase 4 targets completed**: DIVERGENCE_PART_2 (block), DENSITY (block). DIVERGENCE_PART_1 not viable.
 
 ## Documentation Index
 
