@@ -42,6 +42,15 @@ K-block decomposition for intra-mesh parallelism.
 - Phase 4 complete: DivergencePart2, Density block-decomposed; DivPart1 not viable
 - Remaining sequential tasks and future work
 
+## Pipelining Research
+
+### [pipelining/README.md](pipelining/README.md)
+Data-flow analysis for intra-timestep pipelining parallelism.
+- Complete read/write dependency map for all predictor/corrector routines
+- Two identified opportunities: predictor two-level pipeline, corrector major pipeline
+- Dependency proof tables showing zero data conflicts
+- Hedgehog implementation strategy (type-based branch routing)
+
 ## Reference Implementations
 
 ### [WALL_BC_PARALLELIZATION_PLAN.md](WALL_BC_PARALLELIZATION_PLAN.md)
@@ -69,6 +78,11 @@ docs/
 ├── WALL_BC_PARALLELIZATION_PLAN.md     # Reference: Pattern B example
 ├── CHANGE_TIMESTEP_REFACTORING.md      # Reference: cycle/retry pattern
 ├── BLOG_AI_ASSISTED_REWRITE.md         # Process retrospective
+│
+├── pipelining/                         # Pipelining parallelism research
+│   ├── README.md                       # Analysis and implementation strategy
+│   ├── fds_dataflow.dot / .svg         # Full data-flow dependency graph
+│   └── fds_pipeline_opportunities.dot / .svg  # Identified opportunities
 │
 └── architecture/                       # Codebase analysis and diagrams
 ```
