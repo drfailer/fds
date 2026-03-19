@@ -298,17 +298,258 @@ With per-branch scratch pools, the following additional pipeline candidates beco
 
 **Important**: Scratch duplication removes the *mechanical* conflict but does not override *logical* data dependencies. Each candidate above still requires verification that the routines don't share logical read-write dependencies on physics arrays (the Read/Write Summary table above). Scratch duplication only helps when the sole blocking dependency was the shared WORK arrays.
 
-### Items Requiring Further Investigation
+### Investigation Results
 
-1. **PARTICLE_MOMENTUM WORK usage**: Verify that PARTICLE_MOMENTUM_TRANSFER and its callees in part.f90 do not use any WORK arrays through indirect calls. If confirmed clean, predictor Level 2 parallelism is fully safe.
+Items 1-2 from the previous section have been resolved by the intra-routine analysis below:
 
-2. **CONDENSATION scratch usage**: Determine whether CONDENSATION (fire.f90) uses WORK arrays. If not, the full corrector Branch B chain (COMBUSTION->CONDENSATION->PME->MOVE) is clean for overlap with VELOCITY_FLUX without needing scratch duplication.
+1. **PARTICLE_MOMENTUM WORK usage**: **Resolved -- CONFIRMED SAFE.** PARTICLE_MOMENTUM_TRANSFER_KERNEL (part_kernels.f90) uses NO WORK arrays. It only accesses FVX/FVY/FVZ, FVX_D/FVY_D/FVZ_D, and velocity arrays. Predictor Level 2 parallelism (PART_MOM || DIV_P1) is safe from scratch conflicts.
 
-3. **Corrector timing guarantee**: In the corrector pipeline, VELOCITY_FLUX (Branch A) is expected to finish before PART_MASS_ENERGY (Branch B) starts using WORK arrays. This assumption depends on VELOCITY_FLUX being faster than COMBUSTION+CONDENSATION combined. If this timing assumption is unreliable, scratch duplication is needed as a safety measure.
+2. **CONDENSATION scratch usage**: **Resolved -- USES WORK1-2 and SWORK1.** CONDENSATION_EVAPORATION_KERNEL uses WORK1 (RHO_INTERIM), WORK2 (TMP_INTERIM), and SWORK1 (ZZ_INTERIM) as snapshots. However, the per-cell computation is independent and these are read-only snapshots taken at the start. If VELOCITY_FLUX completes before CONDENSATION begins (expected since COMBUSTION runs first on Branch B), there is no conflict. If timing cannot be guaranteed, scratch duplication is needed.
 
-4. **EDGE array thread safety**: EDGE is persistent and read by VELOCITY_FLUX. If any routine on the parallel branch writes to EDGE, this creates a hidden conflict. Needs verification that WALL_BC and DIV_P1 do not modify EDGE.
+3. **Corrector timing guarantee**: Still needs runtime profiling. COMBUSTION uses no WORK arrays, so VELOCITY_FLUX can safely overlap with COMBUSTION. CONDENSATION starts after COMBUSTION and uses WORK1-2/SWORK1, creating a potential conflict if VELOCITY_FLUX hasn't completed. For safety, scratch duplication is recommended.
 
-5. **DEL_RHO_D_DEL_Z history dependency**: This array is zeroed in DIV_P1 but its previous value is saved by DENSITY (into SWORK4) at the start of the phase. Since the save happens before the pipeline fork, both branches can safely read the saved copy. Needs confirmation that no branch writes to DEL_RHO_D_DEL_Z before DIV_P1.
+4. **EDGE array thread safety**: EDGE is read-only during the pipeline window. VELOCITY_FLUX reads EDGE for vorticity/stress interpolation. Neither WALL_BC nor DIV_P1 write to EDGE. EDGE is only modified at initialization (init.f90) and during obstruction creation/removal (REDEFINE_EDGE). **Confirmed safe.**
+
+5. **DEL_RHO_D_DEL_Z history dependency**: The old value is saved into SWORK4 by DENSITY before the pipeline fork. DIV_P1 zeroes and recomputes DEL_RHO_D_DEL_Z during its execution. No other branch writes to it before DIV_P1. **Confirmed safe.**
+
+## Intra-Routine Decomposition Analysis
+
+Beyond pipelining entire routines, we analyzed the internal structure of each expensive routine to identify independent sections that could be split for finer-grained parallelism.
+
+### VELOCITY_FLUX -- Two-Phase Structure
+
+VELOCITY_FLUX_KERNEL (velo_kernels.f90:328-916) has a clear two-phase structure:
+
+**Phase 1: Shared intermediates** (~35 lines)
+- Computes vorticity (OMX, OMY, OMZ) and viscous stress tensor (TXY, TXZ, TYZ) over the full grid
+- Uses WORK1-6 as scratch for these 6 fields
+- Must complete before Phase 2
+
+**Phase 2: Three independent flux computations**
+
+| Section | Loop Range | Reads | Writes | Independent? |
+|---------|-----------|-------|--------|--------------|
+| FVX | K=1:KBAR, J=1:JBAR, I=0:IBAR | OMY, OMZ, TXY, TXZ, MU, VV, WW, EDGE | M%FVX | Yes (after Phase 1) |
+| FVY | K=1:KBAR, J=0:JBAR, I=1:IBAR | OMX, OMZ, TXY, TYZ, MU, UU, WW, EDGE | M%FVY | Yes (after Phase 1) |
+| FVZ | K=0:KBAR, J=1:JBAR, I=1:IBAR | OMX, OMY, TXZ, TYZ, MU, UU, VV, EDGE | M%FVZ | Yes (after Phase 1) |
+
+FVX, FVY, FVZ write to distinct arrays and read shared intermediates (read-only after Phase 1). All EDGE accesses are reads. **These three can run in parallel.**
+
+**BAROCLINIC_CORRECTION_KERNEL** (velo_kernels.f90:31-108): After Phase 1 setup (P, RRHO using WORK1-2), the FVX_B, FVY_B, FVZ_B corrections are fully independent of each other.
+
+**Decomposition opportunity**: Split VELOCITY_FLUX into:
+1. Vorticity + stress tensor (shared, sequential)
+2. FVX, FVY, FVZ (independent, parallel)
+
+**Estimated benefit**: Modest. The three loops have similar cost and the shared Phase 1 is ~30% of total. With 3-way split: theoretical 1.5x within VELOCITY_FLUX.
+
+### COMPUTE_VISCOSITY -- Independent MU and KRES
+
+COMPUTE_VISCOSITY_KERNEL (velo_kernels.f90:1270-1706) has two independent outputs:
+
+| Section | Reads | Writes | Dependencies |
+|---------|-------|--------|-------------|
+| MU_DNS | TMP, ZZ | M%MU_DNS | None |
+| STRAIN_RATE | Velocities | M%STRAIN_RATE | None (wall loop sequential) |
+| Turbulent MU | MU_DNS, STRAIN_RATE, RHO | M%MU | After MU_DNS + STRAIN_RATE |
+| **KRES** | **UU, VV, WW only** | **M%KRES** | **None -- fully independent** |
+| Wall mirroring | MU, KRES | M%MU, M%KRES (ghost) | After both MU and KRES |
+
+**KRES can run in parallel with the entire MU computation chain.** KRES reads only velocity arrays and writes only to M%KRES. No dependency on MU_DNS, STRAIN_RATE, or the turbulence model.
+
+**Limitation**: DEARDORFF and DYNSMAG turbulence models require FILL_EDGES and TEST_FILTER (global operations) and cannot be K-decomposed. CONSMAG, VREMAN, WALE are fully K-decomposable.
+
+### DIVERGENCE_PART_1 -- Six Phases with Barriers
+
+DIVERGENCE_PART_1_KERNEL (divg_kernels.f90:28-1396) is the largest and most complex routine. It has 6 major phases with internal dependencies:
+
+```
+Phase 1: Setup (zero DP, pointer aliases)
+  |
+  v
+Phase 2A: Species diffusion fluxes (RHO_D_DZDX/Y/Z)
+  |  Mass conservation barrier (MAXLOC/SUM across species)
+  v
+Phase 2B: Diffusive heat flux (H_RHO_D_DZDX/Y/Z -> DP)
+  |  Depends on Phase 2A output
+  |
+  +--- Phase 3: Specific heat (CP, R_H_G)  [INDEPENDENT of Phase 2]
+  |      |
+  |      v
+  |    Phase 4: Thermal conductivity (KP) -> Thermal divergence (-> DP)
+  |      |  Depends on Phase 3 (conditional)
+  |
+  +--- Phase 5A: Enthalpy advection (-> DP)  [INDEPENDENT of Phases 2-4]
+  |
+  v  (all phases accumulate into DP)
+Phase 5B: RTRM = 1/(rho*CP*TMP)  [depends on Phase 3 if !CONSTANT_SPECIFIC_HEAT_RATIO]
+  |  DP *= RTRM (multiplicative scaling of all accumulated terms)
+  v
+Phase 5C: Species advection Part 1 (FX_ZZ, FY_ZZ, FZ_ZZ face fluxes)
+  |  MW correction barrier (MAXLOC/SUM across species)
+  v
+Phase 5D: Species advection Part 2 (per-species divergence -> DP)
+  |  Depends on Phase 5C output
+  v
+Phase 5E-G: Source terms (reactions, stratification, MMS -> DP)
+  v
+Phase 6: Pressure zone sums (DSUM, PSUM, USUM from final DP)
+```
+
+**Independent sections that can run in parallel:**
+
+| Parallel Group | Sections | Constraint |
+|---------------|----------|------------|
+| Group A | Phase 2A+2B (species/heat diffusion) | Sequential internally (2A -> 2B) |
+| Group B | Phase 3+4 (specific heat + thermal conductivity + thermal divergence) | Sequential internally (3 -> 4) |
+| Group C | Phase 5A (enthalpy advection) | Independent of A and B |
+| **A \|\| B \|\| C** | All three groups | **Yes, can run in parallel** |
+
+After groups A, B, C complete and their contributions are accumulated into DP, Phase 5B applies the RTRM scaling, then Phases 5C-6 run sequentially.
+
+**Barriers preventing further decomposition:**
+- Phase 2A: Mass conservation correction requires all species fluxes (global reduction per cell)
+- Phase 5C: MW correction requires all species face fluxes (global reduction per face)
+- Phase 5B: DP *= RTRM is a full-array multiplicative gate between additive accumulation (2B+4+5A) and species advection (5C+5D)
+- Phase 6: Global accumulation into DSUM/PSUM/USUM
+
+**Estimated benefit**: Groups A, B, C are roughly equal cost (~200 lines each). Running them in parallel could yield ~2-3x speedup within DIV_P1. However, this requires separate scratch arrays for each group (they all use WORK arrays differently).
+
+### RADIATION -- Angle-Level Parallelism (Major Opportunity)
+
+COMPUTE_RADIATION (radi.f90, ~1200 lines) has the biggest intra-routine parallelism opportunity:
+
+**Phase 1: Absorption coefficients** (~350 lines)
+- Computes KAPPA_GAS, KFST4_GAS, EXTCOE, KAPPA_PART, SCAEFF per cell
+- K-block decomposable (per-cell independent)
+- Must complete before angle loop
+
+**Phase 2: Angle loop** (~430 lines) -- **MAJOR OPPORTUNITY**
+- Sweeps NUMBER_RADIATION_ANGLES angles (typically 100-500)
+- Only ANGLE_INCREMENT angles updated per radiation call
+- Each angle N:
+  1. Set boundary intensity IL from wall data for angle N (independent)
+  2. Sweep cells in upwind order for angle N (sequential within angle)
+  3. Update UII accumulator (reduction across angles)
+  4. Update wall outgoing intensity (independent per angle)
+
+**Key insight**: Each angle sweep is **fully independent** of other angles. The cell sweep within each angle has sequential I->J->K upwind dependency, but different angles can run simultaneously.
+
+| Aspect | Detail |
+|--------|--------|
+| Parallelism grain | NUMBER_RADIATION_ANGLES (100-500) |
+| Per-angle private data | IL (WORK2), IL_UP (WORK8) |
+| Shared read-only data | KFST4_GAS (WORK1), EXTCOE (WORK4), KAPPA_PART (WORK5), SCAEFF (WORK6), KFST4_PART (WORK7) |
+| Reduction at end | UIID accumulator (+=), INRAD_W wall flux (+=) |
+| Memory cost per thread | 2 3D arrays (IL, IL_UP) |
+
+**Estimated benefit**: With 10 angle threads on a 100-angle problem, ~10x speedup for the angle loop (the dominant cost of RADIATION). This is the single largest parallelism opportunity in FDS.
+
+**Phase 3: QR assembly** (~50 lines)
+- QR = KAPPA_GAS * UII - KFST4_GAS (per-cell, K-decomposable)
+- Must run after all angle sweeps complete
+
+### COMBUSTION -- Cell-Level Parallelism
+
+COMBUSTION_GENERAL_KERNEL (fire.f90:532+) has two phases:
+
+**Phase 1: Identify active cells** (~50 lines)
+- Filters cells by species/temperature thresholds
+- Builds sparse active cell list
+- K-decomposable
+
+**Phase 2: Chemistry ODE per cell** (~30 lines of loop, but COMBUSTION_MODEL is expensive)
+- Each cell solves an independent ODE system (species + energy)
+- **Embarrassingly parallel** across active cells
+- No cell-to-cell coupling
+- Uses NO WORK arrays
+
+Reactions within a single cell are NOT parallelizable (coupled ODE system solved by CVODE or fast chemistry). But the cell-level parallelism is the right grain -- active cells are typically 0-10% of the mesh, and each COMBUSTION_MODEL call is expensive (100-1000+ FLOPs).
+
+### DENSITY -- Species-Level Parallelism
+
+DENSITY_KERNEL (mass_kernels.f90:351-920) has one key parallelizable section:
+
+**Species advection** (N=1:N_TOTAL_SCALARS outer loop):
+- Each species N computes M%ZZS(:,:,:,N) independently
+- No cross-species dependency within the advection loop
+- Can split species across threads
+
+**Barriers**:
+- Density summation: RHOS = SUM(ZZS, dim=species) -- requires all species complete
+- CHECK_MASS_DENSITY: 6-neighbor scatter -- forces sequential post-processing
+- Temperature update: TMP = PBAR / (RSUM * RHOS) -- after density summation
+
+**Estimated benefit**: With N_TOTAL_SCALARS species (typically 3-10), species-level parallelism gives 3-10x for the advection loop. Already handled by the existing DENSITY_BLOCK_KERNEL K-decomposition.
+
+### WALL_BC -- Per-Wall-Cell and Per-Species Parallelism
+
+WALL_BC kernels (wall_kernels.f90) are organized as independent per-wall-cell operations:
+
+| Sub-kernel | Parallelism | Notes |
+|-----------|-------------|-------|
+| NEAR_SURFACE_GAS_VARIABLES | Per wall cell | Each wall cell reads gas-phase data independently |
+| CALCULATE_RHO_F | Per wall cell | Each wall cell computes surface density independently |
+| ASSIGN_GHOST_VALUE | Per wall cell | Each external wall writes to distinct ghost cell |
+| CALC_DEPOSITION | Per species | N_TRACKED_SPECIES independent deposition velocity calculations |
+| PYROLYSIS | Per material | N_MATS independent reaction rates, then sequential accumulation |
+| SOLID_HEAT_TRANSFER | Per wall cell | 1D conduction solve per wall cell (expensive, independent) |
+
+**SOLID_HEAT_TRANSFER is the expensive part** -- it solves a 1D heat equation through the solid for each wall cell. These are fully independent and embarrassingly parallel.
+
+Uses NO WORK arrays (confirmed earlier). Per-species and per-material loops offer secondary parallelism.
+
+### PRESSURE_SOLVE -- Sequential FFT Core
+
+PRESSURE_SOLVER_COMPUTE_RHS + FFT (pres_kernels.f90):
+
+| Section | Parallelizable? | Notes |
+|---------|----------------|-------|
+| Boundary condition setup (BXS/BXF/BYS/BYF/BZS/BZF) | Yes, per wall cell | Non-overlapping boundary arrays by IOR direction |
+| PRHS computation | Yes, per (I,J,K) | Pure divergence of flux terms |
+| **FFT solve** | **No** | **Inherently sequential** (global transform) |
+| Solution copy to H/HS | Yes, per (I,J,K) | Simple array copy |
+| H boundary conditions | Yes, per face | Independent per boundary face |
+
+The FFT solve is the bottleneck. ULMAT (sparse direct solver) is also inherently sequential per pressure zone but can parallelize across zones. The RHS and boundary setup (~30% of total) can be parallelized.
+
+### PARTICLE_MASS_ENERGY -- Particle Loop (Not Decomposable)
+
+PARTICLE_MASS_ENERGY_KERNEL (part.f90:3464-4588):
+
+- Main PARTICLE_LOOP iterates over all particles sequentially
+- Each particle's heat/mass transfer is independent of other particles
+- **But**: particles accumulate into shared grid arrays (M_DOT_PPP, Q at cell I,J,K)
+- Multiple particles in the same cell create write conflicts
+- Uses WORK1-7 and SWORK1
+
+**Parallelism**: Could use atomic accumulation or particle-cell binning, but the current structure mixes particle classes in one loop. Not easily decomposable without restructuring.
+
+### MOVE_PARTICLES -- Sequential (Mesh Transfer)
+
+MOVE_PARTICLES (part.f90:1807-3456):
+
+- Uses NO WORK arrays
+- Sequential due to inter-mesh particle transfers and shared LAGRANGIAN_PARTICLE array
+- Particle removal invalidates indices, preventing parallel iteration
+- Not a candidate for intra-routine parallelism
+
+### Summary: Intra-Routine Parallelism Opportunities
+
+Ranked by estimated impact:
+
+| Rank | Routine | Opportunity | Parallelism Type | Est. Speedup | Complexity |
+|------|---------|-------------|-----------------|--------------|------------|
+| 1 | **RADIATION** | Angle loop (100-500 angles) | Angle-parallel | **10-50x** for angle loop | Medium (private IL per thread, UIID reduction) |
+| 2 | **DIV_P1** | Groups A\|\|B\|\|C (diffusion \|\| thermal \|\| enthalpy advection) | Section-parallel | **2-3x** within DIV_P1 | High (separate WORK pools, DP accumulation sync) |
+| 3 | **COMBUSTION** | Per-cell chemistry ODE | Cell-parallel | **Nx** (N = active cells / threads) | Low (embarrassingly parallel, no WORK) |
+| 4 | **VELOCITY_FLUX** | FVX \|\| FVY \|\| FVZ after vorticity | Component-parallel | **~1.5x** within VFLUX | Low (distinct output arrays) |
+| 5 | **DENSITY** | Per-species advection | Species-parallel | **3-10x** for advection loop | Low (independent 4D slices) |
+| 6 | **WALL_BC** | SOLID_HEAT_TRANSFER per wall cell | Wall-cell-parallel | **Nx** (N = wall cells / threads) | Low (independent 1D solves) |
+| 7 | **COMPUTE_VISCOSITY** | KRES \|\| MU chain | Section-parallel | **~1.3x** within VISC | Low (independent outputs) |
+| 8 | **PRESSURE_SOLVE** | RHS + boundary setup | Cell-parallel | **~1.3x** (30% of solve) | Low (FFT is bottleneck) |
+
+**Not decomposable**: PARTICLE_MASS_ENERGY (particle-cell accumulation conflicts), MOVE_PARTICLES (mesh transfers, index invalidation), FFT solve (global transform).
 
 ## Source Files Analyzed
 
