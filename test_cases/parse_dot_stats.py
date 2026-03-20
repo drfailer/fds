@@ -114,8 +114,8 @@ def categorize_nodes(nodes):
         elif name in loop_names:
             categories['loop_control'].append(n)
         elif ('Collector' in name or 'Reassemble' in name or
-              'Coll' in name or name.startswith('Join') or
-              name.startswith('PredJoin')):
+              'Coll' in name or 'Mid' in name or
+              name.startswith('Join') or name.startswith('PredJoin')):
             categories['collectors'].append(n)
         elif ('Orch' in name or 'Decompose' in name or
               name.startswith('Fork') or name.startswith('PredFork') or
