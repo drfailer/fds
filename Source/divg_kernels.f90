@@ -14,7 +14,7 @@ USE TYPES, ONLY: WALL_TYPE,BOUNDARY_COORD_TYPE,BOUNDARY_PROP1_TYPE,EXTERNAL_WALL
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC DIVERGENCE_PART_1_KERNEL,DIVERGENCE_PART_2_KERNEL,CHECK_DIVERGENCE_KERNEL
+PUBLIC DIVERGENCE_PART_1_KERNEL,DIVERGENCE_PART_1_ADD_QR_KERNEL,DIVERGENCE_PART_2_KERNEL,CHECK_DIVERGENCE_KERNEL
 PUBLIC DIVERGENCE_PART_2_PREPROCESSING,DIVERGENCE_PART_2_BLOCK_KERNEL
 
 CONTAINS
@@ -25,7 +25,7 @@ CONTAINS
 !> \param DT Time step (s)
 !> \param NM Mesh number
 
-SUBROUTINE DIVERGENCE_PART_1_KERNEL(M,T,DT,NM)
+SUBROUTINE DIVERGENCE_PART_1_KERNEL(M,T,DT,NM,SKIP_QR)
 
 USE MATH_FUNCTIONS, ONLY: INTERPOLATE1D_UNIFORM
 USE PHYSICAL_FUNCTIONS, ONLY: GET_CONDUCTIVITY,GET_SPECIFIC_HEAT,GET_SENSIBLE_ENTHALPY_Z,GET_SENSIBLE_ENTHALPY,&
@@ -44,6 +44,8 @@ USE CC_DIVERGENCE, ONLY : CC_DIVERGENCE_PART_1
 TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM
 REAL(EB), INTENT(IN) :: T,DT
+LOGICAL, INTENT(IN), OPTIONAL :: SKIP_QR
+LOGICAL :: SKIP_QR_FLAG
 REAL(EB), POINTER, DIMENSION(:,:,:) :: KDTDX,KDTDY,KDTDZ,DP,KP,CP, &
           RHO_D,H_RHO_D_DZDX,H_RHO_D_DZDY,H_RHO_D_DZDZ,RTRM, &
           U_DOT_DEL_RHO_H_S,U_DOT_DEL_RHO_Z,RHO_D_TURB,R_H_G
@@ -63,6 +65,9 @@ TYPE(BOUNDARY_PROP1_TYPE), POINTER :: B1
 TYPE(CFACE_TYPE), POINTER :: CFA
 
 IF (SOLID_PHASE_ONLY) RETURN
+
+SKIP_QR_FLAG = .FALSE.
+IF (PRESENT(SKIP_QR)) SKIP_QR_FLAG = SKIP_QR
 
 SELECT CASE(PREDICTOR)
    CASE(.TRUE.)
@@ -553,31 +558,57 @@ CORRECTION_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
    END SELECT
 ENDDO CORRECTION_LOOP
 
-! Compute div(k*grad(T)) + Q + QR and add to divergence
+! Compute div(k*grad(T)) + Q [+ QR] and add to divergence
 
 CYLINDER3: SELECT CASE(CYLINDRICAL)
 CASE(.FALSE.) CYLINDER3
-   DO K=1,M%KBAR
-      DO J=1,M%JBAR
-         DO I=1,M%IBAR
-            DELKDELT = (KDTDX(I,J,K)-KDTDX(I-1,J,K))*M%RDX(I) + &
-                       (KDTDY(I,J,K)-KDTDY(I,J-1,K))*M%RDY(J) + &
-                       (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
-            DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K) + M%QR(I,J,K)
+   IF (SKIP_QR_FLAG) THEN
+      DO K=1,M%KBAR
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DELKDELT = (KDTDX(I,J,K)-KDTDX(I-1,J,K))*M%RDX(I) + &
+                          (KDTDY(I,J,K)-KDTDY(I,J-1,K))*M%RDY(J) + &
+                          (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
+               DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K)
+            ENDDO
          ENDDO
       ENDDO
-   ENDDO
+   ELSE
+      DO K=1,M%KBAR
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DELKDELT = (KDTDX(I,J,K)-KDTDX(I-1,J,K))*M%RDX(I) + &
+                          (KDTDY(I,J,K)-KDTDY(I,J-1,K))*M%RDY(J) + &
+                          (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
+               DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K) + M%QR(I,J,K)
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
 CASE(.TRUE.) CYLINDER3
-   DO K=1,M%KBAR
-      DO J=1,M%JBAR
-         DO I=1,M%IBAR
-            DELKDELT = &
-                 (M%R(I)*KDTDX(I,J,K)-M%R(I-1)*KDTDX(I-1,J,K))*M%RDX(I)*M%RRN(I) + &
-                 (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
-            DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K) + M%QR(I,J,K)
+   IF (SKIP_QR_FLAG) THEN
+      DO K=1,M%KBAR
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DELKDELT = &
+                    (M%R(I)*KDTDX(I,J,K)-M%R(I-1)*KDTDX(I-1,J,K))*M%RDX(I)*M%RRN(I) + &
+                    (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
+               DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K)
+            ENDDO
          ENDDO
       ENDDO
-   ENDDO
+   ELSE
+      DO K=1,M%KBAR
+         DO J=1,M%JBAR
+            DO I=1,M%IBAR
+               DELKDELT = &
+                    (M%R(I)*KDTDX(I,J,K)-M%R(I-1)*KDTDX(I-1,J,K))*M%RDX(I)*M%RRN(I) + &
+                    (KDTDZ(I,J,K)-KDTDZ(I,J,K-1))*M%RDZ(K)
+               DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K) + M%QR(I,J,K)
+            ENDDO
+         ENDDO
+      ENDDO
+   ENDIF
 END SELECT CYLINDER3
 
 END SUBROUTINE COMPUTE_THERMAL_DIVERGENCE
@@ -1395,6 +1426,48 @@ END SUBROUTINE PREDICT_NORMAL_VELOCITY
 
 END SUBROUTINE DIVERGENCE_PART_1_KERNEL
 
+
+!> \brief Add QR (radiation source term) to the divergence DP.
+!> Used after DIVERGENCE_PART_1_KERNEL(SKIP_QR=.TRUE.) and a QR exchange.
+!> \param M Mesh data structure
+!> \param NM Mesh number
+
+RECURSIVE SUBROUTINE DIVERGENCE_PART_1_ADD_QR_KERNEL(M,NM)
+
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
+INTEGER, INTENT(IN) :: NM
+REAL(EB), POINTER, DIMENSION(:,:,:) :: DP
+INTEGER :: I,J,K
+
+IF (SOLID_PHASE_ONLY) RETURN
+
+SELECT CASE(PREDICTOR)
+   CASE(.TRUE.)
+      DP => M%DS
+   CASE(.FALSE.)
+      DP => M%D
+END SELECT
+
+SELECT CASE(CYLINDRICAL)
+CASE(.FALSE.)
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            DP(I,J,K) = DP(I,J,K) + M%QR(I,J,K)
+         ENDDO
+      ENDDO
+   ENDDO
+CASE(.TRUE.)
+   DO K=1,M%KBAR
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            DP(I,J,K) = DP(I,J,K) + M%QR(I,J,K)
+         ENDDO
+      ENDDO
+   ENDDO
+END SELECT
+
+END SUBROUTINE DIVERGENCE_PART_1_ADD_QR_KERNEL
 
 
 !> \brief Finish computing the divergence of the flow, D, and then compute its time derivative, DDDT

@@ -8,7 +8,7 @@ This file tracks the implementation of intra-timestep pipelining parallelism in 
 
 **Strategy**: Bottom-up implementation. First prepare the Fortran kernels and validate them sequentially in the existing graph, then restructure the graph with fork-join states.
 
-## Current Phase: 1 — Fortran Kernel Extraction
+## Current Phase: 2 — Per-Branch Scratch Arrays
 
 ---
 
@@ -28,9 +28,9 @@ Add a `SKIP_QR` logical parameter to `DIVERGENCE_PART_1_KERNEL`. When `.TRUE.`, 
 
 **Test**: `SKIP_QR=.FALSE.` everywhere → bit-identical on full verification suite.
 
-- [ ] Add SKIP_QR parameter to DIVERGENCE_PART_1_KERNEL
-- [ ] Update call sites in divg.f90
-- [ ] Verify bit-identical
+- [x] Add SKIP_QR parameter to DIVERGENCE_PART_1_KERNEL
+- [x] Update call sites in divg.f90 (OPTIONAL parameter, no change needed)
+- [x] Verify bit-identical (12/12 tests pass)
 
 ### 1b: DIV_P1 QR Addition Kernel
 
@@ -47,8 +47,8 @@ with predictor/corrector DP pointer selection (M%DS or M%D). Handles both Cartes
 
 **Test**: Call `DIV_P1_KERNEL(SKIP_QR=.TRUE.)` then `DIV_P1_ADD_QR_KERNEL()` sequentially → bit-identical.
 
-- [ ] Create DIVERGENCE_PART_1_ADD_QR_KERNEL
-- [ ] Verify bit-identical with split call sequence
+- [x] Create DIVERGENCE_PART_1_ADD_QR_KERNEL
+- [x] Verify bit-identical with split call sequence (12/12 tests pass)
 
 ### 1c: C Wrappers
 
@@ -61,8 +61,8 @@ Create C-callable wrappers for the new/split kernels.
 
 **Test**: C wrappers callable from C++ without linker errors.
 
-- [ ] Create C wrappers
-- [ ] Link test
+- [x] Create C wrappers (fds_divergence_part_1_kernel_skip_qr, fds_divergence_part_1_add_qr)
+- [x] Link test (build succeeds, 12/12 tests pass)
 
 ---
 

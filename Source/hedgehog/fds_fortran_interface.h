@@ -75,6 +75,8 @@ void fds_density_block_kernel(int nm, double t, double dt, int k1, int k2);
 void fds_density_block_postprocessing(int nm, double t, double dt);
 int fds_density_can_block_decompose();
 void fds_divergence_part_1_kernel(int nm, double t, double dt);
+void fds_divergence_part_1_kernel_skip_qr(int nm, double t, double dt);
+void fds_divergence_part_1_add_qr(int nm);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
 void fds_velocity_flux_block_kernel(int nm, double t, double dt, int estimated, int k1, int k2);
 int fds_velocity_flux_can_block_decompose(int nm);
