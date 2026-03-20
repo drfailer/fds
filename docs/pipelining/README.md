@@ -17,6 +17,8 @@ The current Hedgehog graph parallelizes FDS over meshes (each mesh processed on 
 | [fds_pipeline_opportunities.dot](fds_pipeline_opportunities.dot) / [.svg](fds_pipeline_opportunities.svg) | Focused view of the identified pipelining opportunities with dependency proof |
 | [fds_section_pipeline.dot](fds_section_pipeline.dot) / [.svg](fds_section_pipeline.svg) | Section-level pipeline structure with cost annotations and Hedgehog graph recommendations |
 
+**Implementation**: [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) — phased implementation plan and progress tracking.
+
 Regenerate SVGs with: `dot -Tsvg fds_dataflow.dot -o fds_dataflow.svg`
 
 ## Data Categories

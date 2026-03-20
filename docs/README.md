@@ -49,7 +49,13 @@ Data-flow analysis for intra-timestep pipelining parallelism.
 - Complete read/write dependency map for all predictor/corrector routines
 - Two identified opportunities: predictor two-level pipeline, corrector major pipeline
 - Dependency proof tables showing zero data conflicts
-- Hedgehog implementation strategy (type-based branch routing)
+- Section-level cost analysis with ops/cell estimates
+- Hedgehog graph recommendations (3 tiers by impact/complexity)
+
+### [pipelining/IMPLEMENTATION_PROGRESS.md](pipelining/IMPLEMENTATION_PROGRESS.md)
+Phased implementation plan for pipelining changes.
+- 6 phases: kernel extraction → scratch arrays → driver → Fork 1 → Fork 2 → predictor
+- Current phase tracking and test criteria
 
 ## Reference Implementations
 

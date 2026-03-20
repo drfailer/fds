@@ -1,0 +1,350 @@
+# FDS Pipelining Implementation Progress
+
+## Overview
+
+This file tracks the implementation of intra-timestep pipelining parallelism in the Hedgehog graph. The analysis and design are documented in [README.md](README.md) and [fds_section_pipeline.dot](fds_section_pipeline.dot).
+
+**Goal**: Overlap independent computation stages within each timestep to reduce wall-clock time. Two main fork-join pairs in the corrector phase (VFLUX || COMBUSTION, RADIATION || DIV_P1) provide a combined 1.36x speedup of the corrector pipeline.
+
+**Strategy**: Bottom-up implementation. First prepare the Fortran kernels and validate them sequentially in the existing graph, then restructure the graph with fork-join states.
+
+## Current Phase: 1 — Fortran Kernel Extraction
+
+---
+
+## Phase 1: Fortran Kernel Extraction
+
+**Objective**: Create the split kernel variants needed for pipelining, without changing any graph structure. Validate by calling them in the same sequential order.
+
+**Rationale**: Isolate Fortran correctness from graph correctness. All new kernels must produce bit-identical results when called in the original order.
+
+### 1a: DIV_P1 QR-Independent Variant
+
+Add a `SKIP_QR` logical parameter to `DIVERGENCE_PART_1_KERNEL`. When `.TRUE.`, omit the `M%QR(I,J,K)` addition in `COMPUTE_THERMAL_DIVERGENCE` (lines 566, 577 of divg_kernels.f90). When `.FALSE.`, behavior is identical to current code.
+
+**Files to modify**:
+- `Source/divg_kernels.f90`: Add `SKIP_QR` parameter, guard the 2 QR references
+- `Source/divg.f90`: Update call site (pass `.FALSE.` to preserve current behavior)
+
+**Test**: `SKIP_QR=.FALSE.` everywhere → bit-identical on full verification suite.
+
+- [ ] Add SKIP_QR parameter to DIVERGENCE_PART_1_KERNEL
+- [ ] Update call sites in divg.f90
+- [ ] Verify bit-identical
+
+### 1b: DIV_P1 QR Addition Kernel
+
+Create a new subroutine `DIVERGENCE_PART_1_ADD_QR_KERNEL(M, NM)` in `divg_kernels.f90`. This is a simple loop:
+
+```fortran
+DP(I,J,K) = DP(I,J,K) + M%QR(I,J,K)
+```
+
+with predictor/corrector DP pointer selection (M%DS or M%D). Handles both Cartesian and cylindrical.
+
+**Files to create/modify**:
+- `Source/divg_kernels.f90`: Add new subroutine
+
+**Test**: Call `DIV_P1_KERNEL(SKIP_QR=.TRUE.)` then `DIV_P1_ADD_QR_KERNEL()` sequentially → bit-identical.
+
+- [ ] Create DIVERGENCE_PART_1_ADD_QR_KERNEL
+- [ ] Verify bit-identical with split call sequence
+
+### 1c: C Wrappers
+
+Create C-callable wrappers for the new/split kernels.
+
+**Files to modify**:
+- `Source/hedgehog/fds_c_interface.f90`: Add wrappers
+  - `fds_divergence_part_1_kernel_skip_qr(nm, t, dt)` — calls with SKIP_QR=.TRUE.
+  - `fds_divergence_part_1_add_qr(nm, t, dt)` — calls ADD_QR_KERNEL
+
+**Test**: C wrappers callable from C++ without linker errors.
+
+- [ ] Create C wrappers
+- [ ] Link test
+
+---
+
+## Phase 2: Per-Branch Scratch Arrays
+
+**Objective**: Add a second set of WORK/SWORK arrays to MESH_TYPE so that two concurrent branches can use independent scratch memory. Validate by running with branch=1 (original arrays) everywhere.
+
+**Rationale**: RADIATION uses WORK1-9, DIV_P1 uses WORK1-7,9. They cannot run concurrently on the same mesh without separate scratch pools. Memory cost: ~4.5 MB per 64³ mesh (9 3D double arrays).
+
+### 2a: Add Branch-B WORK Arrays to MESH_TYPE
+
+Add to `MESH_TYPE` in `mesh.f90`:
+- `WORK1_B` through `WORK9_B` (same dimensions as WORK1-9)
+- `SWORK1_B` through `SWORK3_B` (same dimensions as SWORK1-3)
+
+**Files to modify**:
+- `Source/mesh.f90`: Declare new arrays in MESH_TYPE
+- `Source/init.f90` (or wherever WORK arrays are allocated): Allocate the _B arrays
+
+- [ ] Add WORK_B declarations to MESH_TYPE
+- [ ] Add allocation in initialization
+- [ ] Verify no build errors
+
+### 2b: Add WORK_BRANCH Parameter to Affected Kernels
+
+Add a `WORK_BRANCH` integer parameter to kernels that use WORK arrays. When `WORK_BRANCH=1`, use original `M%WORK1`, etc. When `WORK_BRANCH=2`, use `M%WORK1_B`, etc.
+
+The change is localized to the pointer alias block at the top of each kernel (similar to the existing PREDICTOR/CORRECTOR alias pattern for UU/VV/WW). CONTAINS subroutines inherit the aliases via host association.
+
+**Kernels to modify**:
+- `Source/divg_kernels.f90`: DIVERGENCE_PART_1_KERNEL (uses WORK1-7,9, SWORK1-3)
+- `Source/radi.f90`: COMPUTE_RADIATION_KERNEL (uses WORK1-9)
+- `Source/velo_kernels.f90`: VELOCITY_FLUX_KERNEL (uses WORK1-6)
+- `Source/mass_kernels.f90`: DENSITY_KERNEL (uses WORK4-5, SWORK4)
+- `Source/fire_kernels.f90`: CONDENSATION_EVAPORATION_KERNEL (uses WORK1-2, SWORK1)
+- `Source/part.f90`: PARTICLE_MASS_ENERGY_KERNEL (uses WORK1-7, SWORK1)
+
+**Files to modify**:
+- Each kernel file above: Add WORK_BRANCH parameter, conditional pointer aliases
+- `Source/hedgehog/fds_c_interface.f90`: Update C wrappers to pass WORK_BRANCH
+- All Hedgehog tasks that call these kernels: Pass WORK_BRANCH=1 (default)
+
+**Test**: `WORK_BRANCH=1` everywhere → bit-identical on full verification suite.
+
+- [ ] Add WORK_BRANCH to DIV_P1 kernel
+- [ ] Add WORK_BRANCH to RADIATION kernel
+- [ ] Add WORK_BRANCH to VELOCITY_FLUX kernel
+- [ ] Add WORK_BRANCH to remaining kernels (DENSITY, CONDENSATION, PME)
+- [ ] Update C wrappers
+- [ ] Update Hedgehog tasks (pass WORK_BRANCH=1)
+- [ ] Verify bit-identical
+
+---
+
+## Phase 3: Sequential Driver Integration
+
+**Objective**: Wire the split kernels into the existing corrector sub-graph, calling them in the same sequential order. This validates the new kernels in context without changing graph structure.
+
+**Rationale**: This is the "prepare the driver" step. If verification fails here, the bug is in the Fortran kernel split, not in the graph restructuring.
+
+### 3a: Replace DIV_P1 Call in Corrector
+
+In the corrector sub-graph, replace the single DIV_P1 kernel call with the two-step sequence:
+1. `fds_divergence_part_1_kernel_skip_qr(nm, t, dt)` — DIV_P1 without QR
+2. `fds_divergence_part_1_add_qr(nm, t, dt)` — QR addition
+
+The Hedgehog task `CorrDivPart1KernelTask` calls both sequentially in its `execute()` method.
+
+**Files to modify**:
+- `Source/hedgehog/task/corr_div_part1_kernel_task.h`: Call split sequence
+
+**Test**: Full verification suite → bit-identical.
+
+- [ ] Update CorrDivPart1KernelTask to use split sequence
+- [ ] Verify bit-identical (full verification suite)
+
+### 3b: Validate WORK_BRANCH Plumbing
+
+Temporarily set WORK_BRANCH=2 for DIV_P1 or RADIATION to verify that branch-B scratch arrays produce identical results.
+
+- [ ] Run DIV_P1 with WORK_BRANCH=2 → bit-identical
+- [ ] Run RADIATION with WORK_BRANCH=2 → bit-identical
+- [ ] Restore WORK_BRANCH=1 for all
+
+---
+
+## Phase 4: Corrector Fork 1 — VFLUX || COMBUSTION
+
+**Objective**: Run VELOCITY_FLUX and COMBUSTION concurrently after MESH_EXCHANGE(4). This is the first graph restructuring change.
+
+**WORK conflict**: None. COMBUSTION uses no WORK arrays. CONDENSATION uses WORK1-2 but runs after the join (after SootHvac barrier). No scratch duplication needed for this fork.
+
+**Expected savings**: 115 ops/cell hidden behind VFLUX (248 ops/cell). Higher with particles (Branch B grows longer).
+
+### Architecture
+
+```
+EX(4) scatters MeshData
+  ↓
+PipelineFork1 state (MeshData → VFluxWork + CombWork)
+  ├── Branch A: VelocityFlux sub-graph (VFluxWork → VFluxResult)
+  └── Branch B: Combustion kernel task (CombWork → CombResult)
+PipelineJoin1 state (VFluxResult + CombResult → MeshData, per-mesh matching)
+  ↓
+SootHvac collector → SootHvac barrier
+  ↓
+(continues: COND → PME → Move → PART_MOM → ...)
+```
+
+### Data Types
+
+New data types needed (lightweight wrappers around MeshData):
+- `VFluxWork` / `VFluxResult` — Branch A tokens
+- `CombWork` / `CombResult` — Branch B tokens
+
+### Key Design Decisions
+
+- Fork is **per-mesh**: each MeshData spawns one VFluxWork + one CombWork
+- Join matches by mesh index (NM): emits MeshData when both branch results arrive for that mesh
+- Branch A uses the existing VelocityFlux sub-graph (mesh-level or K-block)
+- Branch B is a simple kernel task (CombustionKernelTask adapted for CombWork input)
+- SootHvac barrier runs AFTER the join (all meshes, both branches complete)
+
+### Files to Create
+
+- `Source/hedgehog/data/pipeline_data.h`: Fork/join data types
+- `Source/hedgehog/state/pipeline_fork_state.h`: Fork state (MeshData → typed branches)
+- `Source/hedgehog/state/pipeline_join_state.h`: Join state (typed results → MeshData)
+
+### Files to Modify
+
+- `Source/hedgehog/graph/corrector_subgraph.h`: Wire fork/join around VFLUX and COMB
+- `Source/hedgehog/task/combustion_kernel_task.h`: Accept CombWork input type (or create adapter)
+
+### Checklist
+
+- [ ] Create pipeline data types
+- [ ] Create fork state
+- [ ] Create join state
+- [ ] Adapt VelocityFlux sub-graph for VFluxWork input
+- [ ] Adapt CombustionKernelTask for CombWork input
+- [ ] Wire corrector sub-graph with fork/join
+- [ ] Run verification suite
+- [ ] Compare performance (dot file execution stats)
+
+---
+
+## Phase 5: Corrector Fork 2 — RADIATION || DIV_P1
+
+**Objective**: Run RADIATION and DIV_P1 (without QR) concurrently after MESH_EXCHANGE(6a). This is the high-impact change (1299 ops/cell saved).
+
+**WORK conflict**: RADIATION uses WORK1-9, DIV_P1 uses WORK1-7,9. **Requires per-branch scratch duplication** (Phase 2). RADIATION uses WORK_BRANCH=1, DIV_P1 uses WORK_BRANCH=2.
+
+**Expected savings**: min(RADIATION, 1299) ops/cell. For typical fire: 1299 ops/cell — the entire DIV_P1 computation runs hidden behind RADIATION.
+
+### Architecture
+
+```
+EX(6a) scatters MeshData
+  ↓
+PipelineFork2 state (MeshData → RadiationWork + DivP1Work)
+  │  [also zeros DSUM/PSUM/USUM for DIV_P1]
+  ├── Branch C: Radiation sub-graph (RadiationWork → RadiationResult)
+  │   [uses WORK_BRANCH=1]
+  └── Branch D: DIV_P1_non_QR kernel (DivP1Work → DivP1Result)
+      [uses WORK_BRANCH=2, SKIP_QR=.TRUE.]
+RadiationCollector (N meshes → RadBarrierData)
+DivP1Collector (N meshes → DivP1BarrierData)
+PipelineJoin2 state (RadBarrierData + DivP1BarrierData → BarrierData)
+  ↓
+MeshExchange(2) [exchanges QR across meshes, NO InitDiv — already done in fork]
+  ↓ scatters MeshData
+QR Addition kernel (per mesh)
+  ↓
+DIV_EXCHANGE collector → ...
+```
+
+### Key Design Decisions
+
+- Both branches need ALL meshes to synchronize before the join (EX(2) is a global barrier for QR exchange)
+- InitDiv (zero DSUM/PSUM/USUM) moves to the fork state's orchestration, before dispatching Branch D
+- EX(2) only exchanges QR (InitDiv flag = false); the zeroing is done in the fork
+- QR addition is a trivial per-mesh kernel (1 op/cell) that runs after EX(2)
+- Reuse fork/join patterns from Phase 4 with different data types
+
+### Data Types
+
+- `RadiationWork` / `RadiationResult` — Branch C tokens
+- `DivP1Work` / `DivP1Result` — Branch D tokens
+- `RadBarrierData` / `DivP1BarrierData` — Branch collector outputs
+
+### Files to Create
+
+- `Source/hedgehog/data/pipeline_fork2_data.h`: Fork 2 data types
+- `Source/hedgehog/state/pipeline_fork2_state.h`: Fork 2 state
+- `Source/hedgehog/state/pipeline_join2_state.h`: Join 2 state
+- `Source/hedgehog/task/div_p1_qr_addition_task.h`: QR addition task
+
+### Files to Modify
+
+- `Source/hedgehog/graph/corrector_subgraph.h`: Wire fork 2 around RADIATION and DIV_P1
+- `Source/hedgehog/graph/corr_radiation_subgraph.h`: Accept RadiationWork input
+- `Source/hedgehog/task/corr_div_part1_kernel_task.h`: Accept DivP1Work, use SKIP_QR + WORK_BRANCH=2
+
+### Checklist
+
+- [ ] Create Fork 2 data types
+- [ ] Create Fork 2 state (with InitDiv orchestration)
+- [ ] Create Join 2 state
+- [ ] Create QR addition task
+- [ ] Adapt Radiation sub-graph for RadiationWork input
+- [ ] Adapt DIV_P1 task for DivP1Work input with SKIP_QR and WORK_BRANCH
+- [ ] Modify MeshExchange(2) to skip InitDiv (move to Fork 2 state)
+- [ ] Wire corrector sub-graph with Fork 2
+- [ ] Run verification suite
+- [ ] Compare performance
+
+---
+
+## Phase 6: Predictor Pipelining (Optional)
+
+**Objective**: Add pipelining to the predictor phase. Two options with different complexity/impact tradeoffs.
+
+### Option A: VFLUX || WALL_BC Two-Way Fork (Simple)
+
+Run VELOCITY_FLUX and WALL_BC concurrently after MESH_EXCHANGE(1). No WORK conflict (WALL_BC uses no WORK arrays). Already validated safe in data-flow analysis.
+
+**Expected savings**: 65 ops/cell (WALL_BC hidden behind VFLUX). Modest.
+
+```
+EX(1) → Fork →
+  Branch A: VFLUX
+  Branch B: WALL_BC
+→ Join → PART_MOM → DIV_P1 → ...
+```
+
+### Option B: Three-Way Fork Including DIV_P1 Interior (Complex)
+
+Run VFLUX, WALL_BC, and DIV_P1 interior computation concurrently. DIV_P1 wall corrections run after WALL_BC completes.
+
+**Expected savings**: 331 ops/cell. Speedup: 1.24x predictor pipeline.
+
+**Complexity**: Requires splitting each DIV_P1 phase into interior-only and wall-correction sub-loops. The inter-phase dependencies (Phase 2A wall corrections affect Phase 2B inputs) make this non-trivial. Needs careful analysis to determine if wall corrections can be deferred to after all interior phases complete, or if they must be interleaved.
+
+### Investigation Items (Before Choosing)
+
+- [ ] Analyze Phase 2A/2B wall correction dependency: can wall corrections for ALL phases be deferred to after all interior phases complete?
+- [ ] If not: identify which phases can defer wall corrections and which must interleave
+- [ ] Estimate implementation complexity of interior/wall split
+- [ ] Compare with Option A (simple) to decide if the 4x higher savings justifies the complexity
+
+### Checklist (Implementation)
+
+- [ ] Decide Option A vs Option B based on investigation
+- [ ] Implement chosen option
+- [ ] Run verification suite
+- [ ] Compare performance
+
+---
+
+## Summary
+
+| Phase | Description | Fortran Changes | Graph Changes | WORK Branch | Expected Speedup |
+|-------|-------------|-----------------|---------------|-------------|-----------------|
+| 1 | Kernel extraction | SKIP_QR flag + QR kernel | None | No | N/A (validation) |
+| 2 | Scratch arrays | WORK_B arrays + WORK_BRANCH | None | Infrastructure | N/A (validation) |
+| 3 | Sequential driver | None | Task internals only | Validation | N/A (validation) |
+| 4 | Corrector Fork 1 | None | Fork/join states | Not needed | ~2% corrector |
+| 5 | Corrector Fork 2 | From Phase 1 | Fork/join states | Active | ~30% corrector |
+| 6 | Predictor pipeline | Maybe (Option B) | Fork/join states | Maybe | 4-20% predictor |
+
+**Phases 1-3**: Foundation work. No speedup, but validates all kernels.
+**Phase 4**: First graph restructuring. Simple, low risk. Small but reliable speedup.
+**Phase 5**: High-impact change. Relies on Phases 1-3 infrastructure.
+**Phase 6**: Optional. Decision after Phases 4-5 are validated and profiled.
+
+---
+
+## Test Criteria
+
+Each phase must pass:
+1. **Build**: `cmake --build . --target fds_hh -j$(nproc)` succeeds
+2. **Custom tests**: `cd test_cases && python3 run_tests.py -v` (12 cases pass)
+3. **Verification suite**: `cd test_cases && python3 run_verification.py test --no-redundant --max-gold-time 30 --timeout 120 --tolerance 1e-6` (46+ cases pass at 1e-6 tolerance)
+4. **Dot file**: `graph->createDotFile(...)` shows correct pipeline structure
