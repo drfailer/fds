@@ -211,7 +211,7 @@ New data types needed (lightweight wrappers around MeshData):
 - [x] Adapt CombustionKernelTask for CombWork input (Fork1CombKernelTask)
 - [x] Wire corrector sub-graph with fork/join (12/12 tests pass)
 - [x] Run verification suite (46/58 pass — no regressions from Fork 1)
-- [ ] Compare performance (dot file execution stats)
+- [x] Compare performance: VFLUX hidden behind COMB — dancing_eddies: 1.01x (no combustion), fire_const_gamma: 1.25x (446ms hidden), species_props: 1.11x
 
 ---
 
@@ -283,7 +283,7 @@ DIV_EXCHANGE collector → ...
 - [x] Modify MeshExchange(2) to skip InitDiv when !CC_IBM (initDiv=ccIBM conditional)
 - [x] Wire corrector sub-graph with Fork 2 (CC_IBM sequential fallback)
 - [x] Run verification suite (46/58 pass — no regressions from Fork 2)
-- [ ] Compare performance
+- [x] Compare performance: RAD||DIV_P1 near-balanced — dancing_eddies: 1.91x (506ms hidden), fire_const_gamma: 1.29x (534ms hidden), species_props: 1.11x
 
 ---
 
@@ -368,7 +368,27 @@ Requires Fortran kernel changes (splitting DIV_P1 into sections), unlike the sim
 - [x] Chain DIV_P1_early after WALL_BC in Branch B (pred_fork_div_subgraph.h)
 - [x] Wire predictor sub-graph with fork/join (CC_IBM sequential fallback)
 - [x] Run verification suite (46/58 pass — no regressions from predictor pipelining)
-- [ ] Compare performance
+- [x] Compare performance: VFLUX+PMOM hidden behind WBC+DIV — dancing_eddies: 1.12x (80ms hidden), fire_const_gamma: 1.10x (284ms hidden), species_props: 1.75x
+
+---
+
+## Performance Results
+
+Measured with dot file execution stats on 3 test cases:
+
+| Fork | dancing_eddies_4mesh | fire_const_gamma_2mesh | species_props_5mesh |
+|------|---------------------|----------------------|-------------------|
+| Phase 4: VFLUX \|\| COMB | 1.01x (no combustion) | **1.25x** (447ms hidden) | 1.11x |
+| Phase 5: RAD \|\| DIV_P1 | **1.91x** (506ms hidden) | **1.29x** (534ms hidden) | 1.11x |
+| Phase 6: VFLUX+PMOM \|\| WBC+DIV | 1.12x (80ms hidden) | 1.10x (284ms hidden) | **1.75x** |
+| Combined savings/timestep | 587ms | 1264ms | 3.9ms |
+
+**Key findings**:
+- Fork 2 (RAD \|\| DIV_P1) is the highest-impact change — near-balanced branches give up to 1.91x on non-fire cases
+- Fork 1 (VFLUX \|\| COMB) only helps when combustion is active — fire cases see 1.25x
+- Predictor fork hides VFLUX+PMOM behind the larger WBC+DIV_P1_early critical path
+- Branch imbalance limits speedup: WallBCBlockOrch dominates predictor Branch B (sequential preprocessing)
+- All fork overheads (dispatch + join) are negligible (<10ms)
 
 ---
 
