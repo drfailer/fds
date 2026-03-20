@@ -5,15 +5,18 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/pred_fork_data.h"
 #include "../state/collector_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
+#include "../state/pred_fork_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/density_pred_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/pred_wall_div_kernel_task.h"
+#include "../task/pred_fork_tasks.h"
 #include "compute_viscosity_block_subgraph.h"
 #include "velocity_flux_block_subgraph.h"
 #include "../task/divergence_part2_kernel_task.h"
@@ -25,18 +28,24 @@
 #include "wallbc_block_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 #include "density_block_subgraph.h"
+#include "pred_fork_vflux_subgraph.h"
+#include "pred_fork_div_subgraph.h"
 
 /// Build the Predictor sub-graph.
 ///
-/// Implements the full predictor phase of the FDS time-stepping loop:
-///   PredStep1 -> DensityPred -> MESH_EXCHANGE(1) -> PredDivSetup -> HVAC+InitDiv ->
-///   WallBC -> PredWallDiv -> DivergenceExchange -> PredDivPart2 ->
+/// Implements the full predictor phase of the FDS time-stepping loop.
+///
+/// Non-CC_IBM (pipelined):
+///   PredStep1 -> MESH_EXCHANGE(1) -> HVAC+InitDiv -> DIV_P1_prefork -> Fork
+///     Branch A: VFLUX -> PART_MOM
+///     Branch B: WallBC -> DIV_P1_early (WORK_BRANCH=2)
+///   -> Join -> DIV_P1_late (WORK_BRANCH=2) -> DivExchange -> DivP2 ->
 ///   PressureIteration -> VelocityPredictor -> ChangeTimeStep ->
 ///   MESH_EXCHANGE(3) -> PredFinal -> PhaseTransition
 ///
-/// Optimizations vs original graph:
-///   - HVAC + InitDivIntegrals merged into single barrier task (eliminates 1 collector + 1 task)
-///   - PredFinal outputs BarrierData directly (eliminates PhaseTransCollector)
+/// CC_IBM (sequential):
+///   PredStep1 -> MESH_EXCHANGE(1) -> VFLUX -> HVAC+InitDiv -> WallBC ->
+///   PredWallDiv(PMOM+DIV_P1) -> DivExchange -> ... (unchanged)
 ///
 /// @param nmeshes Number of meshes
 /// @param tEnd Simulation end time (passed to ChangeTimeStep sub-graph)
@@ -64,30 +73,16 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // DensityPred: parallel DENSITY_KERNEL (mesh-level fallback)
     auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(kernelThreads);
 
-    // PredDivSetup: parallel VELOCITY_FLUX_KERNEL (+ sequential CC_VELOCITY_BC if CC_IBM)
-    // Block decomposition: if no Coriolis/patch/CTRL/wind/periodic, use K-block parallel
+    // Feature flags
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool canBlockFlux = fds_velocity_flux_can_block_decompose(1) != 0;
-    auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
-
-    // WallBC sub-graph: K-block decomposition or mesh-level fallback
     bool canBlockWallBC = fds_wall_bc_can_block_decompose() != 0;
-    auto predWallBCSubgraph = canBlockWallBC
-        ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
-        : buildWallBCSubgraph(nmeshes, kernelThreads);
-
-    // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 kernels
-    auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
 
     // PredDivPart2: parallel DIVERGENCE_PART_2_KERNEL
-    // Block decomposition: if non-CC_IBM, use K-block parallel
     bool canBlockDivP2 = fds_divergence_part_2_can_block_decompose() != 0 && numBlocks > 1;
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(kernelThreads);
 
     // VelocityPredictor: block-decomposed kernel
-    // CC_PROJECT_VELOCITY and WALL_VELOCITY_NO_GRADH are no-op tasks in the pipeline
-    // for non-CC_IBM / FFT respectively (checked in Fortran C wrapper).
-    // CHECK_STABILITY runs at mesh level after reassembly.
     auto velPredSubgraph = buildVelocityPredictorBlockSubgraph(
         blockThreads, numBlocks);
 
@@ -103,7 +98,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(1)");
     auto meshExchange1 = std::make_shared<MeshExchangeTask>(1, /*ccDensity=*/ccIBM);
 
-    // Merged: HVAC + InitDivIntegrals (eliminates PredInitDivCollector + InitDivTask)
     auto predHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "PredHvacCollector");
     auto hvacInitDivTask = std::make_shared<HvacInitDivTask>(1);
@@ -122,7 +116,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(3)");
     auto meshExchange3 = std::make_shared<MeshExchangeTask>(3, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
 
-    // PhaseTransition receives BarrierData directly from PredFinal (no collector needed)
     auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
     // --- Wire the sub-graph ---
@@ -131,7 +124,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // PredStep1: orchestrator (INSERT_ALL_PARTICLES) -> viscosity -> mass_fd -> Density
     if (canBlockVisc) {
-        // Block-decomposed viscosity -> separate mass_fd task
         auto predViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
             nmeshes, blockThreads, numBlocks);
         auto predMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
@@ -147,7 +139,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             subgraph->edges(densPredKernelTask, collector1SM);
         }
     } else {
-        // Mesh-level fallback: combined viscosity + mass_fd
         subgraph->edges(predStep1OrchSM, predStep1KernelTask);
         if (canBlockDensity) {
             auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
@@ -163,37 +154,70 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // MESH_EXCHANGE(1)
     subgraph->edges(collector1SM, meshExchange1);
 
-    // PredDivSetup: block-decomposed or mesh-level depending on feature flags
-    if (canBlockFlux) {
-        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
-        // CC_IBM handled internally: CC_VELOCITY_BC + CUTFACE_VELOCITIES in orchestrator,
-        // CC_VELOCITY_FLUX in collector
-        auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
-            nmeshes, blockThreads, numBlocks);
-        subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
-        subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
-    } else if (ccIBM) {
-        // CC_IBM with features preventing block decomposition: orchestrator + mesh-level kernel
-        auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
-        subgraph->edges(meshExchange1, predDivSetupOrchSM);
-        subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
-        subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
+    // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
+
+    if (!ccIBM) {
+        // Pipelined path: HVAC+InitDiv → DIV_P1_prefork → Fork → Join → DIV_P1_late
+        // Reorder: HVAC collects directly from MeshExchange(1) (safe: HVAC ⊥ VFLUX)
+        subgraph->edges(meshExchange1, predHvacCollectorSM);
+        subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
+
+        auto divP1PreforkTask = std::make_shared<DivP1PreforkTask>(kernelThreads);
+        subgraph->edges(hvacInitDivTask, divP1PreforkTask);
+
+        // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early)
+        auto predForkSM = std::make_shared<hh::StateManager<
+            1, MeshData, PredForkVFluxWork, PredForkDivWork>>(
+            std::make_shared<PredForkState>(), "PredFork");
+        auto predForkVFluxSG = buildPredForkVFluxSubgraph(
+            nmeshes, kernelThreads, blockThreads, numBlocks, canBlockFlux);
+        auto predForkDivSG = buildPredForkDivSubgraph(
+            nmeshes, kernelThreads, blockThreads, numBlocks, canBlockWallBC);
+        auto predJoinSM = std::make_shared<hh::StateManager<
+            2, PredForkVFluxResult, PredForkDivResult, MeshData>>(
+            std::make_shared<PredJoinState>(), "PredJoin");
+
+        subgraph->edges(divP1PreforkTask, predForkSM);
+        // Branch A: VFLUX + PART_MOM
+        subgraph->edges(predForkSM, predForkVFluxSG);
+        subgraph->edges(predForkVFluxSG, predJoinSM);
+        // Branch B: WallBC + DIV_P1_early (WORK_BRANCH=2)
+        subgraph->edges(predForkSM, predForkDivSG);
+        subgraph->edges(predForkDivSG, predJoinSM);
+
+        // After join: DIV_P1_late (WORK_BRANCH=2, copies RTRM to WORK1 for DIV_P2)
+        auto divP1LateTask = std::make_shared<DivP1LateTask>(kernelThreads);
+        subgraph->edges(predJoinSM, divP1LateTask);
+        subgraph->edges(divP1LateTask, predDivCollectorSM);
     } else {
-        // Mesh-level fallback (Coriolis, patch velocity, etc.)
-        subgraph->edges(meshExchange1, predDivSetupKernelTask);
-        subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
+        // CC_IBM sequential path: VFLUX → HVAC+InitDiv → WallBC → PredWallDiv
+        if (canBlockFlux) {
+            auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
+                nmeshes, blockThreads, numBlocks);
+            subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
+            subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
+        } else {
+            auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+                std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
+            auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
+            subgraph->edges(meshExchange1, predDivSetupOrchSM);
+            subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
+            subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
+        }
+        subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
+
+        auto predWallBCSubgraph = canBlockWallBC
+            ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
+            : buildWallBCSubgraph(nmeshes, kernelThreads);
+        subgraph->edges(hvacInitDivTask, predWallBCSubgraph);
+
+        auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
+        subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
+        subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
     }
 
-    // Merged HVAC+InitDiv (was: hvac -> collect -> initDiv)
-    subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
+    // --- Common downstream: DivExchange → DivP2 → Pressure → VelPred → ... ---
 
-    // WallBC sub-graph (three-phase decomposition, reuses corrector pattern)
-    subgraph->edges(hvacInitDivTask, predWallBCSubgraph);
-
-    // PredWallDiv: parallel PARTICLE_MOMENTUM + DIV_PART_1 -> DivExchange
-    subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
-    subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
     subgraph->edges(predDivCollectorSM, predDivExchangeTask);
 
     // PredDivPart2 -> Pressure (block-decomposed or mesh-level)

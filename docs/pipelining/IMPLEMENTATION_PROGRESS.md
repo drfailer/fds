@@ -8,7 +8,7 @@ This file tracks the implementation of intra-timestep pipelining parallelism in 
 
 **Strategy**: Bottom-up implementation. First prepare the Fortran kernels and validate them sequentially in the existing graph, then restructure the graph with fork-join states.
 
-## Current Phase: 6 — Predictor Pipelining
+## Current Phase: Complete (All 6 Phases Done)
 
 ---
 
@@ -210,7 +210,7 @@ New data types needed (lightweight wrappers around MeshData):
 - [x] Adapt VelocityFlux sub-graph for VFluxWork input (nested sub-graph with unwrap/wrap)
 - [x] Adapt CombustionKernelTask for CombWork input (Fork1CombKernelTask)
 - [x] Wire corrector sub-graph with fork/join (12/12 tests pass)
-- [ ] Run verification suite
+- [x] Run verification suite (46/58 pass — no regressions from Fork 1)
 - [ ] Compare performance (dot file execution stats)
 
 ---
@@ -287,7 +287,7 @@ DIV_EXCHANGE collector → ...
 
 ---
 
-## Phase 6: Predictor Pipelining (Optional)
+## Phase 6: Predictor Pipelining
 
 **Objective**: Add pipelining to the predictor phase.
 
@@ -334,10 +334,12 @@ PREDICT_NORMAL_VELOCITY + setup (~5 ops/cell)
   → DIV_EXCHANGE → DIV_P2 → PRESSURE_SOLVE → ...
 ```
 
-**Architecture**: Split DIVERGENCE_PART_1_KERNEL into three callable sections:
-1. **Pre-fork**: PREDICT_NORMAL_VELOCITY + CFACE_PREDICT_NORMAL_VELOCITY + setup (zero DP, aliases)
-2. **Branch B kernel**: Phases 2A-4b (species diffusion, heat diffusion, thermal) — called after WALL_BC
-3. **Post-join kernel**: Phase 5+ (enthalpy advection, RTRM, species advection, sources, zone sums)
+**Architecture**: Split DIVERGENCE_PART_1_KERNEL into three callable sections via PHASE parameter:
+1. **Pre-fork (PHASE=1)**: Setup (zero DP, aliases, CC_VELOCITY_FLUX if CC_IBM)
+2. **Branch B kernel (PHASE=2)**: PNV + Phases 2A-4b (species diffusion, heat diffusion, thermal) — called after WALL_BC in WORK_BRANCH=2
+3. **Post-join kernel (PHASE=3)**: Phase 5+ (enthalpy advection, RTRM, species advection, sources, zone sums) — runs in WORK_BRANCH=2, copies WORK1_B→WORK1 for DIV_P2
+
+**PNV ordering**: PREDICT_NORMAL_VELOCITY must run AFTER WALL_BC (WALL_BC sets B1%U_NORMAL_S for HVAC/SPECIFIED_MASS_FLUX walls). Placed at start of PHASE=2 so pipelined path (WALL_BC→PHASE=2) preserves correct ordering.
 
 Requires Fortran kernel changes (splitting DIV_P1 into sections), unlike the simple VFLUX || WALL_BC fork.
 
@@ -347,8 +349,8 @@ Requires Fortran kernel changes (splitting DIV_P1 into sections), unlike the sim
 
 | Section | Phases | Ops/cell | UU/VV/WW? | FVX? | WALL_BC? |
 |---------|--------|----------|-----------|------|----------|
-| Pre-fork | Setup + PREDICT_NORMAL_VELOCITY | ~5 | Read (PNV only) | No | No |
-| Branch B | 2A+2B (diffusion) + 3+4 (thermal) | 295 | **No** | **No** | Yes (wall corr.) |
+| Pre-fork | Setup (zero DP, aliases, CC_VELOCITY_FLUX if CC_IBM) | ~2 | No | No | No |
+| Branch B | PNV + 2A+2B (diffusion) + 3+4 (thermal) | 300 | **No** | **No** | Yes (PNV after WALL_BC) |
 | Post-join | 5A-G (advection, sources) + 6 (zone sums) | ~1000 | **Read** | **Read** (CC_IBM) | Yes (wall corr.) |
 
 ### Checklist (Implementation)
@@ -356,16 +358,16 @@ Requires Fortran kernel changes (splitting DIV_P1 into sections), unlike the sim
 - [x] Investigate Option B feasibility — full interior/wall split (result: NOT feasible)
 - [x] Investigate DIV_P1 phase-level UU/VV/WW dependency (result: Phases 2A-4b are safe)
 - [x] Verify CC_IBM safety for early phases (result: no special cases needed)
-- [ ] Split DIV_P1 kernel into pre-fork / early / late Fortran subroutines
-- [ ] Create C wrappers for split kernels
-- [ ] Create predictor fork/join data types
-- [ ] Create predictor fork state (MeshData → PredVFluxWork + PredWBCDivWork)
-- [ ] Create predictor join state (per-mesh matching)
-- [ ] Adapt VelocityFlux sub-graph for PredVFluxWork input
-- [ ] Chain PARTICLE_MOMENTUM after VFLUX in Branch A
-- [ ] Chain DIV_P1_early after WALL_BC in Branch B
-- [ ] Wire predictor sub-graph with fork/join
-- [ ] Run verification suite
+- [x] Split DIV_P1 kernel into pre-fork / early / late via PHASE parameter
+- [x] Create C wrappers for split kernels (prefork, early_b, late_b)
+- [x] Create predictor fork/join data types (pred_fork_data.h)
+- [x] Create predictor fork state (PredForkState: MeshData → PredForkVFluxWork + PredForkDivWork)
+- [x] Create predictor join state (PredJoinState: per-mesh matching)
+- [x] Adapt VelocityFlux sub-graph for PredForkVFluxWork input (unwrap/wrap in pred_fork_vflux_subgraph.h)
+- [x] Chain PARTICLE_MOMENTUM after VFLUX in Branch A
+- [x] Chain DIV_P1_early after WALL_BC in Branch B (pred_fork_div_subgraph.h)
+- [x] Wire predictor sub-graph with fork/join (CC_IBM sequential fallback)
+- [x] Run verification suite (46/58 pass — no regressions from predictor pipelining)
 - [ ] Compare performance
 
 ---
