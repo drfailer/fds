@@ -8,7 +8,7 @@ This file tracks the implementation of intra-timestep pipelining parallelism in 
 
 **Strategy**: Bottom-up implementation. First prepare the Fortran kernels and validate them sequentially in the existing graph, then restructure the graph with fork-join states.
 
-## Current Phase: 5 — Corrector Fork 2 (RADIATION || DIV_P1)
+## Current Phase: 6 — Predictor Pipelining
 
 ---
 
@@ -274,15 +274,15 @@ DIV_EXCHANGE collector → ...
 
 ### Checklist
 
-- [ ] Create Fork 2 data types
-- [ ] Create Fork 2 state (with InitDiv orchestration)
-- [ ] Create Join 2 state
-- [ ] Create QR addition task
-- [ ] Adapt Radiation sub-graph for RadiationWork input
-- [ ] Adapt DIV_P1 task for DivP1Work input with SKIP_QR and WORK_BRANCH
-- [ ] Modify MeshExchange(2) to skip InitDiv (move to Fork 2 state)
-- [ ] Wire corrector sub-graph with Fork 2
-- [ ] Run verification suite
+- [x] Create Fork 2 data types (Fork2RadWork/Barrier, Fork2DivP1Work/Barrier)
+- [x] Create Fork 2 state (PipelineFork2State: collects N meshes, InitDiv, dispatches)
+- [x] Create Join 2 state (PipelineJoin2State: Fork2RadBarrier + Fork2DivP1Barrier → BarrierData)
+- [x] Create QR addition task (DivP1QRAdditionTask: WORK_BRANCH=2, after MeshExchange(2))
+- [x] Adapt Radiation sub-graph for Fork2RadWork input (unwrap/wrap pattern in pipeline_fork2_rad_subgraph.h)
+- [x] Create Branch D DIV_P1 task (Fork2DivP1KernelTask: SKIP_QR + WORK_BRANCH=2) + collector
+- [x] Modify MeshExchange(2) to skip InitDiv when !CC_IBM (initDiv=ccIBM conditional)
+- [x] Wire corrector sub-graph with Fork 2 (CC_IBM sequential fallback)
+- [x] Run verification suite (46/58 pass — no regressions from Fork 2)
 - [ ] Compare performance
 
 ---

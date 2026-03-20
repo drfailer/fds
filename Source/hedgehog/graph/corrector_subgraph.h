@@ -31,20 +31,26 @@
 #include "corr_radiation_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 #include "density_block_subgraph.h"
+#include "../data/pipeline_fork2_data.h"
+#include "../state/pipeline_fork2_state.h"
+#include "../task/pipeline_fork2_tasks.h"
+#include "pipeline_fork2_rad_subgraph.h"
 
 /// Build the Corrector sub-graph.
 ///
 /// Implements the full corrector phase of the FDS time-stepping loop:
 ///   CorrStep1 -> MESH_EXCHANGE(4) -> CorrDivSetup -> Combustion+HVAC ->
 ///   CorrCondens -> CorrParticle -> MESH_EXCHANGE(7) -> WallBC ->
-///   MESH_EXCHANGE(6) -> CorrRadiation -> MESH_EXCHANGE(2)+InitDiv ->
-///   CorrDivPart1 -> DivergenceExchange -> CorrDivPart2 -> PressureIteration ->
+///   MESH_EXCHANGE(6) -> Fork2(RADIATION || DIV_P1_noQR) -> MESH_EXCHANGE(2) ->
+///   QR_Addition -> DivergenceExchange -> CorrDivPart2 -> PressureIteration ->
 ///   VelocityCorrector -> MESH_EXCHANGE(6) -> CorrFinal
 ///
 /// Optimizations vs original graph:
 ///   - Combustion parallelized as kernel task, Soot+HVAC remains sequential barrier
 ///   - CorrRadiation outputs BarrierData directly (eliminates Collector(2))
-///   - MeshExchange(2) includes InitDivIntegrals (eliminates 1 collector + 1 task)
+///   - Fork 2: RADIATION || DIV_P1(SKIP_QR, WORK_BRANCH=2) concurrent execution
+///   - InitDivIntegrals in Fork2State; QR addition after MeshExchange(2)
+///   - CC_IBM falls back to sequential RADIATION -> DIV_P1 (WORK_BRANCH=2 incompatible)
 ///   - CorrFinal outputs BarrierData directly (eliminates TimestepCollector in parent)
 ///
 /// @param nmeshes Number of meshes
@@ -120,10 +126,11 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(6a)");
     auto meshExchange6a = std::make_shared<MeshExchangeTask>(6);
 
-    // Merged: MeshExchange(2) + InitDivIntegrals (eliminates CorrInitDivCollector + InitDivTask)
-    // CorrRadiation outputs BarrierData directly (eliminates Collector(2))
+    // MeshExchange(2): QR exchange after radiation.
+    // CC_IBM: sequential path keeps InitDiv in MeshExchange(2).
+    // Non-CC_IBM: Fork2State handles InitDiv before dispatching branches.
     auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, /*ccDensity=*/false,
-                                                             /*ccEndStep=*/false, /*initDiv=*/true);
+                                                             /*ccEndStep=*/false, /*initDiv=*/ccIBM);
 
     auto corrDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "CorrDivCollector");
@@ -211,15 +218,42 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(wallBCSubgraph, collector6aSM);
     subgraph->edges(collector6aSM, meshExchange6a);
 
-    // CorrRadiation sub-graph (outputs BarrierData directly)
-    subgraph->edges(meshExchange6a, corrRadiationSubgraph);
+    // --- Fork 2: RADIATION || DIV_P1 (or sequential fallback for CC_IBM) ---
+    if (ccIBM) {
+        // CC_IBM: sequential path (WORK_BRANCH=2 incompatible with CC divergence code)
+        subgraph->edges(meshExchange6a, corrRadiationSubgraph);
+        subgraph->edges(corrRadiationSubgraph, meshExchange2);
+        subgraph->edges(meshExchange2, corrDivP1KernelTask);
+        subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
+    } else {
+        // Fork 2: RADIATION (WORK_BRANCH=1) || DIV_P1 (SKIP_QR, WORK_BRANCH=2)
+        auto fork2SM = std::make_shared<hh::StateManager<
+            1, MeshData, Fork2RadWork, Fork2DivP1Work>>(
+            std::make_shared<PipelineFork2State>(nmeshes), "Fork2");
+        auto fork2RadSubgraph = buildFork2RadSubgraph(nmeshes, kernelThreads);
+        auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(kernelThreads);
+        auto fork2DivP1CollSM = std::make_shared<hh::StateManager<
+            1, Fork2DivP1Work, Fork2DivP1Barrier>>(
+            std::make_shared<Fork2DivP1CollectorState>(nmeshes),
+            "Fork2DivP1Collector");
+        auto join2SM = std::make_shared<hh::StateManager<
+            2, Fork2RadBarrier, Fork2DivP1Barrier, BarrierData>>(
+            std::make_shared<PipelineJoin2State>(), "Join2");
+        auto qrAddTask = std::make_shared<DivP1QRAdditionTask>(kernelThreads);
 
-    // MeshExchange(2) + InitDivIntegrals merged (CorrRadiation -> BarrierData -> MeshExchange2+InitDiv)
-    subgraph->edges(corrRadiationSubgraph, meshExchange2);
-
-    // CorrDivPart1 -> DivExchange
-    subgraph->edges(meshExchange2, corrDivP1KernelTask);
-    subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
+        subgraph->edges(meshExchange6a, fork2SM);
+        // Branch C: Radiation
+        subgraph->edges(fork2SM, fork2RadSubgraph);
+        subgraph->edges(fork2RadSubgraph, join2SM);
+        // Branch D: DIV_P1 (SKIP_QR, WORK_BRANCH=2)
+        subgraph->edges(fork2SM, fork2DivP1Task);
+        subgraph->edges(fork2DivP1Task, fork2DivP1CollSM);
+        subgraph->edges(fork2DivP1CollSM, join2SM);
+        // After join: MeshExchange(2) -> QR addition -> collector
+        subgraph->edges(join2SM, meshExchange2);
+        subgraph->edges(meshExchange2, qrAddTask);
+        subgraph->edges(qrAddTask, corrDivCollectorSM);
+    }
     subgraph->edges(corrDivCollectorSM, corrDivExchangeTask);
 
     // CorrDivPart2 -> Pressure (block-decomposed or mesh-level)
