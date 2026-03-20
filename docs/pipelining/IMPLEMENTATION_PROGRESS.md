@@ -440,6 +440,43 @@ Measured with dot file execution stats on 3 test cases:
 - **Verification suite**: 46/58 pass (no regressions)
 - **Dot files**: All merged nodes show routine names + timing stats
 
+### Performance Analysis (dot file stats)
+
+Parser: `test_cases/parse_dot_stats.py` — extracts per-node timing from Hedgehog dot files.
+
+**Cross-test overhead comparison** (from `parse_dot_stats.py` on 16 test runs):
+
+| Test Case | Graph(s) | Barrier(ms) | Orch(ms) | Coll(ms) | Overhead% | Kernel% |
+|---|---|---|---|---|---|---|
+| activate_sprinklers (1M) | 22.8 | 2064 | 1196 | 907 | 18.3% | 81.7% |
+| bucket_test_1_short (1M) | 21.3 | 1214 | 1766 | 1366 | 22.9% | 77.1% |
+| dancing_eddies_4mesh | 5.3 | 598 | 545 | 288 | 26.8% | 73.2% |
+| dancing_eddies_ulmat | 16.4 | 2258 | 1636 | 885 | 29.2% | 70.8% |
+| fire_const_gamma_2mesh | 30.9 | 1660 | 1406 | 3017 | 24.2% | 75.8% |
+| species_props_5mesh | 0.1 | 14 | 2 | 3 | 18.6% | 81.4% |
+
+**Key findings**:
+- Barrier states account for 5-14% of graph time (dominated by Pressure + TimestepDump + RemoveMove)
+- Orchestrator dispatch overhead: 4-10% (dominated by WallBCBlockOrch sequential work)
+- Collector gather overhead: 4-10% (dominated by CorrFinalBlockColl and DensityCollector)
+- Total state overhead: 18-29% → 71-82% of time in parallel kernel execution
+- Merging collector+barrier eliminated ~16 inter-node queues per graph
+
+**Block vs NoBlock vs Sequential** (bucket_test_1_short, single mesh):
+
+| Variant | Graph(s) | Overhead% | Speedup |
+|---|---|---|---|
+| block (merged barriers) | 21.3 | 22.9% | 1.54x |
+| noblock | 24.3 | 20.2% | 1.35x |
+| sequential (1 thread) | 32.9 | 14.4% | 1.00x |
+
+**Top overhead hotspots** (activate_sprinklers, 1 mesh, 1807 timesteps):
+1. RemoveMove (barrier): 886ms — REMOVE_PARTICLES + MOVE_PARTICLES
+2. WallBCBlockOrch (orchestrator): 501ms — sequential wall setup before parallel kernels
+3. TimestepDump (barrier): 395ms — all dump/diagnostic I/O
+4. CorrPressure (barrier): 377ms — pressure iteration
+5. CorrFinalBlockColl (collector): 373ms — corrector final gather
+
 ---
 
 ## Summary
