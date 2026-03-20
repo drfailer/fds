@@ -392,6 +392,56 @@ Measured with dot file execution stats on 3 test cases:
 
 ---
 
+## Phase 7: Sequential Node Merging
+
+**Objective**: Reduce Hedgehog overhead by merging sequential collector+barrier pairs into single BarrierState nodes. Add routine profiling and listing via `extraPrintingInformation()`.
+
+### Changes
+
+**New file**: `state/barrier_state.h` — Generic `BarrierState` + `BarrierStateManager` template
+- Collects N MeshData, runs a `std::function` callback, re-emits N MeshData
+- Built-in timing accumulator (total + average per invocation)
+- `extraPrintingInformation()` shows routine names and timing stats in dot files
+
+**Predictor sub-graph** — 5 collector+barrier pairs merged:
+- [x] Collector(1) + MeshExchange(1) → BarrierState
+- [x] PredHvacCollector + HvacInitDivTask → BarrierState
+- [x] PredDivCollector + DivergenceExchangeTask → BarrierState
+- [x] PredPressureCollector + PressureIterationTask → BarrierState (sequential pressure path)
+- [x] Collector(3) + MeshExchange(3) → BarrierState
+
+**Corrector sub-graph** — 7 collector+barrier pairs merged:
+- [x] Collector(4) + MeshExchange(4) → BarrierState
+- [x] SootHvacCollector + SootHvacTask → BarrierState
+- [x] ParticleRemoveMoveCollector + RemoveMoveParticlesTask → BarrierState
+- [x] Collector(7) + MeshExchange(7) → BarrierState
+- [x] Collector(6a) + MeshExchange(6a) → BarrierState
+- [x] CorrDivCollector + DivergenceExchangeTask → BarrierState
+- [x] CorrPressureCollector + PressureIterationTask → BarrierState (sequential pressure path)
+- [x] Collector(6b) + MeshExchange(6b) → BarrierState
+
+**Main graph** — 3 nodes merged into 1:
+- [x] TimestepGlobalTask + DumpMeshOutputsTask + TimestepDumpCollector → TimestepDumpState
+
+**Kept as-is** (no collector to merge):
+- PhaseTransitionTask (receives BarrierData from PredFinal sub-graph)
+- MeshExchange(2) (receives BarrierData from CorrRadiation/Join2)
+- ChangeTimeStepCollector (outputs BarrierData for ChangeTimeStep sub-graph input)
+- PredPressureCollector / CorrPressureCollector (parallel pressure sub-graph input)
+
+**Cleanup**:
+- [x] Removed 10 barrier task classes from `barrier_tasks.h`
+- [x] Added `extraPrintingInformation()` to remaining PhaseTransitionTask and MeshExchangeTask
+- [x] `timestep_tasks.h` now dead code (TimestepGlobalTask + DumpMeshOutputsTask absorbed)
+
+### Results
+- **Node reduction**: ~16 fewer graph nodes, ~16 fewer inter-node queues
+- **Custom tests**: 12/12 pass
+- **Verification suite**: 46/58 pass (no regressions)
+- **Dot files**: All merged nodes show routine names + timing stats
+
+---
+
 ## Summary
 
 | Phase | Description | Fortran Changes | Graph Changes | WORK Branch | Expected Speedup |

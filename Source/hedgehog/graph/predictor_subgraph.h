@@ -7,6 +7,7 @@
 #include "../data/barrier_data.h"
 #include "../data/pred_fork_data.h"
 #include "../state/collector_state.h"
+#include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/pred_fork_state.h"
@@ -92,29 +93,39 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // ChangeTimeStep sub-graph (CFL retry loop)
     auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(tEnd, nmeshes, kernelThreads);
 
-    // --- Barrier tasks ---
+    // --- Merged barrier states (replace collector + barrier task pairs) ---
 
-    auto collector1SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(1)");
-    auto meshExchange1 = std::make_shared<MeshExchangeTask>(1, /*ccDensity=*/ccIBM);
+    auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
+        "CC_DENSITY\\nMESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
+        [ccIBM](auto& meshes) {
+            if (ccIBM) { fds_cc_density(meshes[0]->t, meshes[0]->dt); }
+            fds_mesh_exchange(1);
+            fds_exchange_inserted_particles();
+        });
 
-    auto predHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PredHvacCollector");
-    auto hvacInitDivTask = std::make_shared<HvacInitDivTask>(1);
+    auto hvacInitDivSM = makeBarrierSM(nmeshes, "Hvac+InitDiv",
+        "HVAC_CALC\\nINITIALIZE_DIVERGENCE_INTEGRALS",
+        [](auto& meshes) {
+            fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
+            fds_initialize_divergence_integrals();
+        });
 
-    auto predDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PredDivCollector");
-    auto predDivExchangeTask = std::make_shared<DivergenceExchangeTask>(/*corrector=*/false);
-
-    auto predPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PredPressureCollector");
+    auto predDivExchangeSM = makeBarrierSM(nmeshes, "PredDivExchange",
+        "EXCHANGE_DIVERGENCE_INFO\\nGLOBAL_MATRIX_REASSIGN",
+        [](auto& meshes) {
+            fds_exchange_divergence_info();
+            fds_global_matrix_reassign(0);
+        });
 
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
 
-    auto collector3SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(3)");
-    auto meshExchange3 = std::make_shared<MeshExchangeTask>(3, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
+    auto meshExchange3SM = makeBarrierSM(nmeshes, "MeshExchange(3)",
+        "CC_END_STEP\\nMESH_EXCHANGE(3)",
+        [ccIBM](auto& meshes) {
+            if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
+            fds_mesh_exchange(3);
+        });
 
     auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
@@ -133,10 +144,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
                 nmeshes, blockThreads, numBlocks);
             subgraph->edges(predMassFDKernelTask, predDensityBlockSubgraph);
-            subgraph->edges(predDensityBlockSubgraph, collector1SM);
+            subgraph->edges(predDensityBlockSubgraph, meshExchange1SM);
         } else {
             subgraph->edges(predMassFDKernelTask, densPredKernelTask);
-            subgraph->edges(densPredKernelTask, collector1SM);
+            subgraph->edges(densPredKernelTask, meshExchange1SM);
         }
     } else {
         subgraph->edges(predStep1OrchSM, predStep1KernelTask);
@@ -144,26 +155,21 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
                 nmeshes, blockThreads, numBlocks);
             subgraph->edges(predStep1KernelTask, predDensityBlockSubgraph);
-            subgraph->edges(predDensityBlockSubgraph, collector1SM);
+            subgraph->edges(predDensityBlockSubgraph, meshExchange1SM);
         } else {
             subgraph->edges(predStep1KernelTask, densPredKernelTask);
-            subgraph->edges(densPredKernelTask, collector1SM);
+            subgraph->edges(densPredKernelTask, meshExchange1SM);
         }
     }
-
-    // MESH_EXCHANGE(1)
-    subgraph->edges(collector1SM, meshExchange1);
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
     if (!ccIBM) {
-        // Pipelined path: HVAC+InitDiv → DIV_P1_prefork → Fork → Join → DIV_P1_late
-        // Reorder: HVAC collects directly from MeshExchange(1) (safe: HVAC ⊥ VFLUX)
-        subgraph->edges(meshExchange1, predHvacCollectorSM);
-        subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
+        // Pipelined path: HVAC+InitDiv -> DIV_P1_prefork -> Fork -> Join -> DIV_P1_late
+        subgraph->edges(meshExchange1SM, hvacInitDivSM);
 
         auto divP1PreforkTask = std::make_shared<DivP1PreforkTask>(kernelThreads);
-        subgraph->edges(hvacInitDivTask, divP1PreforkTask);
+        subgraph->edges(hvacInitDivSM, divP1PreforkTask);
 
         // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early)
         auto predForkSM = std::make_shared<hh::StateManager<
@@ -188,71 +194,76 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         // After join: DIV_P1_late (WORK_BRANCH=2, copies RTRM to WORK1 for DIV_P2)
         auto divP1LateTask = std::make_shared<DivP1LateTask>(kernelThreads);
         subgraph->edges(predJoinSM, divP1LateTask);
-        subgraph->edges(divP1LateTask, predDivCollectorSM);
+        subgraph->edges(divP1LateTask, predDivExchangeSM);
     } else {
-        // CC_IBM sequential path: VFLUX → HVAC+InitDiv → WallBC → PredWallDiv
+        // CC_IBM sequential path: VFLUX -> HVAC+InitDiv -> WallBC -> PredWallDiv
         if (canBlockFlux) {
             auto predDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
                 nmeshes, blockThreads, numBlocks);
-            subgraph->edges(meshExchange1, predDivSetupBlockSubgraph);
-            subgraph->edges(predDivSetupBlockSubgraph, predHvacCollectorSM);
+            subgraph->edges(meshExchange1SM, predDivSetupBlockSubgraph);
+            subgraph->edges(predDivSetupBlockSubgraph, hvacInitDivSM);
         } else {
             auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
                 std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
             auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
-            subgraph->edges(meshExchange1, predDivSetupOrchSM);
+            subgraph->edges(meshExchange1SM, predDivSetupOrchSM);
             subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
-            subgraph->edges(predDivSetupKernelTask, predHvacCollectorSM);
+            subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
         }
-        subgraph->edges(predHvacCollectorSM, hvacInitDivTask);
 
         auto predWallBCSubgraph = canBlockWallBC
             ? buildWallBCBlockSubgraph(nmeshes, blockThreads, numBlocks)
             : buildWallBCSubgraph(nmeshes, kernelThreads);
-        subgraph->edges(hvacInitDivTask, predWallBCSubgraph);
+        subgraph->edges(hvacInitDivSM, predWallBCSubgraph);
 
         auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(kernelThreads);
         subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
-        subgraph->edges(predWallDivKernelTask, predDivCollectorSM);
+        subgraph->edges(predWallDivKernelTask, predDivExchangeSM);
     }
 
-    // --- Common downstream: DivExchange → DivP2 → Pressure → VelPred → ... ---
+    // --- Common downstream: DivExchange -> DivP2 -> Pressure -> VelPred -> ... ---
 
-    subgraph->edges(predDivCollectorSM, predDivExchangeTask);
+    // Helper lambda to wire from DivP2 output through pressure to velPredSubgraph
+    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
+    auto wirePressure = [&](auto lastDivP2Node) {
+        if (useParallelPressure) {
+            auto predPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+                std::make_shared<CollectorState>(nmeshes), "PredPressureCollector");
+            auto predPressureSubgraph = buildPressureIterationSubgraph(
+                tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal,
+                fds_get_pres_flag());
+            subgraph->edges(lastDivP2Node, predPressureCollectorSM);
+            subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
+            subgraph->edges(predPressureSubgraph, velPredSubgraph);
+        } else {
+            auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
+                "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
+                [](auto& meshes) {
+                    fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
+                    fds_init_change_time_step(meshes[0]->dt);
+                });
+            subgraph->edges(lastDivP2Node, predPressureSM);
+            subgraph->edges(predPressureSM, velPredSubgraph);
+        }
+    };
 
-    // PredDivPart2 -> Pressure (block-decomposed or mesh-level)
     if (canBlockDivP2) {
         auto predDivP2BlockSubgraph = buildDivergencePart2BlockSubgraph(
             nmeshes, blockThreads, numBlocks);
-        subgraph->edges(predDivExchangeTask, predDivP2BlockSubgraph);
-        subgraph->edges(predDivP2BlockSubgraph, predPressureCollectorSM);
+        subgraph->edges(predDivExchangeSM, predDivP2BlockSubgraph);
+        wirePressure(predDivP2BlockSubgraph);
     } else {
-        subgraph->edges(predDivExchangeTask, predDivP2KernelTask);
-        subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
-    }
-
-    // Pressure iteration: parallel sub-graph or sequential fallback
-    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
-    if (useParallelPressure) {
-        auto predPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, kernelThreads, /*predictor=*/true, termSignal,
-            fds_get_pres_flag());
-        subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
-        subgraph->edges(predPressureSubgraph, velPredSubgraph);
-    } else {
-        auto predPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/true);
-        subgraph->edges(predPressureCollectorSM, predPressureTask);
-        subgraph->edges(predPressureTask, velPredSubgraph);
+        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
+        wirePressure(predDivP2KernelTask);
     }
 
     // VelocityPredictor -> ChangeTimeStep
     subgraph->edges(velPredSubgraph, changeTimeStepCollectorSM);
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
-    subgraph->edges(changeTimeStepSubgraph, collector3SM);
-    subgraph->edges(collector3SM, meshExchange3);
+    subgraph->edges(changeTimeStepSubgraph, meshExchange3SM);
 
     // PredFinal (outputs BarrierData) -> PhaseTransition (no collector needed)
-    subgraph->edges(meshExchange3, predFinalSubgraph);
+    subgraph->edges(meshExchange3SM, predFinalSubgraph);
     subgraph->edges(predFinalSubgraph, phaseTransTask);
 
     subgraph->outputs(phaseTransTask);

@@ -2,7 +2,10 @@
 #define TIMESTEP_STATE_H
 
 #include <hedgehog/hedgehog.h>
+#include <chrono>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
@@ -71,64 +74,108 @@ public:
     }
 };
 
-/// Collects N MeshData tokens after per-mesh dump I/O, then runs
-/// global finalization (DUMP_GLOBAL_OUTPUTS, WRITE_STRINGS, WRITE_DIAGNOSTICS,
-/// STOP_CHECK) and decides whether the simulation is done.
+/// Merged timestep dump state: replaces TimestepGlobalTask + DumpMeshOutputsTask
+/// + TimestepDumpCollector with a single BarrierData -> BarrierData state.
 ///
-/// Emits BarrierData with done/newDt/newIcyc for the downstream
-/// TimestepLoopState to route.
-class TimestepDumpCollector : public hh::AbstractState<1, MeshData, BarrierData> {
+/// Receives BarrierData from Corrector, performs:
+///   1. Global pre-dump ops (SET_DIAGNOSTICS, EXCHANGE_GLOBAL_OUTPUTS, UPDATE_CONTROLS)
+///   2. Per-mesh dump I/O (DUMP_MESH_OUTPUTS, UPDATE_GLOBAL_OUTPUTS)
+///   3. Global post-dump ops (DUMP_GLOBAL_OUTPUTS, WRITE_STRINGS, WRITE_DIAGNOSTICS, STOP_CHECK)
+///   4. Termination decision (t >= tEnd or STOP_STATUS)
+/// Emits BarrierData with done/newDt/newIcyc for TimestepLoopState.
+class TimestepDumpState : public hh::AbstractState<1, BarrierData, BarrierData> {
 public:
-    explicit TimestepDumpCollector(int nmeshes, double tEnd,
-                                   std::shared_ptr<int> icyc)
-        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)),
-          nmOffset_(fds_get_lower_mesh_index()) {
-        collected_.resize(nmeshes, nullptr);
+    explicit TimestepDumpState(int nmeshes, double tEnd)
+        : nmeshes_(nmeshes), tEnd_(tEnd) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        auto t0 = std::chrono::steady_clock::now();
+
+        double t = data->t();
+        double dt = data->dt();
+
+        // Phase 1: Global pre-dump operations
+        fds_set_diagnostics(icyc_, t, dt);
+        fds_exchange_global_outputs(t, dt);
+        fds_update_controls(t, dt);
+
+        // Phase 2: Per-mesh dump I/O
+        for (auto &md : data->meshes) {
+            fds_dump_mesh_outputs(md->t, md->dt, md->nm);
+        }
+
+        // Phase 3: Global post-dump finalization
+        fds_dump_global_outputs(t, dt);
+        fds_write_strings(t, dt);
+        fds_write_diagnostics(t, dt);
+        fds_stop_check(1, t, dt);
+
+        // Phase 4: Build output with termination decision
+        auto bd = std::make_shared<BarrierData>();
+        int stopStatus = fds_get_stop_status();
+
+        if (t >= tEnd_ || stopStatus != 0) {
+            bd->done = true;
+        } else {
+            bd->done = false;
+            fds_set_predictor(1);
+            fds_set_first_pass(1);
+            bd->newDt = fds_adjust_dt(t, dt);
+            ++icyc_;
+            fds_set_icyc(icyc_);
+            bd->newIcyc = icyc_;
+        }
+
+        bd->meshes = std::move(data->meshes);
+
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+
+        this->addResult(bd);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
-        collected_[data->nm - nmOffset_] = data;
-        ++count_;
-
-        if (count_ == nmeshes_) {
-            double t = collected_[0]->t;
-            double dt = collected_[0]->dt;
-
-            // Global finalization (must run after all per-mesh dumps)
-            fds_dump_global_outputs(t, dt);
-            fds_write_strings(t, dt);
-            fds_write_diagnostics(t, dt);
-            fds_stop_check(1, t, dt);
-
-            auto bd = std::make_shared<BarrierData>();
-            int stopStatus = fds_get_stop_status();
-
-            if (t >= tEnd_ || stopStatus != 0) {
-                bd->done = true;
-            } else {
-                bd->done = false;
-                fds_set_predictor(1);
-                fds_set_first_pass(1);
-                bd->newDt = fds_adjust_dt(t, dt);
-                (*icyc_)++;
-                fds_set_icyc(*icyc_);
-                bd->newIcyc = *icyc_;
-            }
-
-            bd->meshes = std::move(collected_);
-            collected_.resize(nmeshes_, nullptr);
-            count_ = 0;
-            this->addResult(bd);
-        }
+    [[nodiscard]] std::string info() const {
+        std::ostringstream oss;
+        oss << "SET_DIAGNOSTICS\\n"
+            << "EXCHANGE_GLOBAL_OUTPUTS\\n"
+            << "UPDATE_CONTROLS\\n"
+            << "DUMP_MESH_OUTPUTS\\n"
+            << "DUMP_GLOBAL_OUTPUTS\\n"
+            << "WRITE_STRINGS\\n"
+            << "WRITE_DIAGNOSTICS\\n"
+            << "STOP_CHECK\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
     }
 
 private:
     int nmeshes_;
     double tEnd_;
-    std::shared_ptr<int> icyc_;
-    int nmOffset_;
-    int count_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    int icyc_ = 1;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+};
+
+/// StateManager wrapping TimestepDumpState, with extraPrintingInformation().
+class TimestepDumpStateManager
+    : public hh::StateManager<1, BarrierData, BarrierData> {
+public:
+    TimestepDumpStateManager(std::shared_ptr<TimestepDumpState> const &state,
+                             std::string const &name)
+        : hh::StateManager<1, BarrierData, BarrierData>(state, name) {}
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        this->state()->lock();
+        auto ret = std::dynamic_pointer_cast<TimestepDumpState>(
+            this->state())->info();
+        this->state()->unlock();
+        return ret;
+    }
 };
 
 /// Simple sink state for graph termination.

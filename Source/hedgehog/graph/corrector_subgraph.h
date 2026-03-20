@@ -6,6 +6,7 @@
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
 #include "../state/collector_state.h"
+#include "../state/barrier_state.h"
 #include "../state/div_setup_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
@@ -39,19 +40,11 @@
 /// Build the Corrector sub-graph.
 ///
 /// Implements the full corrector phase of the FDS time-stepping loop:
-///   CorrStep1 -> MESH_EXCHANGE(4) -> CorrDivSetup -> Combustion+HVAC ->
+///   CorrStep1 -> MESH_EXCHANGE(4) -> Fork1(VFLUX || COMB) -> Soot+HVAC ->
 ///   CorrCondens -> CorrParticle -> MESH_EXCHANGE(7) -> WallBC ->
-///   MESH_EXCHANGE(6) -> Fork2(RADIATION || DIV_P1_noQR) -> MESH_EXCHANGE(2) ->
-///   QR_Addition -> DivergenceExchange -> CorrDivPart2 -> PressureIteration ->
-///   VelocityCorrector -> MESH_EXCHANGE(6) -> CorrFinal
-///
-/// Optimizations vs original graph:
-///   - Combustion parallelized as kernel task, Soot+HVAC remains sequential barrier
-///   - CorrRadiation outputs BarrierData directly (eliminates Collector(2))
-///   - Fork 2: RADIATION || DIV_P1(SKIP_QR, WORK_BRANCH=2) concurrent execution
-///   - InitDivIntegrals in Fork2State; QR addition after MeshExchange(2)
-///   - CC_IBM falls back to sequential RADIATION -> DIV_P1 (WORK_BRANCH=2 incompatible)
-///   - CorrFinal outputs BarrierData directly (eliminates TimestepCollector in parent)
+///   MESH_EXCHANGE(6a) -> Fork2(RADIATION || DIV_P1_noQR) -> MESH_EXCHANGE(2) ->
+///   QR_Addition -> DivExchange -> CorrDivPart2 -> PressureIteration ->
+///   VelocityCorrector -> MESH_EXCHANGE(6b) -> CorrFinal
 ///
 /// @param nmeshes Number of meshes
 /// @param tEnd Simulation end time (for pressure iteration sub-graph termination)
@@ -79,23 +72,15 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Sub-graphs with orchestrators (sequential pre-processing required) ---
 
-    // CorrDivSetup: parallel kernel (+ sequential CC_VELOCITY_BC if CC_IBM)
-    // Block decomposition: if no Coriolis/patch/CTRL/wind/periodic, use K-block parallel
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool canBlockFlux = fds_velocity_flux_can_block_decompose(1) != 0;
+
     // CorrParticle: parallel MASS_ENERGY -> sequential REMOVE+MOVE -> parallel MOMENTUM
     auto particleMassEnergyKernelTask = std::make_shared<ParticleMassEnergyKernelTask>(kernelThreads);
-    auto particleRemoveMoveCollSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "ParticleRemoveMoveCollector");
-    auto particleRemoveMoveTask = std::make_shared<RemoveMoveParticlesTask>();
-    // ParticleMomentum: always block-decomposed (K-blocks are particle-safe)
     auto partMomSubgraph = buildParticleMomentumBlockSubgraph(
         blockThreads, numBlocks);
 
     // VelocityCorrector: block-decomposed kernel
-    // CC_PROJECT_VELOCITY and WALL_VELOCITY_NO_GRADH are no-op tasks in the pipeline
-    // for non-CC_IBM / FFT respectively (checked in Fortran C wrapper).
-    // CHECK_DIVERGENCE_KERNEL runs at mesh level after block reassembly.
     auto velCorrSubgraph = buildVelocityCorrectorBlockSubgraph(
         blockThreads, numBlocks);
 
@@ -108,41 +93,61 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, kernelThreads);
     auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, kernelThreads, blockThreads, numBlocks);
 
-    // --- Barrier tasks ---
+    // --- Merged barrier states (replace collector + barrier task pairs) ---
 
-    auto collector4SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(4)");
-    auto meshExchange4 = std::make_shared<MeshExchangeTask>(4, /*ccDensity=*/ccIBM);
+    auto meshExchange4SM = makeBarrierSM(nmeshes, "MeshExchange(4)",
+        "CC_DENSITY\\nMESH_EXCHANGE(4)",
+        [ccIBM](auto& meshes) {
+            if (ccIBM) { fds_cc_density(meshes[0]->t, meshes[0]->dt); }
+            fds_mesh_exchange(4);
+        });
 
-    auto sootHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "SootHvacCollector");
-    auto sootHvacTask = std::make_shared<SootHvacTask>(1);
+    auto sootHvacSM = makeBarrierSM(nmeshes, "Soot+Hvac",
+        "SOOT_OXIDATION_LOOP\\nHVAC_CALC",
+        [](auto& meshes) {
+            fds_soot_oxidation_loop(meshes[0]->dt);
+            fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
+        });
 
-    auto collector7SM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(7)");
-    auto meshExchange7 = std::make_shared<MeshExchangeTask>(7);
+    auto removeMoveSM = makeBarrierSM(nmeshes, "RemoveMove",
+        "REMOVE_PARTICLES\\nMOVE_PARTICLES",
+        [](auto& meshes) {
+            for (auto &md : meshes) {
+                fds_remove_particles(md->t, md->nm);
+                fds_move_particles(md->t, md->dt, md->nm);
+            }
+        });
 
-    auto collector6aSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(6a)");
-    auto meshExchange6a = std::make_shared<MeshExchangeTask>(6);
+    auto meshExchange7SM = makeBarrierSM(nmeshes, "MeshExchange(7)",
+        "MESH_EXCHANGE(7)",
+        [](auto& meshes) { fds_mesh_exchange(7); });
 
-    // MeshExchange(2): QR exchange after radiation.
+    auto meshExchange6aSM = makeBarrierSM(nmeshes, "MeshExchange(6a)",
+        "MESH_EXCHANGE(6)",
+        [](auto& meshes) { fds_mesh_exchange(6); });
+
+    // MeshExchange(2): standalone BarrierData->MeshData task (no collector to merge).
     // CC_IBM: sequential path keeps InitDiv in MeshExchange(2).
     // Non-CC_IBM: Fork2State handles InitDiv before dispatching branches.
     auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, /*ccDensity=*/false,
                                                              /*ccEndStep=*/false, /*initDiv=*/ccIBM);
 
-    auto corrDivCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrDivCollector");
-    auto corrDivExchangeTask = std::make_shared<DivergenceExchangeTask>(/*corrector=*/true);
+    auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
+        "EXCHANGE_DIVERGENCE_INFO\\nRTE_SOURCE_CORRECTION\\nGLOBAL_MATRIX_REASSIGN",
+        [](auto& meshes) {
+            fds_exchange_divergence_info();
+            fds_rte_source_correction();
+            fds_global_matrix_reassign(0);
+        });
 
-    auto corrPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrPressureCollector");
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
-    auto collector6bSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "Collector(6b)");
-    auto meshExchange6b = std::make_shared<MeshExchangeTask>(6, /*ccDensity=*/false, /*ccEndStep=*/ccIBM);
+    auto meshExchange6bSM = makeBarrierSM(nmeshes, "MeshExchange(6b)",
+        "CC_END_STEP\\nMESH_EXCHANGE(6)",
+        [ccIBM](auto& meshes) {
+            if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
+            fds_mesh_exchange(6);
+        });
 
     // --- Wire the sub-graph ---
 
@@ -158,11 +163,11 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
                 nmeshes, blockThreads, numBlocks);
             subgraph->edges(corrMassFDKernelTask, corrDensityBlockSubgraph);
-            subgraph->edges(corrDensityBlockSubgraph, collector4SM);
+            subgraph->edges(corrDensityBlockSubgraph, meshExchange4SM);
         } else {
             auto corrMassFDDensityFallback = std::make_shared<DensityPredKernelTask>(kernelThreads);
             subgraph->edges(corrMassFDKernelTask, corrMassFDDensityFallback);
-            subgraph->edges(corrMassFDDensityFallback, collector4SM);
+            subgraph->edges(corrMassFDDensityFallback, meshExchange4SM);
         }
     } else {
         if (canBlockDensity) {
@@ -172,17 +177,15 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
                 nmeshes, blockThreads, numBlocks);
             subgraph->inputs(corrViscMassFDTask);
             subgraph->edges(corrViscMassFDTask, corrDensityBlockSubgraph);
-            subgraph->edges(corrDensityBlockSubgraph, collector4SM);
+            subgraph->edges(corrDensityBlockSubgraph, meshExchange4SM);
         } else {
             // Mesh-level fallback: combined viscosity + mass_fd + density
             subgraph->inputs(corrStep1KernelTask);
-            subgraph->edges(corrStep1KernelTask, collector4SM);
+            subgraph->edges(corrStep1KernelTask, meshExchange4SM);
         }
     }
-    subgraph->edges(collector4SM, meshExchange4);
 
     // --- Fork 1: VFLUX || COMBUSTION ---
-    // Both branches run concurrently after MeshExchange(4), join before SootHvac.
 
     auto fork1SM = std::make_shared<hh::StateManager<1, MeshData, Fork1VFluxWork, Fork1CombWork>>(
         std::make_shared<PipelineFork1State>(), "Fork1");
@@ -192,7 +195,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto join1SM = std::make_shared<hh::StateManager<2, Fork1VFluxResult, Fork1CombResult, MeshData>>(
         std::make_shared<PipelineJoin1State>(), "Join1");
 
-    subgraph->edges(meshExchange4, fork1SM);
+    subgraph->edges(meshExchange4SM, fork1SM);
     // Branch A: Fork1 -> VFLUX sub-graph -> Join1
     subgraph->edges(fork1SM, fork1VFluxSubgraph);
     subgraph->edges(fork1VFluxSubgraph, join1SM);
@@ -201,30 +204,26 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(fork1CombTask, join1SM);
 
     // After join: Soot+HVAC barrier
-    subgraph->edges(join1SM, sootHvacCollectorSM);
-    subgraph->edges(sootHvacCollectorSM, sootHvacTask);
+    subgraph->edges(join1SM, sootHvacSM);
 
     // CorrCondens -> CorrParticle: parallel MASS_ENERGY -> REMOVE+MOVE barrier -> parallel MOMENTUM
-    subgraph->edges(sootHvacTask, corrCondensKernelTask);
+    subgraph->edges(sootHvacSM, corrCondensKernelTask);
     subgraph->edges(corrCondensKernelTask, particleMassEnergyKernelTask);
-    subgraph->edges(particleMassEnergyKernelTask, particleRemoveMoveCollSM);
-    subgraph->edges(particleRemoveMoveCollSM, particleRemoveMoveTask);
-    subgraph->edges(particleRemoveMoveTask, partMomSubgraph);
-    subgraph->edges(partMomSubgraph, collector7SM);
-    subgraph->edges(collector7SM, meshExchange7);
+    subgraph->edges(particleMassEnergyKernelTask, removeMoveSM);
+    subgraph->edges(removeMoveSM, partMomSubgraph);
+    subgraph->edges(partMomSubgraph, meshExchange7SM);
 
     // WallBC sub-graph
-    subgraph->edges(meshExchange7, wallBCSubgraph);
-    subgraph->edges(wallBCSubgraph, collector6aSM);
-    subgraph->edges(collector6aSM, meshExchange6a);
+    subgraph->edges(meshExchange7SM, wallBCSubgraph);
+    subgraph->edges(wallBCSubgraph, meshExchange6aSM);
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential fallback for CC_IBM) ---
     if (ccIBM) {
         // CC_IBM: sequential path (WORK_BRANCH=2 incompatible with CC divergence code)
-        subgraph->edges(meshExchange6a, corrRadiationSubgraph);
+        subgraph->edges(meshExchange6aSM, corrRadiationSubgraph);
         subgraph->edges(corrRadiationSubgraph, meshExchange2);
         subgraph->edges(meshExchange2, corrDivP1KernelTask);
-        subgraph->edges(corrDivP1KernelTask, corrDivCollectorSM);
+        subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
     } else {
         // Fork 2: RADIATION (WORK_BRANCH=1) || DIV_P1 (SKIP_QR, WORK_BRANCH=2)
         auto fork2SM = std::make_shared<hh::StateManager<
@@ -241,7 +240,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             std::make_shared<PipelineJoin2State>(), "Join2");
         auto qrAddTask = std::make_shared<DivP1QRAdditionTask>(kernelThreads);
 
-        subgraph->edges(meshExchange6a, fork2SM);
+        subgraph->edges(meshExchange6aSM, fork2SM);
         // Branch C: Radiation
         subgraph->edges(fork2SM, fork2RadSubgraph);
         subgraph->edges(fork2RadSubgraph, join2SM);
@@ -249,41 +248,50 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         subgraph->edges(fork2SM, fork2DivP1Task);
         subgraph->edges(fork2DivP1Task, fork2DivP1CollSM);
         subgraph->edges(fork2DivP1CollSM, join2SM);
-        // After join: MeshExchange(2) -> QR addition -> collector
+        // After join: MeshExchange(2) -> QR addition -> DivExchange
         subgraph->edges(join2SM, meshExchange2);
         subgraph->edges(meshExchange2, qrAddTask);
-        subgraph->edges(qrAddTask, corrDivCollectorSM);
+        subgraph->edges(qrAddTask, corrDivExchangeSM);
     }
-    subgraph->edges(corrDivCollectorSM, corrDivExchangeTask);
 
-    // CorrDivPart2 -> Pressure (block-decomposed or mesh-level)
+    // --- Common downstream: DivExchange -> DivP2 -> Pressure -> VelCorr -> ... ---
+
+    // Helper lambda to wire from DivP2 output through pressure to velCorrSubgraph
+    auto wirePressure = [&](auto lastDivP2Node) {
+        if (useParallelPressure) {
+            auto corrPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+                std::make_shared<CollectorState>(nmeshes), "CorrPressureCollector");
+            auto corrPressureSubgraph = buildPressureIterationSubgraph(
+                tEnd, nmeshes, kernelThreads, /*predictor=*/false, termSignal,
+                fds_get_pres_flag());
+            subgraph->edges(lastDivP2Node, corrPressureCollectorSM);
+            subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
+            subgraph->edges(corrPressureSubgraph, velCorrSubgraph);
+        } else {
+            auto corrPressureSM = makeBarrierSM(nmeshes, "CorrPressure",
+                "PRESSURE_ITERATION",
+                [](auto& meshes) {
+                    fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
+                });
+            subgraph->edges(lastDivP2Node, corrPressureSM);
+            subgraph->edges(corrPressureSM, velCorrSubgraph);
+        }
+    };
+
     if (canBlockDivP2) {
         auto corrDivP2BlockSubgraph = buildDivergencePart2BlockSubgraph(
             nmeshes, blockThreads, numBlocks);
-        subgraph->edges(corrDivExchangeTask, corrDivP2BlockSubgraph);
-        subgraph->edges(corrDivP2BlockSubgraph, corrPressureCollectorSM);
+        subgraph->edges(corrDivExchangeSM, corrDivP2BlockSubgraph);
+        wirePressure(corrDivP2BlockSubgraph);
     } else {
-        subgraph->edges(corrDivExchangeTask, corrDivP2KernelTask);
-        subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
+        subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
+        wirePressure(corrDivP2KernelTask);
     }
 
-    // Pressure iteration: parallel sub-graph or sequential fallback
-    if (useParallelPressure) {
-        auto corrPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, kernelThreads, /*predictor=*/false, termSignal,
-            fds_get_pres_flag());
-        subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
-        subgraph->edges(corrPressureSubgraph, velCorrSubgraph);
-    } else {
-        auto corrPressureTask = std::make_shared<PressureIterationTask>(/*predictor=*/false);
-        subgraph->edges(corrPressureCollectorSM, corrPressureTask);
-        subgraph->edges(corrPressureTask, velCorrSubgraph);
-    }
-    subgraph->edges(velCorrSubgraph, collector6bSM);
-    subgraph->edges(collector6bSM, meshExchange6b);
+    subgraph->edges(velCorrSubgraph, meshExchange6bSM);
 
-    // CorrFinal sub-graph (outputs BarrierData directly — no external collector needed)
-    subgraph->edges(meshExchange6b, corrFinalSubgraph);
+    // CorrFinal sub-graph (outputs BarrierData directly)
+    subgraph->edges(meshExchange6bSM, corrFinalSubgraph);
 
     subgraph->outputs(corrFinalSubgraph);
 
