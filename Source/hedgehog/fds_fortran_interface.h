@@ -76,7 +76,9 @@ void fds_density_block_postprocessing(int nm, double t, double dt);
 int fds_density_can_block_decompose();
 void fds_divergence_part_1_kernel(int nm, double t, double dt);
 void fds_divergence_part_1_kernel_skip_qr(int nm, double t, double dt);
+void fds_divergence_part_1_kernel_skip_qr_b(int nm, double t, double dt);
 void fds_divergence_part_1_add_qr(int nm);
+void fds_divergence_part_1_add_qr_b(int nm);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
 void fds_velocity_flux_block_kernel(int nm, double t, double dt, int estimated, int k1, int k2);
 int fds_velocity_flux_can_block_decompose(int nm);
@@ -114,6 +116,8 @@ void fds_remove_particles(double t, int nm);
 void fds_move_particles(double t, double dt, int nm);
 void fds_compute_radiation(double t, int nm, int rad_iter);
 void fds_compute_radiation_kernel(int nm, double t, int rad_iter,
+    double* rad_q_sum_out, double* kfst4_sum_out);
+void fds_compute_radiation_kernel_b(int nm, double t, int rad_iter,
     double* rad_q_sum_out, double* kfst4_sum_out);
 void fds_accumulate_rad_sums(double rad_q_partial, double kfst4_partial);
 void fds_agglomeration(double dt, int nm);
