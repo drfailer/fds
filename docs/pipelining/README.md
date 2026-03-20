@@ -551,6 +551,203 @@ Ranked by estimated impact:
 
 **Not decomposable**: PARTICLE_MASS_ENERGY (particle-cell accumulation conflicts), MOVE_PARTICLES (mesh transfers, index invalidation), FFT solve (global transform).
 
+## Operation Reordering Analysis
+
+By examining data dependencies at the section level (not just routine level), we can identify reordering opportunities that extend the parallel windows beyond what routine-level pipelining achieves.
+
+### Key Discovery: Interior vs Wall Corrections
+
+Most DIV_P1 sections have a two-part structure:
+1. **Bulk interior loops** (triple I,J,K) -- read only mesh arrays (TMP, RHO, ZZ, MU) set by DENSITY/COMPUTE_VISCOSITY before the pipeline fork
+2. **Wall correction loops** (iterate over wall cells) -- read B1 boundary properties (TMP_F, RHO_F, ZZ_F, U_NORMAL_S, RHO_D_F) set by WALL_BC
+
+The interior computation does NOT need WALL_BC output. Only the wall correction loops depend on WALL_BC. This means DIV_P1's interior can start **before WALL_BC completes**.
+
+### WALL_BC Exact Writes (Predictor Phase)
+
+WALL_BC writes during the predictor:
+
+| Target | Arrays | Notes |
+|--------|--------|-------|
+| Ghost cells only | M%TMP, M%RHOS, M%ZZS at (BC%II, BC%JJ, BC%KK) | Never interior cells |
+| B1 structure | B1%TMP_F, B1%RHO_F, B1%ZZ_F, B1%RHO_D_F, B1%U_NORMAL_S, B1%Q_RAD_OUT, B1%Q_CON_F | Wall surface properties |
+| **NOT written** | M%Q, M%M_DOT_PPP, M%PBAR_S, M%D_PBAR_DT_S | Q only by COMBUSTION (corrector); PBAR_S only by DENSITY |
+
+### DIV_P1 Section Dependencies on WALL_BC
+
+| DIV_P1 Section | Interior (bulk I,J,K) | Wall Corrections | Depends on WALL_BC? |
+|----------------|----------------------|------------------|---------------------|
+| Phase 2A: Species diffusion fluxes | Reads ZZP, RHOP, TMP (interior) | Reads B1%RHO_D_DZDN_F | Interior: **No**. Wall: **Yes** |
+| Phase 2B: Diffusive heat flux | Reads TMP, RHO_D_DZDX/Y/Z | Reads B1%TMP_F, B1%U_NORMAL_S, B1%RHO_D_DZDN_F | Interior: **No**. Wall: **Yes** |
+| Phase 3: Specific heat (CP) | Reads ZZP, TMP | No wall loop | **No** |
+| Phase 4: Thermal conductivity + divergence | Reads TMP, MU, ZZP | Reads B1%K_G (conditional) | Interior: **No**. Wall: **Partial** |
+| Phase 5A: Enthalpy advection | Reads RHOP, TMP, ZZP, velocities | Reads B1%U_NORMAL_S, B1%TMP_F, B1%ZZ_F, B1%RHO_F | Interior: **No**. Wall: **Yes** |
+| Phase 5B: RTRM | Reads R_H_G, RHOP | No wall loop | **No** |
+| Phase 5C: Species advection Part 1 | Reads RHOP, ZZP, velocities | Metadata only (IOR checks) | **No** |
+| Phase 5D: Species advection Part 2 | Reads FX_ZZ/FY_ZZ/FZ_ZZ | Reads B1%U_NORMAL_S, B1%RHO_F, B1%ZZ_F | Interior: **No**. Wall: **Yes** |
+| Phase 5E-G: Source terms | Reads M%D_SOURCE, velocities | No wall loop | **No** |
+| Phase 6: Pressure zone sums | Reads DP, RTRM | Reads B1%U_NORMAL_S (USUM accumulation) | Interior: **No**. Wall: **Yes** |
+
+### Reordering Opportunity 1: DIV_P1 Interior || WALL_BC (Predictor)
+
+Split DIV_P1 into interior-first and wall-corrections-after:
+
+```
+MESH_EXCHANGE(1)
+├── Branch A: VELOCITY_FLUX (writes FVX/FVY/FVZ)
+├── Branch B: WALL_BC (writes B1 properties, ghost cells)
+└── Branch C: DIV_P1 interior computation (all bulk I,J,K loops)
+    [reads only TMP, RHO, ZZ, MU from DENSITY/VISC — available before fork]
+
+    ← WALL_BC completes here
+
+    DIV_P1 wall corrections (patches bulk results with boundary values)
+    ← VELOCITY_FLUX completes here (FVX not needed by DIV_P1)
+
+    DIV_EXCHANGE → DIV_P2 → PRESSURE_SOLVE (needs FVX + DDDT)
+```
+
+This creates a **three-way fork** instead of the current two-way fork. The interior computation of DIV_P1 (the most expensive part -- bulk I,J,K loops over all cells) runs concurrently with both VELOCITY_FLUX and WALL_BC.
+
+**Estimated benefit**: DIV_P1 interior is ~70-80% of its total cost. Starting it immediately after MESH_EXCHANGE(1) hides most of DIV_P1 behind WALL_BC's execution time.
+
+**Implementation complexity**: Medium. Requires splitting each DIV_P1 subroutine into interior-only and wall-correction phases. The wall corrections are already separate inner loops within each subroutine, so the refactoring is mechanical.
+
+### Reordering Opportunity 2: Pressure BC Setup || DIV_P2 (Predictor & Corrector)
+
+PRESSURE_SOLVER_COMPUTE_RHS has two independent sections:
+
+| Section | Reads | Needs DDDT? |
+|---------|-------|-------------|
+| Wall loop: BXS/BXF/BYS/BYF/BZS/BZF setup (lines 57-226) | H/HS, FVX/FVY/FVZ (boundary only), WALL_WORK1, KRES, velocities | **No** |
+| PRHS computation (lines 231-298) | FVX/FVY/FVZ (all cells), **DDDT** | **Yes** |
+
+The boundary condition setup reads H/HS (from previous iteration), FVX at boundary faces, and wall data. **It does not read DDDT at all.** This means:
+
+```
+Current:  DIV_P2 ──→ PRESSURE_SOLVE (BC setup + PRHS + FFT)
+
+Reordered:
+├── DIV_P2 ────────→ PRHS computation ──→ FFT solve
+└── Pressure BC setup (BXS/BXF/...)  ───/
+    [runs in parallel with DIV_P2]
+```
+
+**Estimated benefit**: Modest. BC setup is ~20-30% of pre-solve work. But since DIV_P2 is relatively fast, the overlap window is small.
+
+### Reordering Opportunity 3: DIV_P1 Non-QR Sections || RADIATION (Corrector)
+
+In the corrector, RADIATION writes QR and DIV_P1 reads it. But QR is consumed in only **one line** of DIV_P1:
+
+```fortran
+! divg_kernels.f90, line 566/577 in COMPUTE_THERMAL_DIVERGENCE:
+DP(I,J,K) = DP(I,J,K) + DELKDELT + M%Q(I,J,K) + M%QR(I,J,K)
+```
+
+All other DIV_P1 sections (species diffusion, enthalpy advection, species advection, pressure zone sums) do NOT read QR. This means ~85% of DIV_P1 can start before RADIATION completes:
+
+```
+Corrector current:
+  ... → WALL_BC → EX(6) → RADIATION → EX(2) → DIV_P1 (full) → ...
+
+Corrector reordered:
+  ... → WALL_BC → EX(6)
+  ├── RADIATION (computes QR)
+  └── DIV_P1 non-QR sections (~85% of work)
+      ← Both complete
+      DIV_P1 QR addition (1 line: DP += Q + QR)
+      → DIV_EXCHANGE → DIV_P2 → ...
+```
+
+**Estimated benefit**: Significant if RADIATION is expensive (it often is). The non-QR sections of DIV_P1 run "for free" behind RADIATION.
+
+**Note**: EX(2) currently sits between RADIATION and DIV_P1. EX(2) exchanges QR across meshes. The non-QR sections of DIV_P1 don't need QR, so they can start before EX(2). Only the QR addition line needs to wait for EX(2).
+
+### Reordering Opportunity 4: Extended Corrector Three-Way Fork
+
+Combining the corrector pipeline with the DIV_P1 || RADIATION overlap:
+
+```
+MESH_EXCHANGE(4)
+├── Branch A: VELOCITY_FLUX (short, writes FVX)
+├── Branch B: COMBUSTION → CONDENSATION → PME → MOVE (long chain)
+│
+│   ← Both branches join at PARTICLE_MOMENTUM
+│
+│   → EX(7) → WALL_BC → EX(6)
+│   ├── Branch C: RADIATION (writes QR)
+│   └── Branch D: DIV_P1 non-QR sections (species diffusion, enthalpy, species advection, ...)
+│
+│   ← Both branches join
+│
+│   DIV_P1 QR addition → DIV_EXCHANGE → DIV_P2
+│   ├── Branch E: PRHS computation (needs DDDT from DIV_P2)
+│   └── Branch F: Pressure BC setup (BXS/BXF, independent of DDDT)
+│
+│   ← Both branches join
+│
+│   FFT solve → VEL_CORRECTOR → ...
+```
+
+This creates **three fork-join pairs** in the corrector, each overlapping independent computations.
+
+### Rejected Reorderings
+
+| Candidate | Why Rejected |
+|-----------|-------------|
+| WALL_BC during VELOCITY_FLUX Phase 1 | MESH_EXCHANGE(1) is a hard barrier between them. WALL_BC needs exchanged boundary data. |
+| Start DIV_P1 Phase 3 (CP) as separate early task | Fused with PARTICLE_MOMENTUM in current kernel. Overhead of splitting exceeds gain. |
+| VEL_PREDICTOR BC setup before PRESSURE_SOLVE | H gradient `(H(I+1)-H(I))` is intrinsic to the velocity update formula. Cannot separate. |
+| Move VELOCITY_FLUX earlier in corrector | Already optimally positioned (immediately after COMPUTE_VISCOSITY + MESH_EXCHANGE(4)). |
+| RADIATION before WALL_BC (corrector) | RADIATION reads B1%TMP_G (boundary temperatures) set by WALL_BC. Hard dependency for thermally-thick walls. |
+
+### Revised Pipeline Diagrams
+
+**Predictor (with reordering):**
+
+```
+INSERT_PARTICLES → COMPUTE_VISCOSITY → MASS_FINITE_DIFF → DENSITY
+  → MESH_EXCHANGE(1)
+  → [three-way fork]
+     Branch A: VELOCITY_FLUX ────────────────────────────→ PRESSURE_SOLVE
+     Branch B: WALL_BC ──→ DIV_P1 wall corrections ──┐
+     Branch C: DIV_P1 interior (bulk I,J,K loops) ───┘
+                                                    → DIV_EXCHANGE → DIV_P2
+                                                    ├─ PRHS (needs DDDT) → FFT
+                                                    └─ Pressure BC setup ─/
+     [PARTICLE_MOMENTUM runs after VELOCITY_FLUX, before PRESSURE_SOLVE]
+  → VEL_PREDICTOR → CHECK_STABILITY → MESH_EXCHANGE(3) → VEL_BC
+```
+
+**Corrector (with reordering):**
+
+```
+COMPUTE_VISCOSITY → MASS_FINITE_DIFF → DENSITY
+  → MESH_EXCHANGE(4)
+  → [two-way fork]
+     Branch A: VELOCITY_FLUX ──────────────────→ PARTICLE_MOMENTUM
+     Branch B: COMBUSTION → COND → PME → MOVE ─/
+  → EX(7) → WALL_BC → EX(6)
+  → [two-way fork]
+     Branch C: RADIATION ────────────────→ DIV_P1 QR addition
+     Branch D: DIV_P1 non-QR sections ──/
+  → DIV_EXCHANGE → DIV_P2
+  → [two-way fork]
+     Branch E: PRHS computation ──→ FFT solve
+     Branch F: Pressure BC setup ─/
+  → VEL_CORRECTOR → EX(6) → VEL_BC → DUMP
+```
+
+### Impact Summary
+
+| Opportunity | Phase | Est. Benefit | Complexity | Priority |
+|-------------|-------|-------------|------------|----------|
+| DIV_P1 interior \|\| WALL_BC | Predictor | **High** -- hides 70-80% of DIV_P1 | Medium (split interior/wall) | 1 |
+| DIV_P1 non-QR \|\| RADIATION | Corrector | **High** -- hides 85% of DIV_P1 behind RADIATION | Medium (extract QR addition) | 2 |
+| Pressure BC \|\| DIV_P2 | Both | **Low** -- BC setup is ~20% of pre-solve | Low (already separate loop) | 3 |
+
+The first two opportunities are the most impactful because DIV_P1 is the most expensive routine and WALL_BC/RADIATION are significant costs that currently gate it. By starting DIV_P1's interior computation early, we can hide most of its cost behind routines that are already on the critical path.
+
 ## Source Files Analyzed
 
 - `Source/main.f90` -- predictor/corrector phase sequencing
