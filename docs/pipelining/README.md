@@ -15,6 +15,7 @@ The current Hedgehog graph parallelizes FDS over meshes (each mesh processed on 
 |------|-------------|
 | [fds_dataflow.dot](fds_dataflow.dot) / [.svg](fds_dataflow.svg) | Complete data-flow dependency graph for all predictor and corrector routines |
 | [fds_pipeline_opportunities.dot](fds_pipeline_opportunities.dot) / [.svg](fds_pipeline_opportunities.svg) | Focused view of the identified pipelining opportunities with dependency proof |
+| [fds_section_pipeline.dot](fds_section_pipeline.dot) / [.svg](fds_section_pipeline.svg) | Section-level pipeline structure with cost annotations and Hedgehog graph recommendations |
 
 Regenerate SVGs with: `dot -Tsvg fds_dataflow.dot -o fds_dataflow.svg`
 
@@ -747,6 +748,260 @@ COMPUTE_VISCOSITY → MASS_FINITE_DIFF → DENSITY
 | Pressure BC \|\| DIV_P2 | Both | **Low** -- BC setup is ~20% of pre-solve | Low (already separate loop) | 3 |
 
 The first two opportunities are the most impactful because DIV_P1 is the most expensive routine and WALL_BC/RADIATION are significant costs that currently gate it. By starting DIV_P1's interior computation early, we can hide most of its cost behind routines that are already on the critical path.
+
+## Section-Level Cost Analysis and Hedgehog Graph Recommendations
+
+### Reference Scenario
+
+All costs are estimated as **floating-point operations per mesh cell** for a reference configuration:
+
+- Mesh: 64³ = 262,144 cells
+- Species: NS = 5 (N_TOTAL_SCALARS)
+- Turbulence: CONSMAG (no global filters)
+- Combustion: 10% active cells
+- Wall cells: ~10% of mesh cells (6 × 64² = 24,576 boundary cells)
+- Radiation: NUMBER_RADIATION_ANGLES = 104, ANGLE_INCREMENT = 15
+- No CC_IBM, no particles
+
+MFLOPs = ops/cell × 262,144 / 10⁶. Costs labeled with "NS × K" scale linearly with species count.
+
+### Cost Table
+
+#### Pre-Pipeline (Sequential, Already Parallelized via Mesh + K-Block)
+
+Executed once per predictor and once per corrector phase (total: 2 × 1490 = 2980 ops/cell per timestep).
+
+| Section | Ops/cell | MFLOPs | Scaling | Bottleneck |
+|---------|----------|--------|---------|------------|
+| INSERT_PARTICLES | ~0 | ~0 | per particle | N/A |
+| COMPUTE_VISCOSITY: MU_DNS | 15 | 4 | ~const | Mixture viscosity |
+| COMPUTE_VISCOSITY: Strain rate | 73 | 19 | ~const | 9 velocity diffs + 6 squares |
+| COMPUTE_VISCOSITY: Turbulent MU | 5 | 1 | ~const | CONSMAG: 1 multiply |
+| COMPUTE_VISCOSITY: KRES | 12 | 3 | ~const | 3 interpolations + 3 squares |
+| **COMPUTE_VISCOSITY total** | **90** | **24** | | |
+| MASS_FINITE_DIFF | 400 | 105 | NS × 80 | GET_SCALAR_FACE_VALUE flux limiter |
+| DENSITY | 1000 | 262 | NS × 180 | Species flux limiter + density sum |
+| **Pre-pipeline total** | **1490** | **391** | | |
+
+#### Predictor Pipeline (After MESH_EXCHANGE(1))
+
+| Section | Ops/cell | MFLOPs | Pipeline Branch | Critical Path? |
+|---------|----------|--------|-----------------|----------------|
+| VFLUX: Vorticity + stress | 44 | 12 | A | No |
+| VFLUX: FVX/FVY/FVZ | 171 | 45 | A | No |
+| VFLUX: Baroclinic corr. | 33 | 9 | A | No |
+| PARTICLE_MOMENTUM | 18 | 5 | A (after VFLUX) | No |
+| **Branch A total** | **266** | **70** | **Hidden behind C** | |
+| WALL_BC (all sub-kernels) | 65† | 17 | B | No |
+| **Branch B total** | **65** | **17** | **Hidden behind C** | |
+| DIV_P1: Interior (bulk I,J,K) | 1000 | 262 | C | **Yes** |
+| DIV_P1: Wall corrections | 300 | 79 | After B+C join | **Yes** |
+| DIV_P1: Zone sums | 15 | 4 | After wall corr. | **Yes** |
+| **Branch C + wall corr.** | **1315** | **345** | | |
+| DIV_P2 | 40 | 10 | Sequential | **Yes** |
+| PRESSURE_SOLVE | 50 | 13 | Sequential | **Yes** |
+| VEL_PREDICTOR | 18 | 5 | Sequential | **Yes** |
+| **Predictor pipeline total** | **1739** | **456** | | |
+
+† WALL_BC is 210–1175 ops per wall cell; 65 ops/cell effective assumes ~10% wall fraction with simple surfaces. Thermally-thick walls with SOLID_HEAT_TRANSFER increase this substantially.
+
+**Predictor speedup**: Sequential 1739 → Pipelined 1408 ops/cell = **1.24×**
+
+#### Corrector Pipeline (After MESH_EXCHANGE(4))
+
+| Section | Ops/cell | MFLOPs | Pipeline Branch | Critical Path? |
+|---------|----------|--------|-----------------|----------------|
+| VELOCITY_FLUX | 248 | 65 | A | **Yes** (dominates B) |
+| **Branch A total** | **248** | **65** | | |
+| COMBUSTION | 115 | 30 | B | No |
+| CONDENSATION | 10 | 3 | B | No |
+| PART_MASS_ENERGY | varies | - | B | No |
+| MOVE_PARTICLES | varies | - | B | No |
+| **Branch B total** | **125+** | **33+** | **Hidden behind A** | |
+| PARTICLE_MOMENTUM | 18 | 5 | After A+B join | **Yes** |
+| WALL_BC | 65 | 17 | Sequential | **Yes** |
+| RADIATION | 3500‡ | 917 | C | **Yes** (dominates D) |
+| **Branch C total** | **3500** | **917** | | |
+| DIV_P1 (excl. QR line) | 1299 | 340 | D | No (hidden behind C) |
+| **Branch D total** | **1299** | **340** | **Hidden behind C** | |
+| DIV_P1: QR addition | 1 | ~0 | After C+D join | Negligible |
+| DIV_P2 | 40 | 10 | Sequential | **Yes** |
+| PRESSURE_SOLVE | 50 | 13 | Sequential | **Yes** |
+| VEL_CORRECTOR | 18 | 5 | Sequential | **Yes** |
+| **Corrector pipeline total** | **5364** | **1406** | | |
+
+‡ RADIATION cost varies enormously: 500 ops/cell (gray gas, few angles) to 15,000 ops/cell (spectral with many bands). 3500 is typical for a multi-band fire scenario.
+
+**Corrector speedup**: Sequential 5364 → Pipelined 3940 ops/cell = **1.36×**
+
+#### Overall Timestep Speedup
+
+| Phase | Sequential | Pipelined | Saved | Speedup |
+|-------|-----------|-----------|-------|---------|
+| Predictor pipeline | 1739 | 1408 | 331 | 1.24× |
+| Corrector pipeline | 5364 | 3940 | 1424 | 1.36× |
+| **Combined pipeline** | **7103** | **5348** | **1755** | **1.33×** |
+| Full timestep (incl. pre-pipeline 2×1490) | 10083 | 8328 | 1755 | **1.21×** |
+
+### Critical Path Analysis
+
+The critical path determines execution time. Sections not on the critical path run "for free" behind the bottleneck.
+
+**Predictor critical path** (1408 ops/cell):
+
+```
+DIV_P1_interior(1000) → DIV_P1_wall_corr(300) → zone_sums(15)
+  → DIV_EXCHANGE → DIV_P2(40) → PRES(50) → VEL_PRED(18)
+```
+
+Hidden (concurrent with DIV_P1_interior):
+- VELOCITY_FLUX (248 ops) — completes at 25% of interior time
+- WALL_BC (65 ops) — completes at 7% of interior time
+- PARTICLE_MOMENTUM (18 ops) — after VFLUX, completes at 27%
+
+**Corrector critical path** (3940 ops/cell):
+
+```
+VFLUX(248) → PART_MOM(18) → EX(7) → WALL_BC(65) → EX(6)
+  → RADIATION(3500) → EX(2) → QR_add(1)
+  → DIV_EXCHANGE → DIV_P2(40) → PRES(50) → VEL_CORR(18)
+```
+
+Hidden:
+- COMBUSTION+CONDENSATION (125 ops) — behind VFLUX at Fork 1
+- DIV_P1 main (1299 ops) — behind RADIATION at Fork 2 (37% of RADIATION time)
+
+### Sensitivity to RADIATION Cost
+
+The corrector pipelining benefit depends on the relative cost of RADIATION vs DIV_P1:
+
+| RADIATION (ops/cell) | Scenario | Sequential | Pipelined | Speedup |
+|---------------------|----------|-----------|-----------|---------|
+| 500 | Gray gas | 2494 | 1869 | 1.33× |
+| 2000 | Moderate | 3994 | 2869 | 1.39× |
+| 3500 | Typical fire | 5364 | 3940 | 1.36× |
+| 5000 | Spectral | 6864 | 5540 | 1.24× |
+| 15000 | Many bands | 16864 | 15540 | 1.09× |
+
+When RADIATION cost is comparable to DIV_P1 (1000–3000 ops/cell), pipelining provides the best relative speedup: whichever routine is shorter runs entirely hidden behind the longer one. When RADIATION dominates (>5000), DIV_P1 is always hidden but the relative savings shrink since RADIATION is the bottleneck regardless.
+
+### Hedgehog Graph Recommendations
+
+Ranked by impact-to-complexity ratio. See [fds_section_pipeline.dot](fds_section_pipeline.dot) for the visual structure.
+
+#### Tier 1 — High Impact, Implement First
+
+**1.1 Corrector: VFLUX || COMBUSTION chain (after EX4)**
+
+Fork into two branches after MESH_EXCHANGE(4):
+- Branch A: VelocityFluxTask (248 ops/cell)
+- Branch B: CombustionTask → CondensationTask → PartMassEnergyTask → MoveParticlesTask (125+ ops/cell)
+
+Join at: ParticleMomentumTask (needs FVX from A, FVX_D from B).
+
+Implementation: Type-based fork. Emit `VelocityFluxWork` and `CombustionChainWork` from a fork state. Collector waits for both result types per mesh.
+
+WORK conflict: None. COMBUSTION and CONDENSATION use no WORK arrays. PME starts after VFLUX completes (short branch). With scratch duplication, even timing-dependent overlaps are safe.
+
+Savings: 125 ops/cell minimum. With particles, Branch B grows longer, making the overlap increasingly "free."
+
+**1.2 Corrector: RADIATION || DIV_P1 (after EX6)**
+
+Fork into two branches after MESH_EXCHANGE(6):
+- Branch C: RadiationTask (500–15000 ops/cell)
+- Branch D: DivP1NonQRTask (1299 ops/cell) — everything except the single QR addition line
+
+Join at: DivP1QRAdditionTask (applies `DP += QR`, 1 op/cell).
+
+Implementation: Split DIVERGENCE_PART_1_KERNEL into two Fortran subroutines:
+- `DIV_P1_MAIN_KERNEL`: All phases (2A, 2B, 3, 4, 5A–G, 6) with QR set to zero
+- `DIV_P1_QR_ADDITION`: Single loop: `DP(I,J,K) = DP(I,J,K) + QR(I,J,K)`
+
+WORK conflict: RADIATION uses WORK1-9, DIV_P1 uses WORK1-7,9. **Requires per-branch scratch duplication** (second set of WORK arrays on each mesh, ~4.5 MB per 64³ mesh).
+
+Savings: min(RADIATION_cost, 1299) ops/cell. For typical fire: 1299 ops/cell saved — the entire DIV_P1 runs hidden behind RADIATION.
+
+#### Tier 2 — Moderate Impact, Implement Next
+
+**2.1 Predictor: Three-way fork (VFLUX || WALL_BC || DIV_P1_interior)**
+
+Fork into three branches after MESH_EXCHANGE(1):
+- Branch A: VelocityFluxTask → ParticleMomentumTask (266 ops/cell)
+- Branch B: WallBCTask (65 ops/cell)
+- Branch C: DivP1InteriorTask (1000 ops/cell) — all bulk I,J,K loops without wall corrections
+
+Join at: DivP1WallCorrectionTask (needs WALL_BC output, 300 ops/cell).
+
+Implementation: Split each DIV_P1 phase into interior-only and wall-correction sub-loops. Interior reads only mesh arrays set before the fork (TMP, RHO, ZZ, MU from VISC+DENSITY). Wall corrections read B1 properties set by WALL_BC.
+
+WORK conflict: DIV_P1 uses WORK1-7,9; VFLUX uses WORK1-6. **Requires per-branch scratch duplication** (reuses same mechanism from Tier 1.2).
+
+Savings: 331 ops/cell (VFLUX + WALL_BC + PART_MOM all hidden behind DIV_P1_interior).
+
+#### Tier 3 — Low Impact, Deferred
+
+**3.1 Pressure BC || DIV_P2** (both phases): Saves ~3 ops/cell. Not worth the graph complexity.
+
+**3.2 Intra-DIV_P1 Groups A||B||C**: Phases 2A+2B (200), 3+4 (95), 5A (105) can run in parallel. Saves ~200 ops/cell within DIV_P1's first half. High complexity (3 separate WORK pools, DP accumulation synchronization). Diminishing returns since DIV_P1 is already partially hidden.
+
+**3.3 VFLUX FVX||FVY||FVZ**: Saves ~114 ops/cell within VFLUX. But VFLUX is already fully hidden in the predictor (behind DIV_P1). In the corrector, VFLUX is on the critical path but not the bottleneck.
+
+#### Out of Scope for Hedgehog (Use OpenMP Instead)
+
+**RADIATION angle parallelism**: Each of the 100–500 angles sweeps independently. Potential 10–50× within RADIATION. Requires per-thread private arrays (IL, IL_UP). This is loop-level parallelism — better suited to OpenMP DO PARALLEL than Hedgehog graph structure.
+
+**COMBUSTION cell-level parallelism**: Embarrassingly parallel per active cell. Fine-grained — better suited to OpenMP or GPU.
+
+### Implementation Roadmap
+
+```
+Phase 1: Corrector VFLUX || COMBUSTION fork (Tier 1.1)
+  - No Fortran kernel changes needed
+  - Add fork state after EX(4), join state before PART_MOM
+  - Estimated effort: low
+  - Expected speedup: ~2% of corrector, higher with particles
+
+Phase 2: Corrector RADIATION || DIV_P1 fork (Tier 1.2)
+  - Fortran: split DIV_P1 into main + QR-addition kernels
+  - Add per-branch WORK array pools to MESH_TYPE (one-time, 4.5 MB/mesh)
+  - Add fork state after EX(6), join state before QR addition
+  - Estimated effort: medium
+  - Expected speedup: ~30% of corrector pipeline
+
+Phase 3: Predictor three-way fork (Tier 2.1)
+  - Fortran: split DIV_P1 phases into interior / wall-correction pairs
+  - Reuse per-branch WORK arrays from Phase 2
+  - Add three-way fork state after EX(1), join before wall corrections
+  - Estimated effort: medium
+  - Expected speedup: ~24% of predictor pipeline
+
+Phase 4 (optional): Intra-routine optimizations (Tier 3)
+  - Only pursue after Phases 1-3 are validated
+  - Profile to identify actual bottlenecks vs estimates
+```
+
+### DIV_P1 Phase Breakdown
+
+Detailed cost breakdown of DIVERGENCE_PART_1_KERNEL phases, the most expensive routine:
+
+| Phase | Interior Ops/cell | Wall Corr. Ops/cell | Description | WORK Usage |
+|-------|-------------------|---------------------|-------------|------------|
+| 1 | 0 | 0 | Setup (zero DP, aliases) | — |
+| 2A | 100 | 30 | Species diffusion fluxes (RHO_D_DZDX/Y/Z) | WORK1-3 |
+| 2B | 55 | 15 | Diffusive heat flux (H_RHO_D_DZDX/Y/Z → DP) | WORK4-6 |
+| 3 | 35 | 0 | Specific heat (CP, R_H_G) | WORK7 |
+| 4 | 50 | 10 | Thermal conductivity + divergence (→ DP + **QR**) | WORK1-3 (reused) |
+| 5A | 80 | 25 | Enthalpy advection (→ DP) | WORK1-3 (reused) |
+| 5B | 5 | 0 | RTRM = 1/(rho×CP×TMP); DP *= RTRM | — |
+| 5C | 670 | 0 | Species face flux limiter (GET_SCALAR_FACE_VALUE) | SWORK1-3 |
+| 5D | 60 | 40 | Species divergence (→ DP) | WORK9 |
+| 5E-G | 10 | 0 | Source terms (reactions, stratification, MMS) | — |
+| 6 | 10 | 5 | Pressure zone sums (DSUM, PSUM, USUM) | — |
+| **Total** | **~1075** | **~125** | | |
+
+Phase 5C (species advection flux limiter) is the single most expensive section at ~670 ops/cell for NS=5. It dominates DIV_P1 cost at 50%+. GET_SCALAR_FACE_VALUE computes 40–60 FLOPs per face value for flux-limited interpolation.
+
+The interior/wall correction split is clean: bulk I,J,K loops compute on interior cells using mesh arrays available before the pipeline fork. Wall correction loops iterate over wall cells and read B1 boundary properties (TMP_F, RHO_F, ZZ_F, U_NORMAL_S, RHO_D_F) set by WALL_BC.
 
 ## Source Files Analyzed
 
