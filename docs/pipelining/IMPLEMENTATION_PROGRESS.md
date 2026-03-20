@@ -309,30 +309,56 @@ A phase-by-phase analysis of DIV_P1's interior/wall correction split was conduct
 | B1 properties needed | TMP_F, ZZ_F, RHO_F, RHO_D_DZDN_F, Q_CON_F — all set by WALL_BC |
 | Correction feasibility | Impossible without re-running DIV_P1 for wall-adjacent cells |
 
-### Option A: VFLUX || WALL_BC Two-Way Fork (CHOSEN)
+### Improved Design: (VFLUX+PMOM) || (WALL_BC+DIV_P1_early) (CHOSEN)
 
-Run VELOCITY_FLUX and WALL_BC concurrently after MESH_EXCHANGE(1). No WORK conflict (WALL_BC uses no WORK arrays). Already validated safe in data-flow analysis.
+A phase-by-phase analysis of DIV_P1 revealed that Phases 2A through 4b (species diffusion, heat diffusion, specific heat, thermal conductivity/divergence) do **NOT** reference UU/VV/WW or FVX/FVY/FVZ at all. Only Phase 5+ (enthalpy advection, species advection, sources, zone sums) reads velocity and flux arrays. This means the early phases can run in Branch B after WALL_BC, concurrently with VFLUX+PART_MOM in Branch A.
 
-**Expected savings**: 65 ops/cell (WALL_BC hidden behind VFLUX). Modest but reliable.
+**CC_IBM safety**: SET_EXIMDIFFLX_3D (called within Phase 2A) only touches RHO_D_DZDX/Y/Z — safe in Branch B. CC_VELOCITY_FLUX(CORRECT_GRAV=.FALSE.) reads FVX via CC_STORE_FACE_FV — must run post-join. CFACE_PREDICT_NORMAL_VELOCITY only reads B1/SURFACE properties — safe in pre-fork. No CC_IBM special cases needed.
+
+**Expected savings**: 266 ops/cell (Branch A hidden behind Branch B). Fork speedup: 1.74×.
 
 ```
-EX(1) → Fork →
-  Branch A: VFLUX → PART_MOM (needs FVX from VFLUX)
-  Branch B: WALL_BC
-→ Join → DIV_P1 → DIV_EXCHANGE → ...
+PREDICT_NORMAL_VELOCITY + setup (~5 ops/cell)
+  → Fork →
+    Branch A: VFLUX(248) → PART_MOM(18) = 266 ops/cell (hidden behind B)
+    Branch B: WALL_BC(65) → DIV_P1 early Ph2A-4b(295) = 360 ops/cell (CRITICAL)
+  → Join
+  → [CC_VELOCITY_FLUX if CC_IBM — needs FVX]
+  → DIV_P1 Phase 5+ (~1000 ops/cell — needs UU/VV/WW + FVX)
+  → [CC_DIVERGENCE_PART_1 if CC_IBM]
+  → DIV_EXCHANGE → DIV_P2 → PRESSURE_SOLVE → ...
 ```
 
-**Architecture**: Reuse the fork/join pattern from Phase 4 with predictor-specific data types.
+**Architecture**: Split DIVERGENCE_PART_1_KERNEL into three callable sections:
+1. **Pre-fork**: PREDICT_NORMAL_VELOCITY + CFACE_PREDICT_NORMAL_VELOCITY + setup (zero DP, aliases)
+2. **Branch B kernel**: Phases 2A-4b (species diffusion, heat diffusion, thermal) — called after WALL_BC
+3. **Post-join kernel**: Phase 5+ (enthalpy advection, RTRM, species advection, sources, zone sums)
+
+Requires Fortran kernel changes (splitting DIV_P1 into sections), unlike the simple VFLUX || WALL_BC fork.
+
+**WORK conflict**: VFLUX uses WORK1-6, DIV_P1 early phases use WORK1-7. Requires per-branch scratch duplication (reuses Phase 2 infrastructure). WALL_BC uses no WORK arrays.
+
+### DIV_P1 Phase Split (Predictor Only)
+
+| Section | Phases | Ops/cell | UU/VV/WW? | FVX? | WALL_BC? |
+|---------|--------|----------|-----------|------|----------|
+| Pre-fork | Setup + PREDICT_NORMAL_VELOCITY | ~5 | Read (PNV only) | No | No |
+| Branch B | 2A+2B (diffusion) + 3+4 (thermal) | 295 | **No** | **No** | Yes (wall corr.) |
+| Post-join | 5A-G (advection, sources) + 6 (zone sums) | ~1000 | **Read** | **Read** (CC_IBM) | Yes (wall corr.) |
 
 ### Checklist (Implementation)
 
-- [x] Investigate Option B feasibility (result: NOT feasible)
+- [x] Investigate Option B feasibility — full interior/wall split (result: NOT feasible)
+- [x] Investigate DIV_P1 phase-level UU/VV/WW dependency (result: Phases 2A-4b are safe)
+- [x] Verify CC_IBM safety for early phases (result: no special cases needed)
+- [ ] Split DIV_P1 kernel into pre-fork / early / late Fortran subroutines
+- [ ] Create C wrappers for split kernels
 - [ ] Create predictor fork/join data types
-- [ ] Create predictor fork state (MeshData → PredVFluxWork + PredWBCWork)
+- [ ] Create predictor fork state (MeshData → PredVFluxWork + PredWBCDivWork)
 - [ ] Create predictor join state (per-mesh matching)
 - [ ] Adapt VelocityFlux sub-graph for PredVFluxWork input
 - [ ] Chain PARTICLE_MOMENTUM after VFLUX in Branch A
-- [ ] Adapt WallBC sub-graph for PredWBCWork input
+- [ ] Chain DIV_P1_early after WALL_BC in Branch B
 - [ ] Wire predictor sub-graph with fork/join
 - [ ] Run verification suite
 - [ ] Compare performance
@@ -348,12 +374,12 @@ EX(1) → Fork →
 | 3 | Sequential driver | None | Task internals only | Validation | N/A (validation) |
 | 4 | Corrector Fork 1 | None | Fork/join states | Not needed | ~2% corrector |
 | 5 | Corrector Fork 2 | From Phase 1 | Fork/join states | Active | ~30% corrector |
-| 6 | Predictor pipeline | None | Fork/join states | Not needed | ~4% predictor |
+| 6 | Predictor pipeline | DIV_P1 split into early/late | Fork/join states | Not needed | ~18% predictor |
 
 **Phases 1-3**: Foundation work. No speedup, but validates all kernels.
 **Phase 4**: First graph restructuring. Simple, low risk. Small but reliable speedup.
 **Phase 5**: High-impact change. Relies on Phases 1-3 infrastructure.
-**Phase 6**: Optional. Simple VFLUX || WALL_BC fork (Option B ruled out). Low priority.
+**Phase 6**: Predictor fork with DIV_P1 early phases in Branch B. 266 ops/cell saved (4× improvement over simple VFLUX || WALL_BC).
 
 ---
 

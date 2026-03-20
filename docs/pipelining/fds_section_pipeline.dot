@@ -43,50 +43,57 @@ digraph FDS_Section_Pipeline {
     }
 
     // =====================================================================
-    //  PREDICTOR PIPELINE — Two-Way Fork (Tier 2)
-    //  Sequential: 331 ops/cell -> Pipelined: 266 ops/cell (1.24x of fork segment)
-    //  NOTE: Three-way fork (including DIV_P1 interior) was investigated and
-    //  ruled out. DP *= RTRM multiplicative step makes interior/wall split
-    //  impossible — boundary face errors propagate irreversibly.
+    //  PREDICTOR PIPELINE — Two-Way Fork with DIV_P1 Early Phases (Tier 2)
+    //  Sequential: 626 ops/cell -> Pipelined: 360 ops/cell (1.74x fork)
+    //  DIV_P1 Phases 2A-4b run in Branch B after WALL_BC (no UU/VV/WW or
+    //  FVX refs). Phase 5+ needs UU/VV/WW + FVX, so runs post-join.
+    //  Three-way fork (interior/wall split) was ruled out — DP *= RTRM
+    //  makes that approach impossible.
     // =====================================================================
     subgraph cluster_pred {
-        label="PREDICTOR Pipeline  |  Two-Way Fork: VFLUX || WALL_BC  (Tier 2)";
+        label="PREDICTOR Pipeline  |  (VFLUX+PMOM) || (WBC+DIV_P1_early)  (Tier 2)";
         style=filled; fillcolor="#e8f4fd"; color=steelblue; fontsize=12;
 
+        // Pre-fork: PREDICT_NORMAL_VELOCITY (reads UU/VV/WW, must run before fork)
+        PRED_PNV [label="PREDICT_NORMAL_VELOCITY\n+ setup (~5 ops/cell)", shape=box, fillcolor="#d0d0ff"];
+
         PRED_FORK [label="TWO-WAY FORK\n(Tier 2)", shape=diamond, fillcolor="#FFD700", penwidth=2];
+        PRED_PNV -> PRED_FORK;
 
-        // ---- Branch A: VELOCITY_FLUX + PART_MOM (critical path) ----
+        // ---- Branch A: VELOCITY_FLUX + PART_MOM (hidden behind B) ----
         subgraph cluster_pred_A {
-            label="Branch A: 266 ops/cell\nCRITICAL PATH";
-            style=dashed; color="#B22222"; fontcolor="#B22222"; fontsize=10;
-            labeljust=l;
-
-            PA_VFLUX [label="VELOCITY_FLUX\n248 ops/cell\n(vort:44 + FVX/Y/Z:171 + baro:33)", shape=box, fillcolor="#FF6347"];
-            PA_PMOM [label="PARTICLE_MOMENTUM\n18 ops/cell", shape=box, fillcolor="#FF6347"];
-            PA_VFLUX -> PA_PMOM [label="FVX"];
-        }
-
-        // ---- Branch B: WALL_BC (green = hidden behind A) ----
-        subgraph cluster_pred_B {
-            label="Branch B: 65 ops/cell\n(hidden behind A)";
+            label="Branch A: 266 ops/cell\n(hidden behind B)";
             style=dashed; color="#228B22"; fontcolor="#228B22"; fontsize=10;
             labeljust=l;
 
-            PB_WBC [label="WALL_BC\n65 ops/cell*\n(per wall cell: 210-1175)", shape=box, fillcolor="#90EE90"];
+            PA_VFLUX [label="VELOCITY_FLUX\n248 ops/cell\n(vort:44 + FVX/Y/Z:171 + baro:33)", shape=box, fillcolor="#90EE90"];
+            PA_PMOM [label="PARTICLE_MOMENTUM\n18 ops/cell", shape=box, fillcolor="#90EE90"];
+            PA_VFLUX -> PA_PMOM [label="FVX"];
+        }
+
+        // ---- Branch B: WALL_BC + DIV_P1 early phases (critical path) ----
+        subgraph cluster_pred_B {
+            label="Branch B: 360 ops/cell\nCRITICAL PATH";
+            style=dashed; color="#B22222"; fontcolor="#B22222"; fontsize=10;
+            labeljust=l;
+
+            PB_WBC [label="WALL_BC\n65 ops/cell*\n(per wall cell: 210-1175)", shape=box, fillcolor="#FF6347"];
+            PB_D1EARLY [label="DIV_P1 Phases 2A-4b\n295 ops/cell\n\nPh2: species+heat diff (200)\nPh3+4: thermal (95)\n\nNo UU/VV/WW or FVX refs\n(verified for CC_IBM too)", shape=box, fillcolor="#FF6347"];
+            PB_WBC -> PB_D1EARLY [label="B1 props"];
         }
 
         // Fork edges
-        PRED_FORK -> PA_VFLUX [color="#B22222", penwidth=3, label="A (critical)"];
-        PRED_FORK -> PB_WBC [color="#228B22", penwidth=2, label="B (hidden)"];
+        PRED_FORK -> PA_VFLUX [color="#228B22", penwidth=2, label="A (hidden)"];
+        PRED_FORK -> PB_WBC [color="#B22222", penwidth=3, label="B (critical)"];
 
         // Join
         PRED_JOIN [label="JOIN", shape=diamond, fillcolor="#FFD700"];
-        PA_PMOM -> PRED_JOIN [color="#B22222", penwidth=2, label="FVX+drag"];
-        PB_WBC -> PRED_JOIN [color="#228B22", label="B1 props"];
+        PA_PMOM -> PRED_JOIN [color="#228B22", label="FVX+drag"];
+        PB_D1EARLY -> PRED_JOIN [color="#B22222", penwidth=2, label="DP (partial)"];
 
-        // Sequential: DIV_P1 (full, needs both WALL_BC B1 props)
-        PRED_DIVP1 [label="DIV_P1\n1300 ops/cell\n(full: interior + wall corrections)\n\nCannot be split from WALL_BC:\nDP *= RTRM makes interior/wall\nsplit impossible", shape=box, fillcolor="#FF6347", penwidth=2];
-        PRED_JOIN -> PRED_DIVP1 [color="#B22222", penwidth=2];
+        // Post-join: DIV_P1 late phases (need UU/VV/WW + FVX)
+        PRED_DIVP1_LATE [label="DIV_P1 Phase 5+\n~1000 ops/cell\n\nPh5A: enthalpy adv. (105)\nPh5B: RTRM (5)\nPh5C+D: species adv. (770)\nPh5E-G: sources (10)\nPh6: zone sums (15)\n\nNeeds UU/VV/WW + FVX", shape=box, fillcolor="#FF6347", penwidth=2];
+        PRED_JOIN -> PRED_DIVP1_LATE [color="#B22222", penwidth=2];
 
         // Sequential tail
         PRED_DIVEX [label="DIV_EXCHANGE\n(global: DSUM/PSUM/USUM)", shape=octagon, fillcolor=lightsalmon];
@@ -97,12 +104,12 @@ digraph FDS_Section_Pipeline {
         PRED_EX3 [label="MESH_EXCHANGE(3)\nvel_s, pres", shape=octagon, fillcolor=lightsalmon];
         PRED_VBC [label="VEL_BC", shape=box, fillcolor="#d0d0ff"];
 
-        PRED_DIVP1 -> PRED_DIVEX [color="#B22222"];
+        PRED_DIVP1_LATE -> PRED_DIVEX [color="#B22222"];
         PRED_DIVEX -> PRED_DIVP2 -> PRED_PRES -> PRED_VPRED [color="#B22222", penwidth=2];
         PRED_VPRED -> PRED_CFL -> PRED_EX3 -> PRED_VBC;
     }
 
-    PP_EX1 -> PRED_FORK;
+    PP_EX1 -> PRED_PNV;
 
     // =====================================================================
     //  PRE-PIPELINE: Corrector
@@ -235,15 +242,15 @@ digraph FDS_Section_Pipeline {
         <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
         <TR><TD COLSPAN="5" BGCOLOR="lightyellow"><B>Speedup Analysis (64^3 mesh, NS=5, radiation=3500 ops/cell)</B></TD></TR>
         <TR><TD><B>Phase</B></TD><TD><B>Sequential</B></TD><TD><B>Pipelined</B></TD><TD><B>Saved</B></TD><TD><B>Speedup</B></TD></TR>
-        <TR><TD>Predictor pipeline</TD><TD>331 ops/cell</TD><TD>266 ops/cell</TD><TD>65</TD><TD BGCOLOR="#90EE90"><B>1.24x fork</B></TD></TR>
+        <TR><TD>Predictor fork</TD><TD>626 ops/cell</TD><TD>360 ops/cell</TD><TD>266</TD><TD BGCOLOR="#90EE90"><B>1.74x fork</B></TD></TR>
         <TR><TD>Corrector pipeline</TD><TD>5364 ops/cell</TD><TD>3940 ops/cell</TD><TD>1424</TD><TD BGCOLOR="#90EE90"><B>1.36x</B></TD></TR>
-        <TR><TD><B>Combined pipeline</B></TD><TD><B>5695</B></TD><TD><B>4206</B></TD><TD><B>1489</B></TD><TD BGCOLOR="#90EE90"><B>1.35x</B></TD></TR>
-        <TR><TD>Full timestep (incl. pre-pipeline)</TD><TD>10083</TD><TD>8594</TD><TD>1489</TD><TD BGCOLOR="#90EE90"><B>1.17x</B></TD></TR>
+        <TR><TD><B>Combined pipeline</B></TD><TD><B>5990</B></TD><TD><B>4300</B></TD><TD><B>1690</B></TD><TD BGCOLOR="#90EE90"><B>1.39x</B></TD></TR>
+        <TR><TD>Full timestep (incl. pre-pipeline)</TD><TD>10083</TD><TD>8393</TD><TD>1690</TD><TD BGCOLOR="#90EE90"><B>1.20x</B></TD></TR>
         <TR><TD COLSPAN="5" BGCOLOR="lightyellow"><B>Implementation Priority</B></TD></TR>
         <TR><TD><B>Tier</B></TD><TD COLSPAN="2"><B>Change</B></TD><TD><B>Savings</B></TD><TD><B>Complexity</B></TD></TR>
         <TR><TD BGCOLOR="#90EE90">Tier 1.1</TD><TD COLSPAN="2">Corrector: VFLUX || COMB chain</TD><TD>125 ops/cell</TD><TD>Low</TD></TR>
         <TR><TD BGCOLOR="#90EE90">Tier 1.2</TD><TD COLSPAN="2">Corrector: RADIATION || DIV_P1</TD><TD>1299 ops/cell</TD><TD>Medium</TD></TR>
-        <TR><TD BGCOLOR="lightyellow">Tier 2</TD><TD COLSPAN="2">Predictor: VFLUX || WALL_BC (2-way fork)</TD><TD>65 ops/cell</TD><TD>Low</TD></TR>
+        <TR><TD BGCOLOR="lightyellow">Tier 2</TD><TD COLSPAN="2">Predictor: (VFLUX+PMOM) || (WBC+DIV_P1_early)</TD><TD>266 ops/cell</TD><TD>Medium</TD></TR>
         <TR><TD BGCOLOR="lightgray">Tier 3</TD><TD COLSPAN="2">Pressure BC || DIV_P2 (diminishing returns)</TD><TD>&lt;50</TD><TD>High</TD></TR>
         </TABLE>
         >];

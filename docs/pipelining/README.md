@@ -91,17 +91,21 @@ These routines share no write conflicts:
 
 VELOCITY_FLUX writes only to flux arrays. WALL_BC writes only to temp (boundary cells), wall, pbar, and energy. Zero overlap.
 
-**Level 2: PARTICLE_MOMENTUM || DIVERGENCE_PART_1**
+**Improved Design: DIV_P1 Early Phases in Branch B**
 
-After Level 1 completes:
-- PARTICLE_MOMENTUM reads FVX (from VELOCITY_FLUX) and adds drag forces (FVX += drag)
-- DIVERGENCE_PART_1 reads energy and pbar (from WALL_BC) but does **NOT** read FVX/FVY/FVZ
+Further analysis revealed that DIV_P1 Phases 2A through 4b (species diffusion, heat diffusion, specific heat, thermal conductivity/divergence) do **NOT** reference UU/VV/WW or FVX/FVY/FVZ. Only Phase 5+ (enthalpy advection, species advection, sources) reads velocity and flux arrays. This means the early phases (~295 ops/cell) can run in Branch B after WALL_BC completes, concurrently with VFLUX+PART_MOM in Branch A.
 
-These are independent because:
-- PART_MOM touches flux (FVX) -- DIV_P1 does not
-- DIV_P1 touches energy, pbar, div_s, dsum -- PART_MOM does not
+The pre-fork section (PREDICT_NORMAL_VELOCITY + setup) reads UU/VV/WW and must run before the fork. CC_IBM calls within early phases (SET_EXIMDIFFLX_3D) only touch species diffusion arrays — safe. CC_VELOCITY_FLUX reads FVX and must run post-join. No CC_IBM special cases needed.
 
-**Join point**: PRESSURE_SOLVE, which needs both FVX (with drag, from PART_MOM) and DDDT (from DIV_P2, which follows DIV_P1).
+```
+PREDICT_NORMAL_VELOCITY + setup (~5 ops/cell)
+  → Fork →
+    Branch A: VFLUX(248) → PART_MOM(18) = 266 ops/cell (hidden behind B)
+    Branch B: WALL_BC(65) → DIV_P1 early Ph2A-4b(295) = 360 ops/cell (CRITICAL)
+  → Join → DIV_P1 Phase 5+ (~1000 ops/cell, needs UU/VV/WW + FVX)
+```
+
+**Join point**: DIV_P1 Phase 5, which needs both FVX (with drag, from PART_MOM) and WALL_BC outputs, plus UU/VV/WW for enthalpy/species advection. PRESSURE_SOLVE comes after DIV_P2 as before.
 
 ### Corrector: Major Pipelining Opportunity
 
@@ -131,10 +135,14 @@ The corrector opportunity is the bigger win: Branch B is a long chain, so VELOCI
 INSERT_PARTICLES
   -> COMPUTE_VISCOSITY -> MASS_FINITE_DIFF -> DENSITY
   -> MESH_EXCHANGE(1)
-  -> [pipeline start]
-     Branch A: VELOCITY_FLUX -> PARTICLE_MOMENTUM ---------> PRESSURE_SOLVE
-     Branch B: WALL_BC -> DIVERGENCE_PART_1 -> DIV_EX -> DIV_P2 -/
-  -> VEL_PREDICTOR -> CHECK_STABILITY -> MESH_EXCHANGE(3) -> VEL_BC
+  -> PREDICT_NORMAL_VELOCITY + setup
+  -> [two-way fork]
+     Branch A: VELOCITY_FLUX -> PARTICLE_MOMENTUM (266 ops/cell, hidden behind B)
+     Branch B: WALL_BC -> DIV_P1 Phases 2A-4b (360 ops/cell, CRITICAL PATH)
+  -> [join]
+  -> DIV_P1 Phase 5+ (needs UU/VV/WW + FVX) -> DIV_EX -> DIV_P2
+  -> PRESSURE_SOLVE -> VEL_PREDICTOR
+  -> CHECK_STABILITY -> MESH_EXCHANGE(3) -> VEL_BC
 ```
 
 ### Corrector Phase
@@ -567,6 +575,8 @@ Most DIV_P1 sections have a two-part structure:
 The interior computation does NOT need WALL_BC output. Only the wall correction loops depend on WALL_BC.
 
 > **INVESTIGATION RESULT (Phase 6):** While individual wall correction loops are self-contained, the interior/wall split is **NOT feasible** for pipelining. The interior I,J,K loops include boundary face positions (e.g., I=0..IBAR), and the divergence accumulation reads these boundary values into DP. Crucially, Phase 5's `DP *= RTRM` is a **multiplicative** operation — any error from uncorrected boundary face values is amplified and cannot be fixed by an additive correction afterward. A clean split would require re-running the entire divergence computation for wall-adjacent cells, negating any savings. See [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) Phase 6 for the full analysis.
+>
+> **However**, a different split IS feasible: Phases 2A through 4b do not reference UU/VV/WW or FVX/FVY/FVZ at all, so they can run after WALL_BC completes, concurrently with VFLUX+PART_MOM. Phase 5+ needs UU/VV/WW (for enthalpy/species advection) and FVX (for CC_IBM), so it runs post-join. This is the chosen predictor pipeline design.
 
 ### WALL_BC Exact Writes (Predictor Phase)
 
@@ -593,23 +603,23 @@ WALL_BC writes during the predictor:
 | Phase 5E-G: Source terms | Reads M%D_SOURCE, velocities | No wall loop | **No** |
 | Phase 6: Pressure zone sums | Reads DP, RTRM | Reads B1%U_NORMAL_S (USUM accumulation) | Interior: **No**. Wall: **Yes** |
 
-### Reordering Opportunity 1: VFLUX || WALL_BC (Predictor)
+### Reordering Opportunity 1: (VFLUX+PMOM) || (WALL_BC+DIV_P1_early) (Predictor)
 
-> **Note:** A three-way fork (VFLUX || WALL_BC || DIV_P1 interior) was investigated and ruled out. See the investigation note above. The feasible option is a simpler two-way fork.
+> **Note:** A three-way fork (VFLUX || WALL_BC || DIV_P1 interior) was investigated and ruled out due to `DP *= RTRM`. However, a **phase-level split** of DIV_P1 IS feasible: Phases 2A-4b have no UU/VV/WW or FVX references and can run in Branch B after WALL_BC.
 
-Run VELOCITY_FLUX and WALL_BC concurrently after MESH_EXCHANGE(1). No data conflicts (confirmed in dependency proof table). PARTICLE_MOMENTUM chains after VFLUX (needs FVX). DIV_P1 runs sequentially after the join.
+Run VELOCITY_FLUX+PARTICLE_MOMENTUM and WALL_BC+DIV_P1_early concurrently after a pre-fork PREDICT_NORMAL_VELOCITY. No data conflicts (verified for both standard and CC_IBM paths). DIV_P1 Phase 5+ runs after the join.
 
 ```
-MESH_EXCHANGE(1)
-├── Branch A: VELOCITY_FLUX → PARTICLE_MOMENTUM (266 ops/cell)
-└── Branch B: WALL_BC (65 ops/cell, hidden behind A)
+PREDICT_NORMAL_VELOCITY + setup (~5 ops/cell)
+├── Branch A: VELOCITY_FLUX → PARTICLE_MOMENTUM (266 ops/cell, hidden behind B)
+└── Branch B: WALL_BC → DIV_P1 Phases 2A-4b (360 ops/cell, CRITICAL)
 
-→ Join → DIV_P1 (full, 1300 ops/cell) → DIV_EXCHANGE → ...
+→ Join → DIV_P1 Phase 5+ (~1000 ops/cell) → DIV_EXCHANGE → ...
 ```
 
-**Estimated benefit**: 65 ops/cell saved (WALL_BC hidden behind VFLUX). Modest but reliable.
+**Estimated benefit**: 266 ops/cell saved (Branch A hidden behind Branch B). Fork speedup: 1.74×.
 
-**Implementation complexity**: Low. Reuses the fork/join pattern from the corrector. No Fortran kernel changes needed.
+**Implementation complexity**: Medium. Requires splitting DIV_P1 kernel into early/late Fortran subroutines. Reuses fork/join pattern from corrector.
 
 ### Reordering Opportunity 2: Pressure BC Setup || DIV_P2 (Predictor & Corrector)
 
@@ -706,14 +716,15 @@ This creates **three fork-join pairs** in the corrector, each overlapping indepe
 ```
 INSERT_PARTICLES → COMPUTE_VISCOSITY → MASS_FINITE_DIFF → DENSITY
   → MESH_EXCHANGE(1)
+  → PREDICT_NORMAL_VELOCITY + setup (~5 ops/cell)
   → [two-way fork]
-     Branch A: VELOCITY_FLUX → PARTICLE_MOMENTUM (266 ops/cell, critical)
-     Branch B: WALL_BC (65 ops/cell, hidden behind A)
-  → Join → DIV_P1 (full) → DIV_EXCHANGE → DIV_P2 → PRESSURE_SOLVE
+     Branch A: VELOCITY_FLUX → PARTICLE_MOMENTUM (266 ops/cell, hidden behind B)
+     Branch B: WALL_BC → DIV_P1 Phases 2A-4b (360 ops/cell, CRITICAL PATH)
+  → Join → DIV_P1 Phase 5+ (~1000) → DIV_EXCHANGE → DIV_P2 → PRESSURE_SOLVE
   → VEL_PREDICTOR → CHECK_STABILITY → MESH_EXCHANGE(3) → VEL_BC
 ```
 
-> Note: Three-way fork (VFLUX || WALL_BC || DIV_P1 interior) was investigated and ruled out — DP *= RTRM makes interior/wall split impossible.
+> Note: Three-way fork (interior/wall split of DIV_P1) was ruled out — DP *= RTRM makes that impossible. But Phases 2A-4b have no UU/VV/WW or FVX references, enabling a phase-level split into Branch B.
 
 **Corrector (with reordering):**
 
@@ -740,11 +751,11 @@ COMPUTE_VISCOSITY → MASS_FINITE_DIFF → DENSITY
 |-------------|-------|-------------|------------|----------|
 | VFLUX \|\| COMBUSTION chain | Corrector | **Moderate** -- 125 ops/cell hidden | Low (no WORK conflict) | 1 |
 | DIV_P1 non-QR \|\| RADIATION | Corrector | **High** -- 1299 ops/cell hidden behind RADIATION | Medium (extract QR, scratch dup.) | 2 |
-| VFLUX \|\| WALL_BC | Predictor | **Low** -- 65 ops/cell hidden | Low (reuse fork/join pattern) | 3 |
+| (VFLUX+PMOM) \|\| (WBC+DIV_P1_early) | Predictor | **Moderate** -- 266 ops/cell hidden | Medium (DIV_P1 phase split) | 3 |
 | ~~DIV_P1 interior \|\| WALL_BC~~ | ~~Predictor~~ | ~~331 ops/cell~~ | ~~Medium~~ | ~~RULED OUT~~ |
 | Pressure BC \|\| DIV_P2 | Both | **Low** -- BC setup is ~20% of pre-solve | Low (already separate loop) | 4 |
 
-The corrector fork 2 (RADIATION || DIV_P1) is by far the most impactful opportunity, hiding the entire DIV_P1 cost behind RADIATION. The predictor three-way fork was ruled out because `DP *= RTRM` makes an interior/wall split impossible (see Phase 6 investigation).
+The corrector fork 2 (RADIATION || DIV_P1) is by far the most impactful opportunity, hiding the entire DIV_P1 cost behind RADIATION. The predictor three-way fork (interior/wall split) was ruled out because `DP *= RTRM` makes that impossible, but a phase-level split (Phases 2A-4b in Branch B) saves 266 ops/cell — 4× better than simple VFLUX || WALL_BC.
 
 ## Section-Level Cost Analysis and Hedgehog Graph Recommendations
 
@@ -782,18 +793,20 @@ Executed once per predictor and once per corrector phase (total: 2 × 1490 = 298
 
 #### Predictor Pipeline (After MESH_EXCHANGE(1))
 
-> Three-way fork (VFLUX || WALL_BC || DIV_P1 interior) was investigated and ruled out. `DP *= RTRM` in Phase 5 makes interior/wall split impossible. See [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) Phase 6.
+> Three-way fork (interior/wall split of DIV_P1) was ruled out — `DP *= RTRM` makes it impossible. But Phases 2A-4b have no UU/VV/WW or FVX references, enabling a phase-level split where DIV_P1 early phases run in Branch B after WALL_BC. See [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) Phase 6.
 
 | Section | Ops/cell | MFLOPs | Pipeline Branch | Critical Path? |
 |---------|----------|--------|-----------------|----------------|
-| VFLUX: Vorticity + stress | 44 | 12 | A | **Yes** |
-| VFLUX: FVX/FVY/FVZ | 171 | 45 | A | **Yes** |
-| VFLUX: Baroclinic corr. | 33 | 9 | A | **Yes** |
-| PARTICLE_MOMENTUM | 18 | 5 | A (after VFLUX) | **Yes** |
-| **Branch A total** | **266** | **70** | **Critical path** | |
-| WALL_BC (all sub-kernels) | 65† | 17 | B | No (hidden behind A) |
-| **Branch B total** | **65** | **17** | **Hidden behind A** | |
-| DIV_P1 (full) | 1300 | 341 | Sequential (after join) | **Yes** |
+| PREDICT_NORMAL_VELOCITY + setup | ~5 | ~1 | Pre-fork | **Yes** |
+| VFLUX: Vorticity + stress | 44 | 12 | A | No (hidden behind B) |
+| VFLUX: FVX/FVY/FVZ | 171 | 45 | A | No (hidden behind B) |
+| VFLUX: Baroclinic corr. | 33 | 9 | A | No (hidden behind B) |
+| PARTICLE_MOMENTUM | 18 | 5 | A (after VFLUX) | No (hidden behind B) |
+| **Branch A total** | **266** | **70** | **Hidden behind B** | |
+| WALL_BC (all sub-kernels) | 65† | 17 | B | **Yes** |
+| DIV_P1 Phases 2A-4b | 295 | 77 | B (after WALL_BC) | **Yes** |
+| **Branch B total** | **360** | **94** | **Critical path** | |
+| DIV_P1 Phase 5+ | ~1000 | 262 | Sequential (after join) | **Yes** |
 | DIV_P2 | 40 | 10 | Sequential | **Yes** |
 | PRESSURE_SOLVE | 50 | 13 | Sequential | **Yes** |
 | VEL_PREDICTOR | 18 | 5 | Sequential | **Yes** |
@@ -801,7 +814,7 @@ Executed once per predictor and once per corrector phase (total: 2 × 1490 = 298
 
 † WALL_BC is 210–1175 ops per wall cell; 65 ops/cell effective assumes ~10% wall fraction with simple surfaces. Thermally-thick walls with SOLID_HEAT_TRANSFER increase this substantially.
 
-**Predictor speedup**: Fork segment 331 → 266 ops/cell = **1.24× fork**. Full pipeline: 1739 → 1674 ops/cell = **1.04×** (WALL_BC is a small fraction of the predictor).
+**Predictor speedup**: Fork segment 626 → 360 ops/cell = **1.74× fork**. Full pipeline: 1739 → 1473 ops/cell = **1.18×** (266 ops/cell saved — Branch A runs entirely hidden behind Branch B).
 
 #### Corrector Pipeline (After MESH_EXCHANGE(4))
 
@@ -834,26 +847,26 @@ Executed once per predictor and once per corrector phase (total: 2 × 1490 = 298
 
 | Phase | Sequential | Pipelined | Saved | Speedup |
 |-------|-----------|-----------|-------|---------|
-| Predictor pipeline | 1739 | 1674 | 65 | 1.04× |
+| Predictor pipeline | 1739 | 1473 | 266 | 1.18× |
 | Corrector pipeline | 5364 | 3940 | 1424 | 1.36× |
-| **Combined pipeline** | **7103** | **5614** | **1489** | **1.27×** |
-| Full timestep (incl. pre-pipeline 2×1490) | 10083 | 8594 | 1489 | **1.17×** |
+| **Combined pipeline** | **7103** | **5413** | **1690** | **1.31×** |
+| Full timestep (incl. pre-pipeline 2×1490) | 10083 | 8393 | 1690 | **1.20×** |
 
 ### Critical Path Analysis
 
 The critical path determines execution time. Sections not on the critical path run "for free" behind the bottleneck.
 
-**Predictor critical path** (1674 ops/cell):
+**Predictor critical path** (1473 ops/cell):
 
 ```
-VFLUX(248) + PART_MOM(18) → DIV_P1(1300) → zone_sums(15)
+PNV(5) → WALL_BC(65) + DIV_P1_early(295) → DIV_P1_late(1000)
   → DIV_EXCHANGE → DIV_P2(40) → PRES(50) → VEL_PRED(18)
 ```
 
-Hidden (concurrent with VFLUX+PART_MOM):
-- WALL_BC (65 ops) — completes at 24% of Branch A time
+Hidden (concurrent with WALL_BC+DIV_P1_early):
+- VFLUX(248) + PART_MOM(18) = 266 ops — completes at 74% of Branch B time
 
-> Note: Three-way fork (hiding DIV_P1 interior behind WALL_BC) was ruled out — `DP *= RTRM` prevents interior/wall split.
+> Note: Three-way fork (interior/wall split of DIV_P1) was ruled out — `DP *= RTRM` prevents it. But Phases 2A-4b have no UU/VV/WW or FVX refs, enabling a phase-level split.
 
 **Corrector critical path** (3940 ops/cell):
 
@@ -919,19 +932,19 @@ Savings: min(RADIATION_cost, 1299) ops/cell. For typical fire: 1299 ops/cell sav
 
 #### Tier 2 — Moderate Impact, Implement Next
 
-**2.1 Predictor: Two-way fork (VFLUX || WALL_BC)**
+**2.1 Predictor: (VFLUX+PMOM) || (WALL_BC+DIV_P1_early)**
 
-Fork into two branches after MESH_EXCHANGE(1):
-- Branch A: VelocityFluxTask → ParticleMomentumTask (266 ops/cell, critical path)
-- Branch B: WallBCTask (65 ops/cell, hidden behind A)
+Extract PREDICT_NORMAL_VELOCITY as a pre-fork step. Fork into two branches:
+- Branch A: VelocityFluxTask → ParticleMomentumTask (266 ops/cell, hidden behind B)
+- Branch B: WallBCTask → DivP1EarlyTask [Phases 2A-4b] (360 ops/cell, critical path)
 
-Join at: DIV_P1 (full computation, needs B1 props from WALL_BC).
+Join at: DIV_P1 Phase 5+ (needs UU/VV/WW from VFLUX thread + B1 props from WALL_BC + FVX for CC_IBM).
 
-No WORK conflict (WALL_BC uses no WORK arrays). No Fortran kernel changes needed. Reuses fork/join pattern from Tier 1.1.
+WORK conflict: VFLUX uses WORK1-6, DIV_P1 early phases use WORK1-7. **Requires per-branch scratch duplication** (same mechanism as Tier 1.2). WALL_BC uses no WORK arrays. Requires splitting DIV_P1 kernel into early/late Fortran subroutines.
 
-Savings: 65 ops/cell (WALL_BC hidden behind VFLUX+PART_MOM).
+Savings: 266 ops/cell (Branch A hidden behind Branch B). Fork speedup: 1.74×.
 
-> **Three-way fork (VFLUX || WALL_BC || DIV_P1_interior) was ruled out.** DIV_P1's interior I,J,K loops include boundary face positions that are read into DP. The multiplicative step `DP *= RTRM` in Phase 5 makes any boundary-face error irreversible. See [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) Phase 6.
+> **Three-way fork (interior/wall split of DIV_P1) was ruled out** — `DP *= RTRM` in Phase 5 makes boundary-face errors irreversible. But Phases 2A-4b have no UU/VV/WW or FVX references at all, enabling a clean phase-level split. Verified safe for CC_IBM paths (SET_EXIMDIFFLX_3D only touches species diffusion arrays). See [IMPLEMENTATION_PROGRESS.md](IMPLEMENTATION_PROGRESS.md) Phase 6.
 
 #### Tier 3 — Low Impact, Deferred
 
@@ -963,12 +976,12 @@ Phase 2: Corrector RADIATION || DIV_P1 fork (Tier 1.2)
   - Estimated effort: medium
   - Expected speedup: ~30% of corrector pipeline
 
-Phase 3: Predictor two-way fork (Tier 2.1)
-  - No Fortran kernel changes needed
-  - Reuse fork/join pattern from Phase 1
-  - Add fork state after EX(1), join before DIV_P1
-  - Estimated effort: low
-  - Expected speedup: ~4% of predictor pipeline (65 ops/cell saved)
+Phase 3: Predictor fork with DIV_P1 phase split (Tier 2.1)
+  - Fortran: split DIV_P1 into pre-fork / early (Ph2A-4b) / late (Ph5+) kernels
+  - Add fork state after PNV, join before DIV_P1 late
+  - Branch A: VFLUX + PART_MOM; Branch B: WALL_BC + DIV_P1_early
+  - Estimated effort: medium
+  - Expected speedup: ~18% of predictor pipeline (266 ops/cell saved)
 
 Phase 4 (optional): Intra-routine optimizations (Tier 3)
   - Only pursue after Phases 1-3 are validated
