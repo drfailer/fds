@@ -12,6 +12,10 @@
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/combustion_kernel_task.h"
+#include "../data/pipeline_fork1_data.h"
+#include "../state/pipeline_fork1_state.h"
+#include "../task/pipeline_fork1_tasks.h"
+#include "pipeline_fork1_vflux_subgraph.h"
 #include "../task/corr_condens_kernel_task.h"
 #include "../task/particle_mass_energy_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
@@ -73,8 +77,6 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // Block decomposition: if no Coriolis/patch/CTRL/wind/periodic, use K-block parallel
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool canBlockFlux = fds_velocity_flux_can_block_decompose(1) != 0;
-    auto corrDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(kernelThreads);
-
     // CorrParticle: parallel MASS_ENERGY -> sequential REMOVE+MOVE -> parallel MOMENTUM
     auto particleMassEnergyKernelTask = std::make_shared<ParticleMassEnergyKernelTask>(kernelThreads);
     auto particleRemoveMoveCollSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
@@ -106,8 +108,6 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         std::make_shared<CollectorState>(nmeshes), "Collector(4)");
     auto meshExchange4 = std::make_shared<MeshExchangeTask>(4, /*ccDensity=*/ccIBM);
 
-    // Combustion: parallel kernel -> Soot+HVAC sequential barrier
-    auto combustionKernelTask = std::make_shared<CombustionKernelTask>(kernelThreads);
     auto sootHvacCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "SootHvacCollector");
     auto sootHvacTask = std::make_shared<SootHvacTask>(1);
@@ -174,30 +174,27 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     }
     subgraph->edges(collector4SM, meshExchange4);
 
-    // CorrDivSetup: block-decomposed or mesh-level depending on feature flags
-    if (canBlockFlux) {
-        // Block decomposition: orchestrator(pre-proc + K-decompose) -> parallel blocks -> collector
-        // CC_IBM handled internally: CC_VELOCITY_BC + CUTFACE_VELOCITIES in orchestrator,
-        // CC_VELOCITY_FLUX in collector
-        auto corrDivSetupBlockSubgraph = buildVelocityFluxBlockSubgraph(
-            nmeshes, blockThreads, numBlocks);
-        subgraph->edges(meshExchange4, corrDivSetupBlockSubgraph);
-        subgraph->edges(corrDivSetupBlockSubgraph, combustionKernelTask);
-    } else if (ccIBM) {
-        // CC_IBM with features preventing block decomposition: orchestrator + mesh-level kernel
-        auto corrDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "CorrDivSetupOrch");
-        subgraph->edges(meshExchange4, corrDivSetupOrchSM);
-        subgraph->edges(corrDivSetupOrchSM, corrDivSetupKernelTask);
-        subgraph->edges(corrDivSetupKernelTask, combustionKernelTask);
-    } else {
-        // Mesh-level fallback (Coriolis, patch velocity, etc.)
-        subgraph->edges(meshExchange4, corrDivSetupKernelTask);
-        subgraph->edges(corrDivSetupKernelTask, combustionKernelTask);
-    }
+    // --- Fork 1: VFLUX || COMBUSTION ---
+    // Both branches run concurrently after MeshExchange(4), join before SootHvac.
 
-    // Combustion: parallel kernel -> Soot+HVAC barrier
-    subgraph->edges(combustionKernelTask, sootHvacCollectorSM);
+    auto fork1SM = std::make_shared<hh::StateManager<1, MeshData, Fork1VFluxWork, Fork1CombWork>>(
+        std::make_shared<PipelineFork1State>(), "Fork1");
+    auto fork1VFluxSubgraph = buildFork1VFluxSubgraph(
+        nmeshes, kernelThreads, blockThreads, numBlocks, canBlockFlux, ccIBM);
+    auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(kernelThreads);
+    auto join1SM = std::make_shared<hh::StateManager<2, Fork1VFluxResult, Fork1CombResult, MeshData>>(
+        std::make_shared<PipelineJoin1State>(), "Join1");
+
+    subgraph->edges(meshExchange4, fork1SM);
+    // Branch A: Fork1 -> VFLUX sub-graph -> Join1
+    subgraph->edges(fork1SM, fork1VFluxSubgraph);
+    subgraph->edges(fork1VFluxSubgraph, join1SM);
+    // Branch B: Fork1 -> Combustion task -> Join1
+    subgraph->edges(fork1SM, fork1CombTask);
+    subgraph->edges(fork1CombTask, join1SM);
+
+    // After join: Soot+HVAC barrier
+    subgraph->edges(join1SM, sootHvacCollectorSM);
     subgraph->edges(sootHvacCollectorSM, sootHvacTask);
 
     // CorrCondens -> CorrParticle: parallel MASS_ENERGY -> REMOVE+MOVE barrier -> parallel MOMENTUM

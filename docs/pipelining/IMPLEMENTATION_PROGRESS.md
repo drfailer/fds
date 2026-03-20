@@ -8,7 +8,7 @@ This file tracks the implementation of intra-timestep pipelining parallelism in 
 
 **Strategy**: Bottom-up implementation. First prepare the Fortran kernels and validate them sequentially in the existing graph, then restructure the graph with fork-join states.
 
-## Current Phase: 4 — Corrector Fork 1 (VFLUX || COMBUSTION)
+## Current Phase: 5 — Corrector Fork 2 (RADIATION || DIV_P1)
 
 ---
 
@@ -204,12 +204,12 @@ New data types needed (lightweight wrappers around MeshData):
 
 ### Checklist
 
-- [ ] Create pipeline data types
-- [ ] Create fork state
-- [ ] Create join state
-- [ ] Adapt VelocityFlux sub-graph for VFluxWork input
-- [ ] Adapt CombustionKernelTask for CombWork input
-- [ ] Wire corrector sub-graph with fork/join
+- [x] Create pipeline data types (Fork1VFluxWork/Result, Fork1CombWork/Result)
+- [x] Create fork state (PipelineFork1State)
+- [x] Create join state (PipelineJoin1State, per-mesh matching)
+- [x] Adapt VelocityFlux sub-graph for VFluxWork input (nested sub-graph with unwrap/wrap)
+- [x] Adapt CombustionKernelTask for CombWork input (Fork1CombKernelTask)
+- [x] Wire corrector sub-graph with fork/join (12/12 tests pass)
 - [ ] Run verification suite
 - [ ] Compare performance (dot file execution stats)
 
