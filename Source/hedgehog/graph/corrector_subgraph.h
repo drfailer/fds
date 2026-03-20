@@ -32,6 +32,7 @@
 #include "corr_radiation_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 #include "density_block_subgraph.h"
+#include "visc_density_block_subgraph.h"
 #include "../data/pipeline_fork2_data.h"
 #include "../state/pipeline_fork2_state.h"
 #include "../task/pipeline_fork2_tasks.h"
@@ -152,37 +153,31 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // --- Wire the sub-graph ---
 
     // CorrStep1: viscosity -> mass_fd -> density -> MESH_EXCHANGE(4)
-    if (canBlockVisc) {
-        // Block-decomposed viscosity -> separate mass_fd task
+    if (canBlockVisc && canBlockDensity) {
+        // Merged: ViscBlockKernel -> MidState(ViscPost+MassFD+DensPrep) -> DensityBlockKernel
+        auto corrViscDensitySubgraph = buildViscDensityBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->inputs(corrViscDensitySubgraph);
+        subgraph->edges(corrViscDensitySubgraph, meshExchange4SM);
+    } else if (canBlockVisc) {
         auto corrViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
             nmeshes, blockThreads, numBlocks);
         auto corrMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
+        auto corrMassFDDensityFallback = std::make_shared<DensityPredKernelTask>(kernelThreads);
         subgraph->inputs(corrViscBlockSubgraph);
         subgraph->edges(corrViscBlockSubgraph, corrMassFDKernelTask);
-        if (canBlockDensity) {
-            auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
-                nmeshes, blockThreads, numBlocks);
-            subgraph->edges(corrMassFDKernelTask, corrDensityBlockSubgraph);
-            subgraph->edges(corrDensityBlockSubgraph, meshExchange4SM);
-        } else {
-            auto corrMassFDDensityFallback = std::make_shared<DensityPredKernelTask>(kernelThreads);
-            subgraph->edges(corrMassFDKernelTask, corrMassFDDensityFallback);
-            subgraph->edges(corrMassFDDensityFallback, meshExchange4SM);
-        }
+        subgraph->edges(corrMassFDKernelTask, corrMassFDDensityFallback);
+        subgraph->edges(corrMassFDDensityFallback, meshExchange4SM);
+    } else if (canBlockDensity) {
+        auto corrViscMassFDTask = std::make_shared<CorrViscMassFDKernelTask>(kernelThreads);
+        auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->inputs(corrViscMassFDTask);
+        subgraph->edges(corrViscMassFDTask, corrDensityBlockSubgraph);
+        subgraph->edges(corrDensityBlockSubgraph, meshExchange4SM);
     } else {
-        if (canBlockDensity) {
-            // Mesh-level viscosity + mass_fd, block-decomposed density
-            auto corrViscMassFDTask = std::make_shared<CorrViscMassFDKernelTask>(kernelThreads);
-            auto corrDensityBlockSubgraph = buildDensityBlockSubgraph(
-                nmeshes, blockThreads, numBlocks);
-            subgraph->inputs(corrViscMassFDTask);
-            subgraph->edges(corrViscMassFDTask, corrDensityBlockSubgraph);
-            subgraph->edges(corrDensityBlockSubgraph, meshExchange4SM);
-        } else {
-            // Mesh-level fallback: combined viscosity + mass_fd + density
-            subgraph->inputs(corrStep1KernelTask);
-            subgraph->edges(corrStep1KernelTask, meshExchange4SM);
-        }
+        subgraph->inputs(corrStep1KernelTask);
+        subgraph->edges(corrStep1KernelTask, meshExchange4SM);
     }
 
     // --- Fork 1: VFLUX || COMBUSTION ---

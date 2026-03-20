@@ -477,6 +477,43 @@ Parser: `test_cases/parse_dot_stats.py` — extracts per-node timing from Hedgeh
 4. CorrPressure (barrier): 377ms — pressure iteration
 5. CorrFinalBlockColl (collector): 373ms — corrector final gather
 
+## Phase 8: Block Sub-Graph Merging
+
+**Objective**: Reduce overhead by merging adjacent block sub-graphs that share K-block decomposition into single sub-graphs with fewer decompose/reassemble round-trips.
+
+### 8a: ViscBlock + MassFD + DensityBlock → ViscDensityBlock
+
+Merges three adjacent stages (ViscBlock sub-graph, MassFD kernel task, DensityBlock sub-graph) into a single ViscDensityBlock sub-graph.
+
+**Architecture**:
+```
+Before (7 nodes, 6 queues):
+  ViscOrch → ViscKernel → ViscCollector → MassFD → DensityOrch → DensityKernel → DensityCollector
+
+After (5 nodes, 4 queues):
+  ViscDensityOrch → ViscKernel → ViscDensityMidState → DensityKernel → ViscDensityCollector
+```
+
+**New component**: `ViscDensityMidState` — reassembles visc K-blocks per-mesh, runs three sequential operations (ViscPostBlock + MassFD + DensityPreprocessing), then re-decomposes for density. Dispatches per-mesh (no all-mesh barrier), enabling pipeline overlap between meshes.
+
+**Files**:
+- [x] Created `graph/visc_density_block_subgraph.h` (ViscDensityMidState + builder)
+- [x] Modified `graph/predictor_subgraph.h` (merged path when canBlockVisc && canBlockDensity)
+- [x] Modified `graph/corrector_subgraph.h` (merged path when canBlockVisc && canBlockDensity)
+
+**Conditional paths** (4 combinations, only both-true changes):
+| canBlockVisc | canBlockDensity | Pipeline |
+|---|---|---|
+| true | true | **ViscDensityBlock** (merged) |
+| true | false | ViscBlock → MassFD → DensPredKernel (unchanged) |
+| false | true | PredStep1/CorrStep1 → DensityBlock (unchanged) |
+| false | false | PredStep1/CorrStep1 → DensPredKernel (unchanged) |
+
+**Results**:
+- **Custom tests**: 12/12 pass
+- **Verification suite**: 46/58 pass (no regressions)
+- Eliminates 2 nodes and 2 inter-node queues per phase (4 nodes, 4 queues total for pred+corr)
+
 ---
 
 ## Summary

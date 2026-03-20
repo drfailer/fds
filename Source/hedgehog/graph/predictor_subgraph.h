@@ -29,6 +29,7 @@
 #include "wallbc_block_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 #include "density_block_subgraph.h"
+#include "visc_density_block_subgraph.h"
 #include "pred_fork_vflux_subgraph.h"
 #include "pred_fork_div_subgraph.h"
 
@@ -134,32 +135,30 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->inputs(predStep1OrchSM);
 
     // PredStep1: orchestrator (INSERT_ALL_PARTICLES) -> viscosity -> mass_fd -> Density
-    if (canBlockVisc) {
+    if (canBlockVisc && canBlockDensity) {
+        // Merged: ViscBlockKernel -> MidState(ViscPost+MassFD+DensPrep) -> DensityBlockKernel
+        auto predViscDensitySubgraph = buildViscDensityBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(predStep1OrchSM, predViscDensitySubgraph);
+        subgraph->edges(predViscDensitySubgraph, meshExchange1SM);
+    } else if (canBlockVisc) {
         auto predViscBlockSubgraph = buildComputeViscosityBlockSubgraph(
             nmeshes, blockThreads, numBlocks);
         auto predMassFDKernelTask = std::make_shared<MassFDKernelTask>(kernelThreads);
         subgraph->edges(predStep1OrchSM, predViscBlockSubgraph);
         subgraph->edges(predViscBlockSubgraph, predMassFDKernelTask);
-        if (canBlockDensity) {
-            auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
-                nmeshes, blockThreads, numBlocks);
-            subgraph->edges(predMassFDKernelTask, predDensityBlockSubgraph);
-            subgraph->edges(predDensityBlockSubgraph, meshExchange1SM);
-        } else {
-            subgraph->edges(predMassFDKernelTask, densPredKernelTask);
-            subgraph->edges(densPredKernelTask, meshExchange1SM);
-        }
+        subgraph->edges(predMassFDKernelTask, densPredKernelTask);
+        subgraph->edges(densPredKernelTask, meshExchange1SM);
+    } else if (canBlockDensity) {
+        auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
+            nmeshes, blockThreads, numBlocks);
+        subgraph->edges(predStep1OrchSM, predStep1KernelTask);
+        subgraph->edges(predStep1KernelTask, predDensityBlockSubgraph);
+        subgraph->edges(predDensityBlockSubgraph, meshExchange1SM);
     } else {
         subgraph->edges(predStep1OrchSM, predStep1KernelTask);
-        if (canBlockDensity) {
-            auto predDensityBlockSubgraph = buildDensityBlockSubgraph(
-                nmeshes, blockThreads, numBlocks);
-            subgraph->edges(predStep1KernelTask, predDensityBlockSubgraph);
-            subgraph->edges(predDensityBlockSubgraph, meshExchange1SM);
-        } else {
-            subgraph->edges(predStep1KernelTask, densPredKernelTask);
-            subgraph->edges(densPredKernelTask, meshExchange1SM);
-        }
+        subgraph->edges(predStep1KernelTask, densPredKernelTask);
+        subgraph->edges(densPredKernelTask, meshExchange1SM);
     }
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
