@@ -284,40 +284,56 @@ DIV_EXCHANGE collector → ...
 
 ## Phase 6: Predictor Pipelining (Optional)
 
-**Objective**: Add pipelining to the predictor phase. Two options with different complexity/impact tradeoffs.
+**Objective**: Add pipelining to the predictor phase.
 
-### Option A: VFLUX || WALL_BC Two-Way Fork (Simple)
+**Decision**: Option A (two-way fork: VFLUX || WALL_BC). Option B (three-way fork including DIV_P1) was investigated and ruled out.
+
+### Investigation Results: Option B NOT Feasible
+
+A phase-by-phase analysis of DIV_P1's interior/wall correction split was conducted. The findings:
+
+**PREDICT_NORMAL_VELOCITY**: Self-contained in predictor (uses SURFACE properties + current velocity, not WALL_BC outputs). Can run independently. OK.
+
+**Phase 2A (COMPUTE_SPECIES_DIFFUSION_FLUXES)**: Interior face gradients are independent of WALL_BC, but the mass conservation correction (lines 275-288) operates on ALL faces including boundary faces. Wall corrections overwrite boundary faces afterward, so this could be tolerable.
+
+**Phase 2B (COMPUTE_DIFFUSIVE_HEAT_FLUX)**: SHOWSTOPPER. The interior loop computes `H_RHO_D_DZDX` at ALL face positions (0:IBAR), including boundary faces. Without wall corrections, boundary face values are wrong. The divergence accumulation (`DP += div(H_RHO_D_DZDX)`) reads these wrong boundary values for wall-adjacent cells (e.g., cell I=1 reads face I=0). Phase 2B's own wall correction (lines 338-413) independently overwrites scratch arrays, but the DP contribution has already been computed.
+
+**Phase 5 (COMPUTE_DIVERGENCE_SOURCES)**: FATAL. `DP *= RTRM` (lines 609-632) is a **multiplicative** operation on DP. Any prior error from wrong boundary face values in Phases 2B and 4b is amplified. No additive correction can fix this after the fact.
+
+**Consequence**: To correct wall-adjacent DP values after WALL_BC completes, we would need to re-run the entire DIV_P1 computation for those cells — essentially running DIV_P1 twice. This negates the parallelism savings.
+
+| Factor | Detail |
+|--------|--------|
+| Root cause | DP accumulation is sequential with multiplicative step (DP *= RTRM) |
+| Boundary face reads | Phases 2B, 4b, 5A, 5C all read scratch arrays at boundary faces |
+| B1 properties needed | TMP_F, ZZ_F, RHO_F, RHO_D_DZDN_F, Q_CON_F — all set by WALL_BC |
+| Correction feasibility | Impossible without re-running DIV_P1 for wall-adjacent cells |
+
+### Option A: VFLUX || WALL_BC Two-Way Fork (CHOSEN)
 
 Run VELOCITY_FLUX and WALL_BC concurrently after MESH_EXCHANGE(1). No WORK conflict (WALL_BC uses no WORK arrays). Already validated safe in data-flow analysis.
 
-**Expected savings**: 65 ops/cell (WALL_BC hidden behind VFLUX). Modest.
+**Expected savings**: 65 ops/cell (WALL_BC hidden behind VFLUX). Modest but reliable.
 
 ```
 EX(1) → Fork →
-  Branch A: VFLUX
+  Branch A: VFLUX → PART_MOM (needs FVX from VFLUX)
   Branch B: WALL_BC
-→ Join → PART_MOM → DIV_P1 → ...
+→ Join → DIV_P1 → DIV_EXCHANGE → ...
 ```
 
-### Option B: Three-Way Fork Including DIV_P1 Interior (Complex)
-
-Run VFLUX, WALL_BC, and DIV_P1 interior computation concurrently. DIV_P1 wall corrections run after WALL_BC completes.
-
-**Expected savings**: 331 ops/cell. Speedup: 1.24x predictor pipeline.
-
-**Complexity**: Requires splitting each DIV_P1 phase into interior-only and wall-correction sub-loops. The inter-phase dependencies (Phase 2A wall corrections affect Phase 2B inputs) make this non-trivial. Needs careful analysis to determine if wall corrections can be deferred to after all interior phases complete, or if they must be interleaved.
-
-### Investigation Items (Before Choosing)
-
-- [ ] Analyze Phase 2A/2B wall correction dependency: can wall corrections for ALL phases be deferred to after all interior phases complete?
-- [ ] If not: identify which phases can defer wall corrections and which must interleave
-- [ ] Estimate implementation complexity of interior/wall split
-- [ ] Compare with Option A (simple) to decide if the 4x higher savings justifies the complexity
+**Architecture**: Reuse the fork/join pattern from Phase 4 with predictor-specific data types.
 
 ### Checklist (Implementation)
 
-- [ ] Decide Option A vs Option B based on investigation
-- [ ] Implement chosen option
+- [x] Investigate Option B feasibility (result: NOT feasible)
+- [ ] Create predictor fork/join data types
+- [ ] Create predictor fork state (MeshData → PredVFluxWork + PredWBCWork)
+- [ ] Create predictor join state (per-mesh matching)
+- [ ] Adapt VelocityFlux sub-graph for PredVFluxWork input
+- [ ] Chain PARTICLE_MOMENTUM after VFLUX in Branch A
+- [ ] Adapt WallBC sub-graph for PredWBCWork input
+- [ ] Wire predictor sub-graph with fork/join
 - [ ] Run verification suite
 - [ ] Compare performance
 
@@ -332,12 +348,12 @@ Run VFLUX, WALL_BC, and DIV_P1 interior computation concurrently. DIV_P1 wall co
 | 3 | Sequential driver | None | Task internals only | Validation | N/A (validation) |
 | 4 | Corrector Fork 1 | None | Fork/join states | Not needed | ~2% corrector |
 | 5 | Corrector Fork 2 | From Phase 1 | Fork/join states | Active | ~30% corrector |
-| 6 | Predictor pipeline | Maybe (Option B) | Fork/join states | Maybe | 4-20% predictor |
+| 6 | Predictor pipeline | None | Fork/join states | Not needed | ~4% predictor |
 
 **Phases 1-3**: Foundation work. No speedup, but validates all kernels.
 **Phase 4**: First graph restructuring. Simple, low risk. Small but reliable speedup.
 **Phase 5**: High-impact change. Relies on Phases 1-3 infrastructure.
-**Phase 6**: Optional. Decision after Phases 4-5 are validated and profiled.
+**Phase 6**: Optional. Simple VFLUX || WALL_BC fork (Option B ruled out). Low priority.
 
 ---
 
