@@ -12,7 +12,7 @@ class ParticleMassEnergyKernelTask
 public:
     explicit ParticleMassEnergyKernelTask(size_t numThreads)
         : hh::AbstractTask<1, MeshData, MeshData>(
-              "ParticleMassEnergy", numThreads) {}
+              "ParticleMassEnergyKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
         fds_particle_mass_energy_kernel(data->nm, data->t, data->dt);

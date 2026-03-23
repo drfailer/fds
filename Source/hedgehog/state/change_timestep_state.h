@@ -9,29 +9,43 @@
 /// State that manages the retry loop cycle.
 ///
 /// Receives RetrySequenceData after each retry sequence pass.
-/// Two output types enable Hedgehog type-based routing:
-///   - RetrySequenceData → cycles back to retryDensity for another retry
-///   - MeshData → exits the subgraph (retry complete or no retry needed)
+/// Includes the post-kernel work (divergence exchange, div_p2, pressure,
+/// velocity predictor) that was previously in RetryPostKernelTask.
 ///
-/// Termination is data-driven: the state records the latest (t, dt) from
-/// processed tokens and checks t + dt >= tEnd in canTerminate(). This is
-/// monotonic — once the simulation time reaches tEnd, the condition stays true.
+/// Two output types for Hedgehog type-based routing:
+///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
+///   - MeshData → exits the subgraph (retry complete or no retry needed)
 class RetryLoopState : public hh::AbstractState<1, RetrySequenceData, RetrySequenceData, MeshData> {
 public:
     explicit RetryLoopState(double tEnd) : tEnd_(tEnd) {}
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
-        // Record latest time values from flowing data
         lastT_ = data->t;
         lastDt_ = data->dt;
 
         if (data->done) {
-            // No retry needed (or retries complete): emit MeshData to exit
+            // No retry needed: emit MeshData to exit
             for (auto &md : data->meshes) {
                 this->addResult(md);
             }
             return;
         }
+
+        // Post-kernel work (was RetryPostKernelTask)
+        fds_exchange_divergence_info();
+
+        for (auto &md : data->meshes) {
+            fds_divergence_part_2(data->dt, md->nm);
+        }
+
+        fds_pressure_iteration(data->t, data->dt);
+        fds_init_change_time_step(data->dt);
+
+        for (auto &md : data->meshes) {
+            fds_velocity_predictor(data->t + data->dt, data->dt, md->nm);
+        }
+
+        fds_stop_check_zero();
 
         // Check if we should stop due to instability
         int stopStatus = fds_get_stop_status();
@@ -48,12 +62,10 @@ public:
         fds_check_change_time_step(&needRetry, &newDt);
 
         if (!needRetry) {
-            // Retries complete: emit MeshData to exit
             for (auto &md : data->meshes) {
                 this->addResult(md);
             }
         } else {
-            // Another retry needed: cycle back with new dt
             auto retryData = std::make_shared<RetrySequenceData>(
                 data->meshes, data->t, newDt, data->iteration + 1, false);
             this->addResult(retryData);
@@ -71,9 +83,6 @@ private:
 };
 
 /// Custom state manager for the retry loop cycle.
-/// canTerminate() is data-driven: it checks whether the last processed token's
-/// t + dt has reached tEnd. This keeps the cycle alive across all time steps
-/// and only allows termination when the simulation time reaches the end.
 class RetryLoopStateManager
     : public hh::StateManager<1, RetrySequenceData, RetrySequenceData, MeshData> {
 public:

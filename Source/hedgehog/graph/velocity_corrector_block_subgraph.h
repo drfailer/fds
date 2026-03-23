@@ -8,33 +8,28 @@
 #include "../state/mesh_block_state.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged pre-decompose task for velocity corrector.
-/// Combines CC_PROJECT_VELOCITY store + WALL_VELOCITY_NO_GRADH store
-/// into a single task to eliminate 1 intermediate queue.
-/// Both are no-ops for non-CC_IBM / FFT cases.
-class VelCorrPreDecomposeTask
+/// Merged pre-decompose kernel for velocity corrector.
+/// CC_PROJECT_VELOCITY store + WALL_VELOCITY_NO_GRADH store.
+class VelCorrPreKernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    explicit VelCorrPreDecomposeTask(size_t numThreads)
+    explicit VelCorrPreKernelTask(size_t numThreads)
         : hh::AbstractTask<1, MeshData, MeshData>(
-              "VelCorrPreDecompose", numThreads) {}
+              "VelCorrPreKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        fds_cc_project_velocity_kernel(data->nm, data->dt,
-                                        /*store=*/1, /*predictor=*/0);
-        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt,
-                                           /*store=*/1, /*predictor=*/0);
+        fds_cc_project_velocity_kernel(data->nm, data->dt, 1, 0);
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 1, 0);
         this->addResult(data);
     }
 
     std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
     copy() override {
-        return std::make_shared<VelCorrPreDecomposeTask>(this->numberThreads());
+        return std::make_shared<VelCorrPreKernelTask>(this->numberThreads());
     }
 };
 
 /// Block kernel task for velocity corrector.
-/// Processes a K-range sub-block of a single mesh.
 class VelocityCorrectorBlockKernelTask
     : public hh::AbstractTask<1, MeshBlockData, MeshBlockData> {
 public:
@@ -55,59 +50,53 @@ public:
     }
 };
 
-/// Merged post-reassembly task for velocity corrector.
-/// Combines CC_PROJECT_VELOCITY fix + WALL_VELOCITY_NO_GRADH fix + CHECK_DIVERGENCE
-/// into a single task to eliminate 2 intermediate queues.
-/// CC_PROJECT_VELOCITY and WALL_VELOCITY_NO_GRADH are no-ops for non-CC_IBM / FFT cases.
-class VelCorrPostReassembleTask
+/// Merged post-reassembly kernel for velocity corrector.
+/// CC_PROJECT_VELOCITY fix + WALL_VELOCITY_NO_GRADH fix + CHECK_DIVERGENCE.
+class VelCorrPostKernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    explicit VelCorrPostReassembleTask(size_t numThreads)
+    explicit VelCorrPostKernelTask(size_t numThreads)
         : hh::AbstractTask<1, MeshData, MeshData>(
-              "VelCorrPostReassemble", numThreads) {}
+              "VelCorrPostKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        fds_cc_project_velocity_kernel(data->nm, data->dt,
-                                        /*store=*/0, /*predictor=*/0);
-        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt,
-                                           /*store=*/0, /*predictor=*/0);
+        fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 0);
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 0);
         fds_check_divergence_kernel(data->nm);
         this->addResult(data);
     }
 
     std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
     copy() override {
-        return std::make_shared<VelCorrPostReassembleTask>(this->numberThreads());
+        return std::make_shared<VelCorrPostKernelTask>(this->numberThreads());
     }
 };
 
 /// Build the velocity corrector sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> VelCorrPreDecompose(CCProjectVelStore + WallVelStore)
+///   MeshData -> VelCorrPreKernel(CCProjectVelStore + WallVelStore)
 ///            -> Decompose -> VelCorrBlockKernel(parallel) -> Reassemble
-///            -> VelCorrPostReassemble(CCProjectVelFix + WallVelFix + CheckDiv)
+///            -> VelCorrPostKernel(CCProjectVelFix + WallVelFix + CheckDiv)
 ///            -> MeshData
-///
-/// @param kernelThreads Number of threads for parallel tasks
-/// @param numBlocks Target number of blocks per mesh (default: kernelThreads)
-inline auto buildVelocityCorrectorBlockSubgraph(size_t kernelThreads, int numBlocks) {
+inline auto buildVelocityCorrectorBlockSubgraph(size_t blockThreads,
+                                                  int numBlocks, int nmeshes) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityCorrectorBlock");
 
-    auto preDecompose = std::make_shared<VelCorrPreDecomposeTask>(kernelThreads);
+    auto preKernel = std::make_shared<VelCorrPreKernelTask>(static_cast<size_t>(nmeshes));
     auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
         std::make_shared<MeshBlockDecomposeState>(numBlocks), "VelCorrDecompose");
-    auto blockKernel = std::make_shared<VelocityCorrectorBlockKernelTask>(kernelThreads);
+    auto blockKernel = std::make_shared<VelocityCorrectorBlockKernelTask>(blockThreads);
     auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
         std::make_shared<MeshBlockReassembleState>(), "VelCorrReassemble");
-    auto postReassemble = std::make_shared<VelCorrPostReassembleTask>(kernelThreads);
+    auto postKernel = std::make_shared<VelCorrPostKernelTask>(static_cast<size_t>(nmeshes));
 
-    subgraph->inputs(preDecompose);
-    subgraph->edges(preDecompose, decomposeSM);
+    subgraph->inputs(preKernel);
+    subgraph->edges(preKernel, decomposeSM);
     subgraph->edges(decomposeSM, blockKernel);
     subgraph->edges(blockKernel, reassembleSM);
-    subgraph->edges(reassembleSM, postReassemble);
-    subgraph->outputs(postReassemble);
+    subgraph->edges(reassembleSM, postKernel);
+    subgraph->outputs(postKernel);
 
     return subgraph;
 }

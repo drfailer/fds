@@ -13,7 +13,7 @@
 /// RetrySequenceData from the cycle (subsequent retries).
 ///
 /// When no retry is needed: emits RetrySequenceData(done=true) which
-/// bypasses the kernel via type-based routing to RetryPostKernelTask.
+/// bypasses the kernel via type-based routing to RetryLoopState.
 ///
 /// When retry is needed: runs density, mesh exchange, velocity flux,
 /// HVAC, divergence init, and wall BC, then scatters MeshData tokens
@@ -37,7 +37,7 @@ public:
         if (!needRetry) {
             auto retryData = std::make_shared<RetrySequenceData>(
                 barrier->meshes, barrier->t(), barrier->dt(), -1, true);
-            this->addResult(retryData);  // bypass to post-kernel
+            this->addResult(retryData);  // bypass to RetryLoopState
             return;
         }
 
@@ -94,7 +94,6 @@ private:
 };
 
 /// Parallel kernel for particle momentum + divergence part 1 in retry path.
-/// Thread-safe: uses kernel versions that bypass POINT_TO_MESH.
 class RetryMomentumDivKernelTask : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit RetryMomentumDivKernelTask(size_t kernelThreads)
@@ -109,42 +108,6 @@ public:
     void execute(std::shared_ptr<MeshData> data) override {
         fds_particle_momentum_kernel(data->nm, data->dt);
         fds_divergence_part_1_kernel(data->nm, data->t, data->dt);
-        this->addResult(data);
-    }
-};
-
-/// All sequential post-kernel operations for the CFL retry loop.
-///
-/// Receives RetrySequenceData from the collector (after kernel, done=false)
-/// or from the pre-kernel bypass (done=true).
-///
-/// When done: passes through to RetryLoopState which exits the subgraph.
-/// When not done: runs divergence exchange, divergence part 2, pressure
-/// iteration, and velocity predictor.
-class RetryPostKernelTask
-    : public hh::AbstractTask<1, RetrySequenceData, RetrySequenceData> {
-public:
-    RetryPostKernelTask()
-        : hh::AbstractTask<1, RetrySequenceData, RetrySequenceData>(
-              "RetryPostKernel", 1) {}
-
-    void execute(std::shared_ptr<RetrySequenceData> data) override {
-        if (data->done) { this->addResult(data); return; }
-
-        fds_exchange_divergence_info();
-
-        for (auto &md : data->meshes) {
-            fds_divergence_part_2(data->dt, md->nm);
-        }
-
-        fds_pressure_iteration(data->t, data->dt);
-        fds_init_change_time_step(data->dt);
-
-        for (auto &md : data->meshes) {
-            fds_velocity_predictor(data->t + data->dt, data->dt, md->nm);
-        }
-
-        fds_stop_check_zero();
         this->addResult(data);
     }
 };
