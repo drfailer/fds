@@ -96,7 +96,6 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Kernel: WALL_BC_PROCESS_CELLS_KERNEL (~90% of wall cells, no cross-mesh dependencies)
     - Sequential finalization: HAS_BACK_MESH cells, thin walls, particle off-gassing
     - Files: data/wallbc_data.h, state/wallbc_state.h, task/wallbc_kernel_task.h
-    - Documentation: docs/WALL_BC_PARALLELIZATION_PLAN.md, test_cases/WALLBC_TEST_REPORT.md
     - Replaced: CorrWallBCTask
 
 13. **PredFinal** (3-phase complex routine, Pattern B)
@@ -437,6 +436,24 @@ approach for the predictor-corrector scheme.
 
 **Run verification**: `cd test_cases && python3 run_verification.py test --no-redundant --max-gold-time 30 --timeout 120 --tolerance 1e-6`
 
+## Graph Simplification Refactor
+
+After completing all phases, the graph topology was cleaned up:
+
+1. **Eliminated wrapper types**: Removed PredForkVFluxWork, Fork1CombWork, Fork2DivP1Work, Fork2RadWork and all associated wrap/unwrap tasks. Hedgehog multicast routes MeshData directly to parallel fork branches.
+
+2. **Merged barrier nodes**: HvacInitDiv + DivP1Prefork → single "HvacInitDivPrefork" barrier. RetryPostKernel merged into RetryLoopState (3→2 nodes in ChangeTimeStep subgraph).
+
+3. **Fixed thread counts**: Mesh-level kernel tasks now use `meshThreads = nmeshes` (was incorrectly using `kernelThreads = hardware_concurrency`).
+
+4. **Consistent naming**: Tasks renamed to follow Kernel/Pre/Post conventions (VelCorrPostReassemble → VelCorrPostKernel, ParticleMassEnergy → ParticleMassEnergyKernel).
+
+5. **Generic join states**: ForkJoinState and BarrierJoinState (fork_join_state.h) replace per-fork join implementations.
+
+6. **Deleted orphaned files**: 6 files removed (pipeline_fork1_data.h, pipeline_fork2_data.h, pred_fork_data.h, pipeline_fork1_state.h, pred_fork_state.h, pipeline_fork2_rad_subgraph.h). Net -547 lines.
+
+**Test results**: 12/12 custom tests pass, 46/58 verification pass (no regressions).
+
 ## Summary Statistics
 
 - **Sub-graphs created**: 20 (including parallel pressure iteration with cycle)
@@ -450,6 +467,7 @@ approach for the predictor-corrector scheme.
 - **Sequential fraction**: reduced from 39% to ~23%
 - **Parallel fraction**: increased from 27% to ~63%
 - **Phase 4 targets completed**: DIVERGENCE_PART_2 (block), DENSITY (block). DIVERGENCE_PART_1 not viable.
+- **All planned phases complete**: Phases 1-4 done. Remaining work is advanced optimization (hybrid MPI, relaxed barriers, NUMA).
 
 ## Documentation Index
 
@@ -458,7 +476,4 @@ approach for the predictor-corrector scheme.
 - METHOD_KERNEL_EXTRACTION.md - Kernel extraction patterns
 - METHOD_SUBGRAPH.md - Pattern A sub-graphs (pure kernel)
 - METHOD_PATTERN_B_COMPLEX.md - Pattern B sub-graphs (complex routines)
-
-### Implementation Details
-- WALL_BC_PARALLELIZATION_PLAN.md - Complete WallBC implementation (reference)
-- CHANGE_TIMESTEP_REFACTORING.md - CFL retry loop refactoring
+- METHOD_MESH_BLOCK.md - K-block decomposition for intra-mesh parallelism

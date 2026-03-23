@@ -4,7 +4,6 @@
 
 1. Read [PARALLELIZATION_PROGRESS.md](PARALLELIZATION_PROGRESS.md) for current status
 2. Review appropriate METHOD files for your task (see below)
-3. Check completed examples: [WALL_BC_PARALLELIZATION_PLAN.md](WALL_BC_PARALLELIZATION_PLAN.md)
 
 ## Core Methodology Files
 
@@ -39,34 +38,8 @@ K-block decomposition for intra-mesh parallelism.
 ### [PARALLELIZATION_PROGRESS.md](PARALLELIZATION_PROGRESS.md)
 **Current status and overall progress.**
 - 20 completed sub-graphs (8 with K-block decomposition)
-- Phase 4 complete: DivergencePart2, Density block-decomposed; DivPart1 not viable
-- Remaining sequential tasks and future work
-
-## Pipelining Research
-
-### [pipelining/README.md](pipelining/README.md)
-Data-flow analysis for intra-timestep pipelining parallelism.
-- Complete read/write dependency map for all predictor/corrector routines
-- Two identified opportunities: predictor two-level pipeline, corrector major pipeline
-- Dependency proof tables showing zero data conflicts
-- Section-level cost analysis with ops/cell estimates
-- Hedgehog graph recommendations (3 tiers by impact/complexity)
-
-### [pipelining/IMPLEMENTATION_PROGRESS.md](pipelining/IMPLEMENTATION_PROGRESS.md)
-Phased implementation plan for pipelining changes.
-- 6 phases: kernel extraction → scratch arrays → driver → Fork 1 → Fork 2 → predictor
-- Current phase tracking and test criteria
-
-## Reference Implementations
-
-### [WALL_BC_PARALLELIZATION_PLAN.md](WALL_BC_PARALLELIZATION_PLAN.md)
-Complete Pattern B implementation reference (three-phase decomposition, test results).
-
-### [CHANGE_TIMESTEP_REFACTORING.md](CHANGE_TIMESTEP_REFACTORING.md)
-CFL retry loop refactoring into state-managed sub-graph.
-
-### [BLOG_AI_ASSISTED_REWRITE.md](BLOG_AI_ASSISTED_REWRITE.md)
-Retrospective on AI-assisted parallelization methodology.
+- All phases complete (Phases 1-4)
+- Remaining work: advanced optimization (hybrid MPI, relaxed barriers, NUMA)
 
 ## File Organization
 
@@ -79,18 +52,7 @@ docs/
 ├── METHOD_SUBGRAPH.md                  # Pattern A (pure kernel)
 ├── METHOD_PATTERN_B_COMPLEX.md         # Pattern B (complex routines)
 ├── METHOD_MODULE_SPLIT.md              # Module decomposition
-├── METHOD_MESH_BLOCK.md                # K-block decomposition
-│
-├── WALL_BC_PARALLELIZATION_PLAN.md     # Reference: Pattern B example
-├── CHANGE_TIMESTEP_REFACTORING.md      # Reference: cycle/retry pattern
-├── BLOG_AI_ASSISTED_REWRITE.md         # Process retrospective
-│
-├── pipelining/                         # Pipelining parallelism research
-│   ├── README.md                       # Analysis and implementation strategy
-│   ├── fds_dataflow.dot / .svg         # Full data-flow dependency graph
-│   └── fds_pipeline_opportunities.dot / .svg  # Identified opportunities
-│
-└── architecture/                       # Codebase analysis and diagrams
+└── METHOD_MESH_BLOCK.md               # K-block decomposition
 ```
 
 ## Workflow for Parallelizing a New Routine
