@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef PARTICLE_MOMENTUM_BLOCK_SUBGRAPH_H
 #define PARTICLE_MOMENTUM_BLOCK_SUBGRAPH_H
 

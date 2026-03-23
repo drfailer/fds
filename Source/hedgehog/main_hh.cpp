@@ -25,21 +25,11 @@ int main(int argc, char *argv[]) {
 
     // Parse command-line arguments.
     // Usage: fds_hh [options] <input_file>
-    //   --block-threads N   Number of threads for block-decomposed kernel tasks
-    //                       (default: hardware_concurrency)
-    //   --num-blocks N      Number of K-blocks per mesh for block decomposition
-    //                       (default: same as block-threads)
     std::string inputFile;
-    int cliBlockThreads = 0;   // 0 = use default (hardware_concurrency)
-    int cliNumBlocks = 0;      // 0 = use default (same as blockThreads)
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        if (arg == "--block-threads" && i + 1 < argc) {
-            cliBlockThreads = std::atoi(argv[++i]);
-        } else if (arg == "--num-blocks" && i + 1 < argc) {
-            cliNumBlocks = std::atoi(argv[++i]);
-        } else if (arg[0] != '-') {
+        if (arg[0] != '-') {
             inputFile = arg;
         }
     }
@@ -75,8 +65,6 @@ int main(int argc, char *argv[]) {
 
     // Step 2: Build the Hedgehog dataflow graph.
     // kernelThreads: for mesh-level kernel tasks (1 thread per mesh)
-    // blockThreads: for block-decomposed kernel tasks (intra-mesh parallelism)
-    // numBlocks: number of K-blocks per mesh (granularity of block decomposition)
     // Parse --kernel-threads option (default: local_nmeshes)
     int cliKernelThreads = 0;
     for (int i = 1; i < argc; ++i) {
@@ -88,18 +76,8 @@ int main(int argc, char *argv[]) {
     size_t kernelThreads = (cliKernelThreads > 0)
         ? static_cast<size_t>(cliKernelThreads)
         : static_cast<size_t>(local_nmeshes);
-    size_t blockThreads = (cliBlockThreads > 0)
-        ? static_cast<size_t>(cliBlockThreads)
-        : std::max(static_cast<size_t>(local_nmeshes),
-                   static_cast<size_t>(std::thread::hardware_concurrency()));
-    int numBlocks = (cliNumBlocks > 0)
-        ? cliNumBlocks
-        : static_cast<int>(blockThreads);
-    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads
-              << " Block threads=" << blockThreads
-              << " Num blocks=" << numBlocks << std::endl;
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads,
-                               blockThreads, numBlocks);
+    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads << std::endl;
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();

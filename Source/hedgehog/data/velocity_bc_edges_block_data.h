@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef VELOCITY_BC_EDGES_BLOCK_DATA_H
 #define VELOCITY_BC_EDGES_BLOCK_DATA_H
 

@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef MESH_BLOCK_DATA_H
 #define MESH_BLOCK_DATA_H
 

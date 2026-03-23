@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef VELOCITY_FLUX_BLOCK_SUBGRAPH_H
 #define VELOCITY_FLUX_BLOCK_SUBGRAPH_H
 

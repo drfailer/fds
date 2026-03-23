@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef COMPUTE_VISCOSITY_BLOCK_SUBGRAPH_H
 #define COMPUTE_VISCOSITY_BLOCK_SUBGRAPH_H
 

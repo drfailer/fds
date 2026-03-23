@@ -7,19 +7,13 @@
 #include "../fds_fortran_interface.h"
 #include "../state/div_setup_state.h"
 #include "../task/div_setup_kernel_task.h"
-#include "velocity_flux_block_subgraph.h"
 
 /// Build the Fork 1 Branch A sub-graph: MeshData -> VFLUX -> MeshData.
-inline auto buildFork1VFluxSubgraph(int nmeshes, size_t blockThreads, int numBlocks,
-                                     bool canBlockFlux, bool ccIBM) {
+inline auto buildFork1VFluxSubgraph(int nmeshes, bool ccIBM) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
         "Fork1-BranchA-VFlux");
 
-    if (canBlockFlux) {
-        auto vfluxBlock = buildVelocityFluxBlockSubgraph(nmeshes, blockThreads, numBlocks);
-        subgraph->inputs(vfluxBlock);
-        subgraph->outputs(vfluxBlock);
-    } else if (ccIBM) {
+    if (ccIBM) {
         auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "Fork1VFluxOrch");
         auto kernel = std::make_shared<DivSetupKernelTask>(static_cast<size_t>(nmeshes));

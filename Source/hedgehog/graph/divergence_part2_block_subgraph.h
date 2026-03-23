@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef DIVERGENCE_PART2_BLOCK_SUBGRAPH_H
 #define DIVERGENCE_PART2_BLOCK_SUBGRAPH_H
 

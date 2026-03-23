@@ -7,13 +7,14 @@
 
 /// Parallel task that executes thread-safe velocity corrector kernels.
 ///
-/// Calls thread-safe Fortran kernels that operate directly on MESHES(NM)
-/// without using POINT_TO_MESH, enabling parallel execution of multiple
-/// meshes concurrently.
-///
-/// Kernels called:
-/// - VELOCITY_CORRECTOR_KERNEL: Updates velocity field (U = U + FVX*DT)
-/// - CHECK_DIVERGENCE_KERNEL: Checks divergence constraints
+/// Calls per-mesh Fortran kernels matching the full VELOCITY_CORRECTOR
+/// subroutine sequence:
+///   1. CC_PROJECT_VELOCITY (store, pre-kernel)
+///   2. WALL_VELOCITY_NO_GRADH (store, pre-kernel)
+///   3. VELOCITY_CORRECTOR_KERNEL
+///   4. CC_PROJECT_VELOCITY (fix, post-kernel)
+///   5. WALL_VELOCITY_NO_GRADH (fix, post-kernel)
+///   6. CHECK_DIVERGENCE_KERNEL
 class VelocityCorrectorKernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
@@ -22,7 +23,15 @@ public:
               "VelocityCorrectorKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
+        // Pre-kernel: store wall velocities
+        fds_cc_project_velocity_kernel(data->nm, data->dt, 1, 0);
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 1, 0);
+        // Main kernel
         fds_velocity_corrector_kernel(data->nm, data->t, data->dt);
+        // Post-kernel: fix wall velocities
+        fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 0);
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 0);
+        // Diagnostic
         fds_check_divergence_kernel(data->nm);
         this->addResult(data);
     }
@@ -33,19 +42,12 @@ public:
     }
 };
 
+// ============================================================================
+// UNUSED — Previously used for non-block fallback paths
+// ============================================================================
+
 /// Single-threaded task that calls the full VELOCITY_CORRECTOR subroutine.
-///
-/// Unlike VelocityCorrectorKernelTask (which only calls the kernel + CHECK_DIVERGENCE),
-/// this calls the complete Fortran subroutine which includes:
-///   1. WALL_VELOCITY_NO_GRADH(STORE=TRUE) — store wall velocities before kernel
-///   2. VELOCITY_CORRECTOR_KERNEL
-///   3. WALL_VELOCITY_NO_GRADH(STORE=FALSE) — fix wall velocities after kernel
-/// Followed by CHECK_DIVERGENCE_KERNEL for diagnostic output.
-///
-/// Must be single-threaded because VELOCITY_CORRECTOR uses POINT_TO_MESH
-/// which sets global module pointers.
-///
-/// Used instead of the block-decomposed sub-graph for sparse pressure solvers.
+/// Must be single-threaded because VELOCITY_CORRECTOR uses POINT_TO_MESH.
 class VelocityCorrectorFullTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:

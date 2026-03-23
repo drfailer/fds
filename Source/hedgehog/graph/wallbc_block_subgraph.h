@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef WALLBC_BLOCK_SUBGRAPH_H
 #define WALLBC_BLOCK_SUBGRAPH_H
 

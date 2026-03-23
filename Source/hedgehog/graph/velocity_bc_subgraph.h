@@ -8,23 +8,12 @@
 #include "../task/velocity_bc_edges_task.h"
 #include "../state/velocity_bc_state.h"
 #include "../state/collector_state.h"
-#include "velocity_bc_edges_block_subgraph.h"
 
 /// Build the PredFinal sub-graph.
 ///
-/// With block decomposition (numBlocks > 1):
-///   Orchestrator(SYNTHETIC_TURBULENCE + MATCH_VELOCITY + PREPROCESSING + K-decompose) ->
-///   VelBCEdgesBlockKernel(parallel) -> Collector(reassemble + DRAG reduce + CC_VELOCITY_BC)
-///
-/// Without block decomposition:
 ///   PredFinalOrchestrator(SYNTHETIC_TURBULENCE) -> VelocityBCEdgesTask(mesh-level) ->
 ///   Collector(CC_VELOCITY_BC if CC_IBM)
-inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads,
-                                    size_t blockThreads, int numBlocks) {
-    if (numBlocks > 1) {
-        return buildPredFinalBlockSubgraph(nmeshes, blockThreads, numBlocks);
-    }
-
+inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
@@ -52,19 +41,8 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads,
 
 /// Build the CorrFinal sub-graph.
 ///
-/// With block decomposition (numBlocks > 1):
-///   Orchestrator(MATCH_VELOCITY + PREPROCESSING + K-decompose) ->
-///   VelBCEdgesBlockKernel(parallel) -> Collector(reassemble + DRAG reduce +
-///     CC_VELOCITY_BC + UPDATE_GLOBAL_OUTPUTS)
-///
-/// Without block decomposition:
 ///   VelocityBCEdgesTask(mesh-level) -> CorrFinalCollector(CC_VELOCITY_BC + outputs)
-inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads,
-                                    size_t blockThreads, int numBlocks) {
-    if (numBlocks > 1) {
-        return buildCorrFinalBlockSubgraph(nmeshes, blockThreads, numBlocks);
-    }
-
+inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 

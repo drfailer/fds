@@ -1,3 +1,4 @@
+// UNUSED — Block decomposition disabled. Kept for reference.
 #ifndef VISC_DENSITY_BLOCK_SUBGRAPH_H
 #define VISC_DENSITY_BLOCK_SUBGRAPH_H
 

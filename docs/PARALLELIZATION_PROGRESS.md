@@ -454,20 +454,43 @@ After completing all phases, the graph topology was cleaned up:
 
 **Test results**: 12/12 custom tests pass, 46/58 verification pass (no regressions).
 
+## Block Decomposition Disabled
+
+K-block decomposition provided limited parallelism and only applied under specific configurations
+(no CC_IBM, specific turbulence models, etc.), making the graph construction complex with many
+conditional branches. All block decomposition code has been disabled in favor of mesh-level
+kernels everywhere.
+
+**Changes:**
+- Removed all `canBlock*` conditional branches from predictor/corrector subgraphs
+- Replaced block subgraphs with mesh-level kernel tasks:
+  - `buildVelocityPredictorBlockSubgraph` → `VelocityPredictorKernelTask`
+  - `buildVelocityCorrectorBlockSubgraph` → `VelocityCorrectorKernelTask`
+  - `buildParticleMomentumBlockSubgraph` → `ParticleMomentumKernelTask`
+  - `buildVelocityFluxBlockSubgraph` → `DivSetupKernelTask`
+  - `buildComputeViscosityBlockSubgraph` → part of `PredStep1KernelTask`/`CorrStep1KernelTask`
+  - `buildDensityBlockSubgraph` → `DensPredKernelTask`
+  - `buildDivergencePart2BlockSubgraph` → `DivergencePart2KernelTask`
+  - `buildWallBCBlockSubgraph` → `buildWallBCSubgraph` (mesh-level)
+  - `buildPredFinalBlockSubgraph`/`buildCorrFinalBlockSubgraph` → non-block paths
+- Removed `blockThreads`/`numBlocks` parameters from all graph builders and CLI
+- Updated `VelocityPredictorKernelTask` to include full sequence (CC_PROJECT_VELOCITY + WALL_VELOCITY_NO_GRADH + CHECK_STABILITY)
+- Updated `VelocityCorrectorKernelTask` to include full sequence (store/fix + kernel + CHECK_DIVERGENCE)
+- Created `ParticleMomentumKernelTask` (mesh-level replacement for block subgraph)
+- 10 block subgraph files and 3 block data/state files tagged as "UNUSED — Kept for reference"
+- Fork subgraph builders simplified (removed block-related parameters)
+
+**Test results**: 12/12 custom tests pass, 46/58 verification pass (no regressions).
+
 ## Summary Statistics
 
 - **Sub-graphs created**: 20 (including parallel pressure iteration with cycle)
-- **Block sub-graphs**: 8 (intra-mesh K-block decomposition for additional parallelism)
+- **Block sub-graphs**: 8 (disabled — code kept for reference)
 - **Graph nodes replaced**: 22 (some tasks appear in both predictor/corrector)
 - **Kernels extracted**: 21 new kernels + utilizing ~30 existing kernels
-- **Block kernels**: 8 (VELOCITY_PREDICTOR, VELOCITY_CORRECTOR, VELOCITY_FLUX, COMPUTE_VISCOSITY, WALL_BC, PARTICLE_MOMENTUM, VELOCITY_BC_EDGES, DENSITY)
 - **Thread-safe conversions**: 2900+ lines converted (including ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
 - **Test coverage**: 12 custom cases + 58 verification cases (46 pass at tol=1e-6)
 - **Overall speedup**: 5.35x on verification suite
-- **Sequential fraction**: reduced from 39% to ~23%
-- **Parallel fraction**: increased from 27% to ~63%
-- **Phase 4 targets completed**: DIVERGENCE_PART_2 (block), DENSITY (block). DIVERGENCE_PART_1 not viable.
-- **All planned phases complete**: Phases 1-4 done. Remaining work is advanced optimization (hybrid MPI, relaxed barriers, NUMA).
 
 ## Documentation Index
 
