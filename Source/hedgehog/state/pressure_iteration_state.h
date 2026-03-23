@@ -7,13 +7,24 @@
 #include "../data/termination_signal.h"
 #include "../fds_fortran_interface.h"
 
-/// Collector that gathers N MeshData tokens after parallel pressure solve
-/// and reconstructs a PressureIterData for the post-kernel pipeline.
-class PressureSolveCollector
-    : public hh::AbstractState<1, MeshData, PressureIterData> {
+/// Merged collector + post-loop state for pressure iteration.
+///
+/// Collects N MeshData tokens from the parallel pressure solve kernel,
+/// runs Phase 3 sequential work (MESH_EXCHANGE(5) + velocity error +
+/// convergence check), then routes:
+///   - PressureIterData -> cycles back to PressurePreKernelTask (not converged)
+///   - MeshData -> exits the sub-graph (converged)
+///
+/// This replaces the former PressureSolveCollector + PressurePostLoopState
+/// two-node chain, eliminating one queue transition per pressure iteration.
+class PressurePostCollector
+    : public hh::AbstractState<1, MeshData, PressureIterData, MeshData> {
 public:
-    explicit PressureSolveCollector(int nmeshes)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+    PressurePostCollector(int nmeshes, double tEnd, bool predictor,
+                          std::shared_ptr<TerminationSignal> termSignal)
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
+          tEnd_(tEnd), predictor_(predictor),
+          termSignal_(std::move(termSignal)) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -22,76 +33,48 @@ public:
         ++count_;
 
         if (count_ == nmeshes_) {
-            auto iterData = std::make_shared<PressureIterData>(
-                collected_, collected_[0]->t, collected_[0]->dt);
-            collected_.assign(nmeshes_, nullptr);
+            double t = collected_[0]->t;
+            double dt = collected_[0]->dt;
+            lastT_ = t;
+            lastDt_ = dt;
+
+            // Phase 3: sequential post-kernel work
+            int iteratePressure = fds_iterate_pressure();
+            if (iteratePressure) {
+                fds_mesh_exchange(5);
+                for (auto& md : collected_) {
+                    fds_compute_velocity_error_kernel(md->nm, dt);
+                }
+                fds_pressure_iteration_check_convergence(t, dt);
+            }
+
+            int converged = fds_pressure_iteration_converged();
+            lastConverged_ = (converged != 0);
+
+            if (converged) {
+                if (predictor_) {
+                    fds_init_change_time_step(dt);
+                }
+                for (auto& md : collected_) {
+                    this->addResult(md);
+                    md = nullptr;
+                }
+            } else {
+                // Build PressureIterData for cycle
+                std::vector<std::shared_ptr<MeshData>> meshes;
+                meshes.reserve(nmeshes_);
+                for (auto& md : collected_) {
+                    meshes.push_back(md);
+                    md = nullptr;
+                }
+                this->addResult(std::make_shared<PressureIterData>(
+                    std::move(meshes), t, dt));
+            }
+
             count_ = 0;
-            this->addResult(iterData);
         }
     }
 
-private:
-    int nmeshes_;
-    int nmOffset_;
-    int count_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
-};
-
-/// Combined post-kernel + loop state for pressure iteration.
-///
-/// Receives PressureIterData from the collector, runs Phase 3 sequential work
-/// (MESH_EXCHANGE(5) + velocity error + convergence check), then routes:
-///   - PressureIterData -> cycles back to PressurePreKernelTask (not converged)
-///   - MeshData -> exits the sub-graph (converged)
-///
-/// Termination uses two conditions checked in canTerminate():
-///   1. reachedEnd() && lastConverged(): Data-driven, fires after the last
-///      pressure iteration converges on the last timestep. This is the primary
-///      mechanism — it triggers during execute(), when Hedgehog re-checks
-///      canTerminate(). Without lastConverged(), reachedEnd() alone would fire
-///      mid-iteration and terminate the cycle prematurely.
-///   2. isTerminated(): Fallback via shared TerminationSignal from the main
-///      timestep loop.
-class PressurePostLoopState
-    : public hh::AbstractState<1, PressureIterData, PressureIterData, MeshData> {
-public:
-    PressurePostLoopState(double tEnd, bool predictor,
-                          std::shared_ptr<TerminationSignal> termSignal)
-        : tEnd_(tEnd), predictor_(predictor),
-          termSignal_(std::move(termSignal)) {}
-
-    void execute(std::shared_ptr<PressureIterData> data) override {
-        lastT_ = data->t;
-        lastDt_ = data->dt;
-
-        // Phase 3: sequential post-kernel work
-        int iteratePressure = fds_iterate_pressure();
-        if (iteratePressure) {
-            fds_mesh_exchange(5);
-            for (auto& md : data->meshes) {
-                fds_compute_velocity_error_kernel(md->nm, data->dt);
-            }
-            fds_pressure_iteration_check_convergence(data->t, data->dt);
-        }
-
-        int converged = fds_pressure_iteration_converged();
-        lastConverged_ = (converged != 0);
-
-        if (converged) {
-            if (predictor_) {
-                fds_init_change_time_step(data->dt);
-            }
-            for (auto& md : data->meshes) {
-                this->addResult(md);
-            }
-        } else {
-            this->addResult(data);
-        }
-    }
-
-    /// Data-driven termination check.
-    /// Predictor: lastT + lastDt >= tEnd (t not yet advanced by PhaseTransition)
-    /// Corrector: lastT >= tEnd (t already advanced by PhaseTransition)
     [[nodiscard]] bool reachedEnd() const {
         if (predictor_) {
             return lastT_ + lastDt_ >= tEnd_;
@@ -107,6 +90,10 @@ public:
     [[nodiscard]] bool lastConverged() const { return lastConverged_; }
 
 private:
+    int nmeshes_;
+    int nmOffset_;
+    int count_ = 0;
+    std::vector<std::shared_ptr<MeshData>> collected_;
     double tEnd_;
     bool predictor_;
     std::shared_ptr<TerminationSignal> termSignal_;
@@ -115,26 +102,20 @@ private:
     bool lastConverged_ = false;
 };
 
-/// Custom state manager for the pressure post-loop state.
-///
-/// canTerminate() requires BOTH reachedEnd() AND lastConverged() to prevent
-/// premature termination mid-pressure-iteration on the last timestep.
-/// The TerminationSignal serves as a fallback.
-class PressurePostLoopStateManager
-    : public hh::StateManager<1, PressureIterData, PressureIterData, MeshData> {
+/// Custom state manager for the merged pressure post-collector.
+class PressurePostCollectorManager
+    : public hh::StateManager<1, MeshData, PressureIterData, MeshData> {
 public:
-    PressurePostLoopStateManager(
-        std::shared_ptr<PressurePostLoopState> const& state,
+    PressurePostCollectorManager(
+        std::shared_ptr<PressurePostCollector> const& state,
         std::string const& name)
-        : hh::StateManager<1, PressureIterData, PressureIterData, MeshData>(
+        : hh::StateManager<1, MeshData, PressureIterData, MeshData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
-        auto s = std::dynamic_pointer_cast<PressurePostLoopState>(
+        auto s = std::dynamic_pointer_cast<PressurePostCollector>(
             this->state());
-        // Primary: data-driven time check AND convergence (prevents mid-iteration termination)
-        // Fallback: external termination signal from main timestep loop
         bool ret = (s->reachedEnd() && s->lastConverged()) || s->isTerminated();
         this->state()->unlock();
         return ret;

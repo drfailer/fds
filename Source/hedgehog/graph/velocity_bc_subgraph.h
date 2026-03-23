@@ -11,27 +11,28 @@
 
 /// Build the PredFinal sub-graph.
 ///
-///   PredFinalOrchestrator(SYNTHETIC_TURBULENCE) -> VelocityBCEdgesTask(mesh-level) ->
-///   Collector(CC_VELOCITY_BC if CC_IBM)
+/// MeshExchange(3) + SyntheticTurbulence merged into upstream barrier.
+/// PhaseTransition merged into the collector.
+///
+///   VelocityBCEdgesTask(mesh-level) -> PredFinalCollector(phase transition)
+///
+/// Outputs MeshData directly (no BarrierData intermediate).
 inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
+    using SubGraphType = hh::Graph<1, MeshData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
-    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PredFinalOrchestrator>(nmeshes), "PredFinalOrch");
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
 
-    subgraph->inputs(orchSM);
-    subgraph->edges(orchSM, kernelTask);
+    subgraph->inputs(kernelTask);
 
     if (fds_is_cc_ibm()) {
-        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-            std::make_shared<PredFinalCCCollector>(nmeshes), "PredFinalCCCollector");
+        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<PredFinalCCCollector>(nmeshes), "PredFinalCollector");
         subgraph->edges(kernelTask, collectorSM);
         subgraph->outputs(collectorSM);
     } else {
-        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-            std::make_shared<CollectorState>(nmeshes), "PredFinalCollector");
+        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<PredFinalCollector>(nmeshes), "PredFinalCollector");
         subgraph->edges(kernelTask, collectorSM);
         subgraph->outputs(collectorSM);
     }
@@ -41,16 +42,22 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
 
 /// Build the CorrFinal sub-graph.
 ///
-///   VelocityBCEdgesTask(mesh-level) -> CorrFinalCollector(CC_VELOCITY_BC + outputs)
+/// MeshExchange(6b) merged into the orchestrator.
+///
+///   CorrFinalOrch(MeshExch6+CC_END_STEP) -> VelocityBCEdgesTask -> CorrFinalCollector
 inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 
+    bool ccIBM = fds_is_cc_ibm() != 0;
+    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<CorrFinalOrchestrator>(nmeshes, ccIBM), "CorrFinalOrch");
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/0);
     auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CorrFinalCollector>(nmeshes), "CorrFinalCollector");
 
-    subgraph->inputs(kernelTask);
+    subgraph->inputs(orchSM);
+    subgraph->edges(orchSM, kernelTask);
     subgraph->edges(kernelTask, collectorSM);
     subgraph->outputs(collectorSM);
 

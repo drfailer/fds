@@ -74,6 +74,52 @@ private:
     int invocations_ = 0;
 };
 
+/// Merged MeshExchange(2) + DivExchange barrier task (Opt 3).
+///
+/// Takes BarrierData from Fork2 join, runs MESH_EXCHANGE(2) + QR_ADD per mesh +
+/// exchange divergence info + RTE source correction + global matrix reassign,
+/// then scatters MeshData downstream.  Replaces two separate nodes in the
+/// non-CC_IBM corrector path.
+class CorrMeshExch2DivExchangeTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    CorrMeshExch2DivExchangeTask()
+        : hh::AbstractTask<1, BarrierData, MeshData>("MeshExch2+DivExch", 1) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        auto t0 = std::chrono::steady_clock::now();
+        fds_mesh_exchange(2);
+        for (auto &md : data->meshes) {
+            fds_divergence_part_1_add_qr_b(md->nm);
+        }
+        fds_exchange_divergence_info();
+        fds_rte_source_correction();
+        fds_global_matrix_reassign(0);
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+
+    std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "MESH_EXCHANGE(2)\\n"
+            << "QR_ADD\\n"
+            << "EXCH_DIV_INFO\\n"
+            << "RTE_SOURCE_CORR\\n"
+            << "GLOBAL_MATRIX_REASSIGN\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+};
+
 /// Phase transition task — sets CORRECTOR=TRUE, advances T, zeros arrays,
 /// handles obstructions.
 class PhaseTransitionTask : public hh::AbstractTask<1, BarrierData, MeshData> {

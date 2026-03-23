@@ -12,28 +12,21 @@
 
 /// Build the pressure iteration sub-graph.
 ///
-/// 4-node architecture:
-///   PressurePreKernel -> PressureSolveKernel -> PressureSolveCollector -> PressurePostLoopSM
-///                      ^                                                   | (cycle)
-///                      +---------------------------------------------------+
+/// 3-node architecture (was 4 — SolveCollector merged into PostCollector):
+///   PressurePreKernel -> PressureSolveKernel -> PressurePostCollector
+///                      ^                                | (cycle)
+///                      +--------------------------------+
 ///
 /// PressurePreKernelTask accepts BarrierData (first entry) and
-/// PressureIterData (cycle). Runs Phase 1 (baroclinic + exchange),
-/// then scatters MeshData for parallel Phase 2 kernel.
+/// PressureIterData (cycle). Runs Phase 1 (baroclinic correction +
+/// mesh exchange), then scatters MeshData for parallel Phase 2 kernel.
 ///
-/// PressureSolveCollector gathers N MeshData into PressureIterData.
+/// PressureSolveKernelTask runs Phase 2 per mesh in parallel, including
+/// match_velocity_flux_kernel (moved from PreKernel for parallelization).
 ///
-/// PressurePostLoopSM runs Phase 3 (MESH_EXCHANGE(5) + velocity error +
-/// convergence check), then uses type-based routing:
-///   - PressureIterData -> cycles back to PressurePreKernel
-///   - MeshData -> exits the sub-graph (converged)
-///
-/// Termination: The cycle stays alive across all time steps. canTerminate()
-/// uses reachedEnd() && lastConverged() (data-driven, fires after final
-/// convergence on last timestep) with TerminationSignal as fallback.
-///
-/// FFT and ULMAT solvers are supported in parallel mode. GLMAT/UGLMAT
-/// and CC_IBM cases fall back to sequential PressureIterationTask.
+/// PressurePostCollector merges the former SolveCollector + PostLoopState:
+/// collects N MeshData, runs Phase 3 (exchange + velocity error + convergence),
+/// then routes by type (PressureIterData -> cycle, MeshData -> exit).
 ///
 /// @param tEnd Simulation end time
 /// @param nmeshes Number of local meshes
@@ -52,12 +45,9 @@ inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
 
     auto preKernel = std::make_shared<PressurePreKernelTask>();
     auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
-    auto solveCollSM = std::make_shared<hh::StateManager<
-        1, MeshData, PressureIterData>>(
-        std::make_shared<PressureSolveCollector>(nmeshes), "PressureSolveCollector");
-    auto postLoopSM = std::make_shared<PressurePostLoopStateManager>(
-        std::make_shared<PressurePostLoopState>(tEnd, predictor, termSignal),
-        "PressurePostLoop");
+    auto postCollSM = std::make_shared<PressurePostCollectorManager>(
+        std::make_shared<PressurePostCollector>(nmeshes, tEnd, predictor, termSignal),
+        "PressurePostCollector");
 
     // Entry: BarrierData -> PreKernel
     subgraph->inputs(preKernel);
@@ -65,17 +55,14 @@ inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
     // PreKernel -> parallel kernel (MeshData scatter)
     subgraph->edges(preKernel, solveKernel);
 
-    // Kernel -> collector (MeshData -> PressureIterData)
-    subgraph->edges(solveKernel, solveCollSM);
-
-    // Collector -> post-loop (PressureIterData)
-    subgraph->edges(solveCollSM, postLoopSM);
+    // Kernel -> merged collector+post-loop (MeshData -> collect N -> route)
+    subgraph->edges(solveKernel, postCollSM);
 
     // Cycle: PressureIterData -> back to PreKernel
-    subgraph->edges(postLoopSM, preKernel);
+    subgraph->edges(postCollSM, preKernel);
 
     // Exit: MeshData -> subgraph output
-    subgraph->outputs(postLoopSM);
+    subgraph->outputs(postCollSM);
 
     return subgraph;
 }

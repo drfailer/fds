@@ -9,6 +9,11 @@ extern "C" {
 // Input file setup
 void fds_set_input_file(const char *fname, int flen);
 
+// Mesh re-decomposition: set target mesh dimensions before initialization.
+// Each user-configured mesh will be split into sub-meshes of approximately
+// these many cells per dimension. Set all to 0 to disable (default).
+void fds_set_target_mesh_dims(int ibar, int jbar, int kbar);
+
 // Initialization and finalization
 void fds_initialize_all(double *t, double *dt, int *nmeshes);
 void fds_finalize_all(double t, double dt);

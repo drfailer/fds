@@ -12,6 +12,8 @@ import subprocess
 import argparse
 import json
 import select
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 import time
@@ -139,6 +141,36 @@ TEST_CASES = {
         'compare_files': ['_devc.csv'],
         'timeout': 60
     },
+
+    # --- Mesh re-decomposition tests (--mesh-dim) ---
+    # These only verify successful completion (no gold comparison) since splitting
+    # changes the problem (different mesh boundaries = different numerics).
+    'split_eddies_1to3': {
+        'input': 'dancing_eddies_1mesh_short.fds',
+        'chid': 'dancing_eddies_1mesh_short',
+        'meshes': 3,  # 300/100=3, J=1 (2D), K stays 40
+        'description': '1-mesh → 3 sub-meshes via --mesh-dim (I-split only)',
+        'compare_files': [],
+        'mesh_dim': (100, 1, 40),
+    },
+    'split_sprinklers_1to2': {
+        'input': 'activate_sprinklers.fds',
+        'chid': 'activate_sprinklers',
+        'meshes': 2,  # 21/11=2 in I, J and K stay at 10
+        'description': '1-mesh → 2 sub-meshes via --mesh-dim (I-split)',
+        'compare_files': [],
+        'timeout': 120,
+        'mesh_dim': (11, 10, 10),
+    },
+    'split_fire_2to16': {
+        'input': 'fire_const_gamma_2mesh.fds',
+        'chid': 'fire_const_gamma_2mesh',
+        'meshes': 16,  # 2 meshes * (16/8)^3 = 2*8 = 16
+        'description': '2-mesh → 16 sub-meshes via --mesh-dim (all dims)',
+        'compare_files': [],
+        'timeout': 120,
+        'mesh_dim': (8, 8, 8),
+    },
 }
 
 class TestRunner:
@@ -179,7 +211,8 @@ class TestRunner:
             return False
         return True
 
-    def run_fds(self, input_file: Path, chid: str, exe: Path, work_dir: Path, timeout: int = 60) -> Tuple[bool, float]:
+    def run_fds(self, input_file: Path, chid: str, exe: Path, work_dir: Path,
+                timeout: int = 60, mesh_dim: tuple = None) -> Tuple[bool, float]:
         """
         Run FDS simulation.
 
@@ -193,6 +226,7 @@ class TestRunner:
             exe: Path to FDS executable
             work_dir: Working directory for execution
             timeout: Safety timeout in seconds
+            mesh_dim: Optional (i,j,k) tuple for mesh re-decomposition
 
         Returns:
             (success, elapsed_time)
@@ -212,7 +246,10 @@ class TestRunner:
         # (fds_hh does not use OpenMP; OpenMP vectorized reductions change FP order)
         env = os.environ.copy()
         env['OMP_NUM_THREADS'] = '1'
-        cmd = ['mpiexec', '--oversubscribe', '-n', '1', str(exe), input_file.name]
+        cmd = ['mpiexec', '--oversubscribe', '-n', '1', str(exe)]
+        if mesh_dim and 'fds_hh' in exe.name:
+            cmd.extend(['--mesh-dim', str(mesh_dim[0]), str(mesh_dim[1]), str(mesh_dim[2])])
+        cmd.append(input_file.name)
 
         # Check if this is fds_hh (needs early termination) or original FDS
         is_fds_hh = 'fds_hh' in exe.name
@@ -378,13 +415,25 @@ class TestRunner:
         self.log(f"\n{'='*60}")
         self.log(f"Test: {test_name}")
         self.log(f"Description: {test_config['description']}")
-        self.log(f"Meshes: {test_config['meshes']}")
+        mesh_dim = test_config.get('mesh_dim', None)
+        if mesh_dim:
+            self.log(f"Meshes: {test_config['meshes']} (--mesh-dim {mesh_dim[0]} {mesh_dim[1]} {mesh_dim[2]})")
+        else:
+            self.log(f"Meshes: {test_config['meshes']}")
         self.log(f"{'='*60}")
 
         input_file = Path(test_config['input'])
         chid = test_config.get('chid', input_file.stem)  # Use explicit CHID or derive from filename
-        work_dir = RUN_DIR / test_name
-        work_dir.mkdir(exist_ok=True)
+        run_only = not test_config['compare_files']
+
+        # Run-only tests (e.g., mesh-dim) use a temp dir to avoid leftover files
+        tmp_dir = None
+        if run_only:
+            tmp_dir = tempfile.mkdtemp(prefix=f'fds_test_{test_name}_')
+            work_dir = Path(tmp_dir)
+        else:
+            work_dir = RUN_DIR / test_name
+            work_dir.mkdir(exist_ok=True)
 
         result = {
             'test_name': test_name,
@@ -395,34 +444,49 @@ class TestRunner:
             'comparison': {}
         }
 
-        # Run FDS
-        test_timeout = test_config.get('timeout', 60)
-        self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
-        success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir, timeout=test_timeout)
-        result['run_time'] = elapsed
+        try:
+            # Run FDS
+            test_timeout = test_config.get('timeout', 60)
+            mesh_dim = test_config.get('mesh_dim', None)
+            if mesh_dim:
+                self.log(f"Running FDS ({self.fds_exe.name}) --mesh-dim {mesh_dim}...", "RUN")
+            else:
+                self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
+            success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir,
+                                             timeout=test_timeout, mesh_dim=mesh_dim)
+            result['run_time'] = elapsed
 
-        if not success:
-            self.log(f"FDS run failed ({elapsed:.2f}s)", "FAIL")
-            return result
+            if not success:
+                self.log(f"FDS run failed ({elapsed:.2f}s)", "FAIL")
+                return result
 
-        self.log(f"FDS completed ({elapsed:.2f}s)", "PASS")
+            self.log(f"FDS completed ({elapsed:.2f}s)", "PASS")
 
-        # Compare with gold
-        self.log(f"Comparing outputs...", "RUN")
-        gold_subdir = GOLD_DIR / test_name
-        test_tol = test_config.get('tolerance', None)
-        test_ignore_cols = test_config.get('ignore_columns', None)
-        test_row_diff = test_config.get('allow_row_diff', 0)
-        all_passed, comparison = self.compare_files(chid, work_dir, gold_subdir, test_config['compare_files'],
-                                                    tolerance=test_tol, ignore_columns=test_ignore_cols,
-                                                    allow_row_diff=test_row_diff)
-        result['comparison'] = comparison
+            # Compare with gold (if comparison files are specified)
+            if not run_only:
+                self.log(f"Comparing outputs...", "RUN")
+                gold_subdir = GOLD_DIR / test_name
+                test_tol = test_config.get('tolerance', None)
+                test_ignore_cols = test_config.get('ignore_columns', None)
+                test_row_diff = test_config.get('allow_row_diff', 0)
+                all_passed, comparison = self.compare_files(chid, work_dir, gold_subdir, test_config['compare_files'],
+                                                            tolerance=test_tol, ignore_columns=test_ignore_cols,
+                                                            allow_row_diff=test_row_diff)
+                result['comparison'] = comparison
 
-        if all_passed:
-            result['passed'] = True
-            self.log(f"All comparisons passed", "PASS")
-        else:
-            self.log(f"Some comparisons failed", "FAIL")
+                if all_passed:
+                    result['passed'] = True
+                    self.log(f"All comparisons passed", "PASS")
+                else:
+                    self.log(f"Some comparisons failed", "FAIL")
+            else:
+                # Run-only test: pass if FDS completed
+                result['passed'] = True
+                self.log(f"Run-only test (no gold comparison)", "PASS")
+        finally:
+            # Clean up temp directory for run-only tests
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
         return result
 
@@ -444,8 +508,10 @@ class TestRunner:
 
         # Run FDS in gold directory
         test_timeout = test_config.get('timeout', 60)
+        mesh_dim = test_config.get('mesh_dim', None)
         self.log(f"Running FDS...", "RUN")
-        success, elapsed = self.run_fds(input_file, chid, exe, gold_subdir, timeout=test_timeout)
+        success, elapsed = self.run_fds(input_file, chid, exe, gold_subdir,
+                                         timeout=test_timeout, mesh_dim=mesh_dim)
 
         if not success:
             self.log(f"Failed to generate gold files", "FAIL")
@@ -528,6 +594,9 @@ def main():
             return 1
 
         for test_name, test_config in tests.items():
+            if not test_config['compare_files']:
+                print(f"  Skipping {test_name} (run-only test, no gold needed)")
+                continue
             success = runner.generate_gold(test_name, test_config)
             if not success:
                 print(f"Failed to generate gold for {test_name}")

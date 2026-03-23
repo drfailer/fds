@@ -13,9 +13,11 @@
 /// Accepts BarrierData (first entry from outside) or PressureIterData (cycle
 /// back from convergence check). Runs pressure iteration init (first entry
 /// only), increments the iteration counter, then executes Phase 1:
-///   - Baroclinic correction (if needed)
+///   - Baroclinic correction per mesh (sequential — needs exchange after)
 ///   - MESH_EXCHANGE(5)
-///   - Match velocity flux
+///
+/// match_velocity_flux_kernel has been moved into PressureSolveKernelTask
+/// to parallelize it (it runs after the exchange, safe per-mesh).
 ///
 /// Scatters individual MeshData tokens for parallel Phase 2 kernel.
 class PressurePreKernelTask
@@ -44,9 +46,7 @@ private:
                 fds_baroclinic_correction(t, md->nm);
             }
             fds_mesh_exchange(5);
-            for (auto& md : meshes) {
-                fds_match_velocity_flux_kernel(md->nm);
-            }
+            // match_velocity_flux_kernel moved to SolveKernel (parallelized)
         }
 
         // Scatter MeshData for parallel kernel
@@ -58,8 +58,10 @@ private:
 
 /// Parallel pressure solve kernel task.
 ///
-/// Runs Phase 2 per mesh: NO_FLUX -> WALL_WORK1 zeroing (iteration 1 only) ->
-/// COMPUTE_RHS -> solver (FFT or ULMAT) -> CHECK_RESIDUALS.
+/// Runs Phase 2 per mesh: MATCH_VELOCITY_FLUX (if baroclinic, moved from
+/// PreKernel for parallelization) -> NO_FLUX -> WALL_WORK1 zeroing
+/// (iteration 1 only) -> COMPUTE_RHS -> solver (FFT or ULMAT) ->
+/// CHECK_RESIDUALS.
 ///
 /// Multi-threaded: each clone processes one mesh independently.
 class PressureSolveKernelTask
@@ -71,6 +73,11 @@ public:
           presFlag_(presFlag) {}
 
     void execute(std::shared_ptr<MeshData> md) override {
+        // match_velocity_flux_kernel: moved from PreKernel for parallelization.
+        // Safe to call per-mesh after mesh_exchange(5) completed in PreKernel.
+        if (fds_pressure_iteration_needs_baroclinic()) {
+            fds_match_velocity_flux_kernel(md->nm);
+        }
         fds_no_flux_kernel(md->nm, md->dt);
         if (fds_get_pressure_iterations() == 1) {
             fds_pressure_iteration_zero_wall_work1(md->nm);

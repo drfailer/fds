@@ -521,6 +521,7 @@ CHARACTER(LABEL_LENGTH) :: MULT_ID,TRNX_ID,TRNY_ID,TRNZ_ID
 NAMELIST /MESH/ BNDF_MESH,CHECK_MESH_ALIGNMENT,COLOR,CYLINDRICAL,FYI,ID,IJK,MPI_PROCESS,MULT_ID,RGB,TRNX_ID,TRNY_ID,TRNZ_ID,XB
 TYPE (MESH_TYPE), POINTER :: M
 TYPE (MULTIPLIER_TYPE), POINTER :: MR
+INTEGER :: NSI, NSJ, NSK, N_SPLITS  ! Mesh re-decomposition variables
 
 NMESHES = 0
 NMESHES_READ = 0
@@ -553,6 +554,12 @@ COUNT_MESH_LOOP: DO
          WRITE(MESSAGE,'(A,A,A,I0,A)') 'ERROR(111): MULT_ID ',TRIM(MULT_ID),' on MESH line ',NMESHES_READ,' not found.'
          CALL SHUTDOWN(MESSAGE) ; RETURN
       ENDIF
+   ENDIF
+   ! Apply mesh re-decomposition: split each mesh into sub-meshes
+   IF (TARGET_IBAR > 0 .AND. TARGET_KBAR > 0) THEN
+      CALL COMPUTE_MESH_SPLITS(IJK, NSI, NSJ, NSK)
+      N_SPLITS = NSI * NSJ * NSK
+      N_MESH_NEW = N_MESH_NEW * N_SPLITS
    ENDIF
    NMESHES      = NMESHES + N_MESH_NEW
 16 IF (IOS>0) THEN
@@ -654,143 +661,11 @@ MESH_LOOP: DO N=1,NMESHES_READ
                XB6 = XB(6) + MR%DZ0 + II*MR%DXB(6)
             ENDIF
 
-            ! Increase the MESH counter by 1
-
-            NM = NM + 1
-
-            ! Determine which PROCESS to assign the MESH to
-
-            IF (MPI_PROCESS>-1) THEN
-               CURRENT_MPI_PROCESS = MPI_PROCESS
-               IF (CURRENT_MPI_PROCESS>N_MPI_PROCESSES-1) THEN
-                  IF (N_MPI_PROCESSES > 1) THEN
-                     WRITE(MESSAGE,'(A,I0,A)') 'ERROR(114): MPI_PROCESS for MESH ',NM,' greater than total number of processes'
-                     CALL SHUTDOWN(MESSAGE) ; RETURN
-                  ELSE
-                     ! Prevents fatal error when testing a run on a single core with MPI_PROCESS set for meshes
-                     WRITE(MESSAGE,'(A,I0,A)') 'WARNING: MPI_PROCESS set for MESH ',NM,' and only one MPI process exists'
-                     IF (MY_RANK==0) WRITE(LU_ERR,'(A)') TRIM(MESSAGE)
-                     CURRENT_MPI_PROCESS=0
-                  ENDIF
-               ENDIF
-            ELSE
-               IF (N_MPI_PROCESSES>1 .AND. NM>N_MPI_PROCESSES) THEN
-                  WRITE(MESSAGE,'(A,A)') 'ERROR(115): Number of meshes exceeds number of MPI processes. ',&
-                     ' Set MPI_PROCESS on each MESH line so that each MESH is assigned to a specific MPI process'
-                  CALL SHUTDOWN(MESSAGE) ; RETURN
-               ENDIF
-               CURRENT_MPI_PROCESS = MIN(NM-1,N_MPI_PROCESSES-1)
-            ENDIF
-
-            ! Fill in MESH related variables
-
-            M => MESHES(NM)
-            M%TRNX_ID = TRNX_ID
-            M%TRNY_ID = TRNY_ID
-            M%TRNZ_ID = TRNZ_ID
-            M%IBAR = IJK(1)
-            M%JBAR = IJK(2)
-            M%KBAR = IJK(3)
-            IBAR_MAX = MAX(IBAR_MAX,M%IBAR)
-            JBAR_MAX = MAX(JBAR_MAX,M%JBAR)
-            KBAR_MAX = MAX(KBAR_MAX,M%KBAR)
-            M%N_EXTERNAL_WALL_CELLS = 2*M%IBAR*M%JBAR+2*M%IBAR*M%KBAR+2*M%JBAR*M%KBAR
-            M%BNDF_DUMP = BNDF_MESH
-
-            IF (M%JBAR==1) TWO_D = .TRUE.
-            IF (TWO_D .AND. M%JBAR/=1) THEN
-               WRITE(MESSAGE,'(A)') 'ERROR(116): IJK(2) must be 1 for all grids in 2D Calculation'
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-
-            ! Associate the MESH with the PROCESS
-
-            IF (MY_RANK==CURRENT_MPI_PROCESS) THEN
-               LOWER_MESH_INDEX = MIN(LOWER_MESH_INDEX,NM)
-               UPPER_MESH_INDEX = MAX(UPPER_MESH_INDEX,NM)
-            ENDIF
-
-            PROCESS(NM) = CURRENT_MPI_PROCESS
-            IF (NM>1) THEN
-               IF (PROCESS(NM)-PROCESS(NM-1)>1 .OR. PROCESS(NM-1)>PROCESS(NM)) THEN
-                  WRITE(MESSAGE, '(A)') 'ERROR(117): MPI_PROCESS must be continuous and monotonically increasing.'
-                  CALL SHUTDOWN(MESSAGE) ; RETURN
-               ENDIF
-            ELSE
-               IF (PROCESS(NM)/=0) THEN
-                  WRITE(MESSAGE, '(A)') 'ERROR(118): MESH 1 must be assigned to MPI_PROCESS 0.'
-                  CALL SHUTDOWN(MESSAGE) ; RETURN
-               ENDIF
-            ENDIF
-            IF (MY_RANK==0 .AND. VERBOSE) WRITE(LU_ERR,'(A,I0,A,I0)') ' Mesh ',NM,' is assigned to MPI Process ',PROCESS(NM)
-
-            ! Mesh boundary colors
-
-            IF (ANY(RGB<0) .AND. COLOR=='null') COLOR = 'BLACK'
-            IF (COLOR /= 'null') CALL COLOR2RGB(RGB,COLOR)
-            ALLOCATE(M%RGB(3))
-            M%RGB = RGB
-
-            ! Mesh Geometry and Name
-
-            WRITE(MESH_NAME(NM),'(A,I7.7)') 'MESH_',NM
-            IF (ID/='null') MESH_NAME(NM) = ID
-
-            ! Process Physical Coordinates
-
-            IF (XB2-XB1<TWENTY_EPSILON_EB) THEN
-               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(1)=XB(2) on MESH ', NM
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-            IF (XB4-XB3<TWENTY_EPSILON_EB) THEN
-               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(3)=XB(4) on MESH ', NM
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-            IF (XB6-XB5<TWENTY_EPSILON_EB) THEN
-               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(5)=XB(6) on MESH ', NM
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-            IF (CYLINDRICAL .AND. XB1<-TWENTY_EPSILON_EB) THEN
-               WRITE(MESSAGE,'(A,I0)') 'ERROR(120): XB(1)<0 with CYLINDRICAL on MESH ', NM
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-            IF (CYLINDRICAL .AND. .NOT.TWO_D) THEN
-               WRITE(MESSAGE,'(A,I0)') 'ERROR(121): J>1 with CYLINDRICAL on MESH ', NM
-               CALL SHUTDOWN(MESSAGE) ; RETURN
-            ENDIF
-
-            M%XS    = XB1
-            M%XF    = XB2
-            M%YS    = XB3
-            M%YF    = XB4
-            M%ZS    = XB5
-            M%ZF    = XB6
-            XS_MIN  = MIN(XS_MIN,M%XS)
-            XF_MAX  = MAX(XF_MAX,M%XF)
-            YS_MIN  = MIN(YS_MIN,M%YS)
-            YF_MAX  = MAX(YF_MAX,M%YF)
-            ZS_MIN  = MIN(ZS_MIN,M%ZS)
-            ZF_MAX  = MAX(ZF_MAX,M%ZF)
-            M%DXI   = (M%XF-M%XS)/REAL(M%IBAR,EB)
-            M%DETA  = (M%YF-M%YS)/REAL(M%JBAR,EB)
-            M%DZETA = (M%ZF-M%ZS)/REAL(M%KBAR,EB)
-            M%RDXI  = 1._EB/M%DXI
-            M%RDETA = 1._EB/M%DETA
-            M%RDZETA= 1._EB/M%DZETA
-            M%IBM1  = M%IBAR-1
-            M%JBM1  = M%JBAR-1
-            M%KBM1  = M%KBAR-1
-            M%IBP1  = M%IBAR+1
-            M%JBP1  = M%JBAR+1
-            M%KBP1  = M%KBAR+1
-
-            IF (TWO_D) THEN
-               M%CELL_SIZE = SQRT(M%DXI*M%DZETA)
-            ELSE
-               M%CELL_SIZE = (M%DXI*M%DETA*M%DZETA)**ONTH
-            ENDIF
-
-            CHARACTERISTIC_CELL_SIZE = MIN( CHARACTERISTIC_CELL_SIZE , M%CELL_SIZE )
+            ! Compute mesh splits for re-decomposition
+            CALL COMPUTE_MESH_SPLITS(IJK, NSI, NSJ, NSK)
+            CALL SPLIT_AND_CREATE_MESHES(NM, IJK, XB1, XB2, XB3, XB4, XB5, XB6, &
+               NSI, NSJ, NSK, MPI_PROCESS, TRNX_ID, TRNY_ID, TRNZ_ID, BNDF_MESH, &
+               ID, RGB, COLOR, CURRENT_MPI_PROCESS, M)
 
          ENDDO I_MULT_LOOP
       ENDDO J_MULT_LOOP
@@ -814,6 +689,249 @@ DO NM=1,NMESHES
       CALL SHUTDOWN(MESSAGE) ; RETURN
    ENDIF
 ENDDO
+
+CONTAINS
+
+!> \brief Compute number of splits per dimension for mesh re-decomposition
+SUBROUTINE COMPUTE_MESH_SPLITS(IJK_IN, NSI_OUT, NSJ_OUT, NSK_OUT)
+   INTEGER, INTENT(IN)  :: IJK_IN(3)
+   INTEGER, INTENT(OUT) :: NSI_OUT, NSJ_OUT, NSK_OUT
+   IF (TARGET_IBAR > 0 .AND. TARGET_KBAR > 0) THEN
+      NSI_OUT = MAX(1, (IJK_IN(1) + TARGET_IBAR - 1) / TARGET_IBAR)
+      IF (IJK_IN(2) == 1 .OR. TARGET_JBAR <= 0) THEN
+         NSJ_OUT = 1  ! 2D or no J splitting
+      ELSE
+         NSJ_OUT = MAX(1, (IJK_IN(2) + TARGET_JBAR - 1) / TARGET_JBAR)
+      ENDIF
+      NSK_OUT = MAX(1, (IJK_IN(3) + TARGET_KBAR - 1) / TARGET_KBAR)
+   ELSE
+      NSI_OUT = 1
+      NSJ_OUT = 1
+      NSK_OUT = 1
+   ENDIF
+END SUBROUTINE COMPUTE_MESH_SPLITS
+
+!> \brief Create sub-meshes for one (possibly MULT-expanded) mesh.
+!> When NSI*NSJ*NSK > 1, the original mesh is split into sub-meshes.
+SUBROUTINE SPLIT_AND_CREATE_MESHES(NM_IO, IJK_IN, XB1_IN, XB2_IN, XB3_IN, XB4_IN, XB5_IN, XB6_IN, &
+   NSI_IN, NSJ_IN, NSK_IN, MPI_PROCESS_IN, TRNX_ID_IN, TRNY_ID_IN, TRNZ_ID_IN, BNDF_MESH_IN, &
+   ID_IN, RGB_IN, COLOR_IN, CURRENT_MPI_PROCESS_IO, M_IO)
+
+   INTEGER, INTENT(INOUT) :: NM_IO, CURRENT_MPI_PROCESS_IO
+   INTEGER, INTENT(IN)    :: IJK_IN(3), NSI_IN, NSJ_IN, NSK_IN, MPI_PROCESS_IN, RGB_IN(3)
+   REAL(EB), INTENT(IN)   :: XB1_IN, XB2_IN, XB3_IN, XB4_IN, XB5_IN, XB6_IN
+   CHARACTER(LABEL_LENGTH), INTENT(IN) :: TRNX_ID_IN, TRNY_ID_IN, TRNZ_ID_IN, ID_IN
+   LOGICAL, INTENT(IN)    :: BNDF_MESH_IN
+   CHARACTER(25), INTENT(IN) :: COLOR_IN
+   TYPE(MESH_TYPE), POINTER, INTENT(INOUT) :: M_IO
+
+   INTEGER :: SI, SJ, SK, SUB_IBAR, SUB_JBAR, SUB_KBAR
+   CHARACTER(25) :: COLOR_LOCAL
+   INTEGER :: IBAR_ORIG, JBAR_ORIG, KBAR_ORIG, I_START, J_START, K_START
+   REAL(EB) :: DX_CELL, DY_CELL, DZ_CELL, SUB_XB1, SUB_XB2, SUB_XB3, SUB_XB4, SUB_XB5, SUB_XB6
+   INTEGER :: RGB_LOCAL(3)
+
+   IBAR_ORIG = IJK_IN(1)
+   JBAR_ORIG = IJK_IN(2)
+   KBAR_ORIG = IJK_IN(3)
+   DX_CELL = (XB2_IN - XB1_IN) / REAL(IBAR_ORIG, EB)
+   DY_CELL = (XB4_IN - XB3_IN) / REAL(JBAR_ORIG, EB)
+   DZ_CELL = (XB6_IN - XB5_IN) / REAL(KBAR_ORIG, EB)
+
+   I_START = 0
+   DO SK = 1, NSK_IN
+      DO SJ = 1, NSJ_IN
+         DO SI = 1, NSI_IN
+
+            ! Compute sub-mesh cell counts (distribute evenly, remainder to last)
+            CALL DISTRIBUTE_CELLS(IBAR_ORIG, NSI_IN, SI, SUB_IBAR, I_START)
+            CALL DISTRIBUTE_CELLS(JBAR_ORIG, NSJ_IN, SJ, SUB_JBAR, J_START)
+            CALL DISTRIBUTE_CELLS(KBAR_ORIG, NSK_IN, SK, SUB_KBAR, K_START)
+
+            ! Compute sub-mesh physical bounds
+            SUB_XB1 = XB1_IN + I_START * DX_CELL
+            SUB_XB2 = SUB_XB1 + SUB_IBAR * DX_CELL
+            SUB_XB3 = XB3_IN + J_START * DY_CELL
+            SUB_XB4 = SUB_XB3 + SUB_JBAR * DY_CELL
+            SUB_XB5 = XB5_IN + K_START * DZ_CELL
+            SUB_XB6 = SUB_XB5 + SUB_KBAR * DZ_CELL
+
+            ! Snap last sub-mesh to original bounds to avoid floating-point gaps
+            IF (SI == NSI_IN) SUB_XB2 = XB2_IN
+            IF (SJ == NSJ_IN) SUB_XB4 = XB4_IN
+            IF (SK == NSK_IN) SUB_XB6 = XB6_IN
+
+            ! Increase the MESH counter by 1
+            NM_IO = NM_IO + 1
+
+            ! Determine which PROCESS to assign the MESH to
+            IF (MPI_PROCESS_IN>-1) THEN
+               CURRENT_MPI_PROCESS_IO = MPI_PROCESS_IN
+               IF (CURRENT_MPI_PROCESS_IO>N_MPI_PROCESSES-1) THEN
+                  IF (N_MPI_PROCESSES > 1) THEN
+                     WRITE(MESSAGE,'(A,I0,A)') 'ERROR(114): MPI_PROCESS for MESH ',NM_IO,' greater than total number of processes'
+                     CALL SHUTDOWN(MESSAGE) ; RETURN
+                  ELSE
+                     WRITE(MESSAGE,'(A,I0,A)') 'WARNING: MPI_PROCESS set for MESH ',NM_IO,' and only one MPI process exists'
+                     IF (MY_RANK==0) WRITE(LU_ERR,'(A)') TRIM(MESSAGE)
+                     CURRENT_MPI_PROCESS_IO=0
+                  ENDIF
+               ENDIF
+            ELSE
+               IF (N_MPI_PROCESSES>1 .AND. NM_IO>N_MPI_PROCESSES) THEN
+                  WRITE(MESSAGE,'(A,A)') 'ERROR(115): Number of meshes exceeds number of MPI processes. ',&
+                     ' Set MPI_PROCESS on each MESH line so that each MESH is assigned to a specific MPI process'
+                  CALL SHUTDOWN(MESSAGE) ; RETURN
+               ENDIF
+               CURRENT_MPI_PROCESS_IO = MIN(NM_IO-1,N_MPI_PROCESSES-1)
+            ENDIF
+
+            ! Fill in MESH related variables
+            M_IO => MESHES(NM_IO)
+            M_IO%TRNX_ID = TRNX_ID_IN
+            M_IO%TRNY_ID = TRNY_ID_IN
+            M_IO%TRNZ_ID = TRNZ_ID_IN
+            M_IO%IBAR = SUB_IBAR
+            M_IO%JBAR = SUB_JBAR
+            M_IO%KBAR = SUB_KBAR
+            IBAR_MAX = MAX(IBAR_MAX,M_IO%IBAR)
+            JBAR_MAX = MAX(JBAR_MAX,M_IO%JBAR)
+            KBAR_MAX = MAX(KBAR_MAX,M_IO%KBAR)
+            M_IO%N_EXTERNAL_WALL_CELLS = 2*M_IO%IBAR*M_IO%JBAR+2*M_IO%IBAR*M_IO%KBAR+2*M_IO%JBAR*M_IO%KBAR
+            M_IO%BNDF_DUMP = BNDF_MESH_IN
+
+            IF (M_IO%JBAR==1) TWO_D = .TRUE.
+            IF (TWO_D .AND. M_IO%JBAR/=1) THEN
+               WRITE(MESSAGE,'(A)') 'ERROR(116): IJK(2) must be 1 for all grids in 2D Calculation'
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+
+            ! Associate the MESH with the PROCESS
+            IF (MY_RANK==CURRENT_MPI_PROCESS_IO) THEN
+               LOWER_MESH_INDEX = MIN(LOWER_MESH_INDEX,NM_IO)
+               UPPER_MESH_INDEX = MAX(UPPER_MESH_INDEX,NM_IO)
+            ENDIF
+
+            PROCESS(NM_IO) = CURRENT_MPI_PROCESS_IO
+            IF (NM_IO>1) THEN
+               IF (PROCESS(NM_IO)-PROCESS(NM_IO-1)>1 .OR. PROCESS(NM_IO-1)>PROCESS(NM_IO)) THEN
+                  WRITE(MESSAGE, '(A)') 'ERROR(117): MPI_PROCESS must be continuous and monotonically increasing.'
+                  CALL SHUTDOWN(MESSAGE) ; RETURN
+               ENDIF
+            ELSE
+               IF (PROCESS(NM_IO)/=0) THEN
+                  WRITE(MESSAGE, '(A)') 'ERROR(118): MESH 1 must be assigned to MPI_PROCESS 0.'
+                  CALL SHUTDOWN(MESSAGE) ; RETURN
+               ENDIF
+            ENDIF
+            IF (MY_RANK==0 .AND. VERBOSE) WRITE(LU_ERR,'(A,I0,A,I0)') ' Mesh ',NM_IO,' is assigned to MPI Process ',PROCESS(NM_IO)
+
+            ! Mesh boundary colors
+            RGB_LOCAL = RGB_IN
+            COLOR_LOCAL = COLOR_IN
+            IF (ANY(RGB_LOCAL<0) .AND. COLOR_LOCAL=='null') COLOR_LOCAL = 'BLACK'
+            IF (COLOR_LOCAL /= 'null') CALL COLOR2RGB(RGB_LOCAL,COLOR_LOCAL)
+            ALLOCATE(M_IO%RGB(3))
+            M_IO%RGB = RGB_LOCAL
+
+            ! Mesh Geometry and Name
+            WRITE(MESH_NAME(NM_IO),'(A,I7.7)') 'MESH_',NM_IO
+            IF (ID_IN/='null') THEN
+               IF (NSI_IN*NSJ_IN*NSK_IN > 1) THEN
+                  WRITE(MESH_NAME(NM_IO),'(A,A,I3.3)') TRIM(ID_IN),'_S',NM_IO
+               ELSE
+                  MESH_NAME(NM_IO) = ID_IN
+               ENDIF
+            ENDIF
+
+            ! Process Physical Coordinates
+            IF (SUB_XB2-SUB_XB1<TWENTY_EPSILON_EB) THEN
+               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(1)=XB(2) on MESH ', NM_IO
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+            IF (SUB_XB4-SUB_XB3<TWENTY_EPSILON_EB) THEN
+               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(3)=XB(4) on MESH ', NM_IO
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+            IF (SUB_XB6-SUB_XB5<TWENTY_EPSILON_EB) THEN
+               WRITE(MESSAGE,'(A,I0)') 'ERROR(119): XB(5)=XB(6) on MESH ', NM_IO
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+            IF (CYLINDRICAL .AND. SUB_XB1<-TWENTY_EPSILON_EB) THEN
+               WRITE(MESSAGE,'(A,I0)') 'ERROR(120): XB(1)<0 with CYLINDRICAL on MESH ', NM_IO
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+            IF (CYLINDRICAL .AND. .NOT.TWO_D) THEN
+               WRITE(MESSAGE,'(A,I0)') 'ERROR(121): J>1 with CYLINDRICAL on MESH ', NM_IO
+               CALL SHUTDOWN(MESSAGE) ; RETURN
+            ENDIF
+
+            M_IO%XS    = SUB_XB1
+            M_IO%XF    = SUB_XB2
+            M_IO%YS    = SUB_XB3
+            M_IO%YF    = SUB_XB4
+            M_IO%ZS    = SUB_XB5
+            M_IO%ZF    = SUB_XB6
+            XS_MIN  = MIN(XS_MIN,M_IO%XS)
+            XF_MAX  = MAX(XF_MAX,M_IO%XF)
+            YS_MIN  = MIN(YS_MIN,M_IO%YS)
+            YF_MAX  = MAX(YF_MAX,M_IO%YF)
+            ZS_MIN  = MIN(ZS_MIN,M_IO%ZS)
+            ZF_MAX  = MAX(ZF_MAX,M_IO%ZF)
+            M_IO%DXI   = (M_IO%XF-M_IO%XS)/REAL(M_IO%IBAR,EB)
+            M_IO%DETA  = (M_IO%YF-M_IO%YS)/REAL(M_IO%JBAR,EB)
+            M_IO%DZETA = (M_IO%ZF-M_IO%ZS)/REAL(M_IO%KBAR,EB)
+            M_IO%RDXI  = 1._EB/M_IO%DXI
+            M_IO%RDETA = 1._EB/M_IO%DETA
+            M_IO%RDZETA= 1._EB/M_IO%DZETA
+            M_IO%IBM1  = M_IO%IBAR-1
+            M_IO%JBM1  = M_IO%JBAR-1
+            M_IO%KBM1  = M_IO%KBAR-1
+            M_IO%IBP1  = M_IO%IBAR+1
+            M_IO%JBP1  = M_IO%JBAR+1
+            M_IO%KBP1  = M_IO%KBAR+1
+
+            IF (TWO_D) THEN
+               M_IO%CELL_SIZE = SQRT(M_IO%DXI*M_IO%DZETA)
+            ELSE
+               M_IO%CELL_SIZE = (M_IO%DXI*M_IO%DETA*M_IO%DZETA)**ONTH
+            ENDIF
+
+            CHARACTERISTIC_CELL_SIZE = MIN( CHARACTERISTIC_CELL_SIZE , M_IO%CELL_SIZE )
+
+         ENDDO
+      ENDDO
+   ENDDO
+
+END SUBROUTINE SPLIT_AND_CREATE_MESHES
+
+!> \brief Distribute N cells across S splits, returning count and offset for split index SI
+SUBROUTINE DISTRIBUTE_CELLS(N_TOTAL, N_SPLITS, SPLIT_IDX, N_CELLS_OUT, OFFSET_OUT)
+   INTEGER, INTENT(IN)  :: N_TOTAL, N_SPLITS, SPLIT_IDX
+   INTEGER, INTENT(OUT) :: N_CELLS_OUT, OFFSET_OUT
+   INTEGER :: BASE, REMAINDER, I
+   IF (N_SPLITS <= 1) THEN
+      N_CELLS_OUT = N_TOTAL
+      OFFSET_OUT = 0
+      RETURN
+   ENDIF
+   BASE = N_TOTAL / N_SPLITS
+   REMAINDER = MOD(N_TOTAL, N_SPLITS)
+   ! First 'remainder' splits get base+1 cells, rest get base
+   OFFSET_OUT = 0
+   DO I = 1, SPLIT_IDX - 1
+      IF (I <= REMAINDER) THEN
+         OFFSET_OUT = OFFSET_OUT + BASE + 1
+      ELSE
+         OFFSET_OUT = OFFSET_OUT + BASE
+      ENDIF
+   ENDDO
+   IF (SPLIT_IDX <= REMAINDER) THEN
+      N_CELLS_OUT = BASE + 1
+   ELSE
+      N_CELLS_OUT = BASE
+   ENDIF
+END SUBROUTINE DISTRIBUTE_CELLS
 
 END SUBROUTINE READ_MESH
 

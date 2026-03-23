@@ -9,7 +9,6 @@
 #include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
-#include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
@@ -25,6 +24,11 @@
 #include "pred_fork_div_subgraph.h"
 
 /// Build the Predictor sub-graph.
+///
+/// Optimizations applied:
+///   - MeshExchange(3) + PredFinalOrch merged into single barrier
+///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
+///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
 inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
                                     std::shared_ptr<TerminationSignal> termSignal) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
@@ -49,14 +53,17 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
 
-    auto meshExchange3SM = makeBarrierSM(nmeshes, "MeshExchange(3)",
-        "CC_END_STEP\\nMESH_EXCHANGE(3)",
+    // Merged: MeshExchange(3) + PredFinalOrch (synthetic turbulence)
+    // Eliminates separate PredFinalOrch state node.
+    auto meshExch3SynTurbSM = makeBarrierSM(nmeshes, "MeshExch3+SynTurb",
+        "CC_END_STEP\\nMESH_EXCHANGE(3)\\nSYNTHETIC_TURBULENCE",
         [ccIBM](auto& meshes) {
             if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
             fds_mesh_exchange(3);
+            for (auto &md : meshes) {
+                fds_synthetic_turbulence_if_enabled(md->dt, md->t, md->nm);
+            }
         });
-
-    auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
     // --- Wire the sub-graph ---
 
@@ -91,8 +98,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         subgraph->edges(meshExch1DivPreforkSM, predForkDivSG);
 
         // Merged barrier: PredJoin + DivP1Late + PredDivExchange
-        // Collects 2*N tokens from fork branches, runs DivP1Late per mesh,
-        // then EXCHANGE_DIVERGENCE_INFO + GLOBAL_MATRIX_REASSIGN.
         auto predJoinDivExchangeSM = makeBarrierSM(nmeshes, "PredJoin+DivLate+DivExch",
             "DIV_P1_LATE\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN",
             [](auto& meshes) {
@@ -184,13 +189,12 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // VelocityPredictor -> ChangeTimeStep
     subgraph->edges(velPredKernelTask, changeTimeStepCollectorSM);
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
-    subgraph->edges(changeTimeStepSubgraph, meshExchange3SM);
 
-    // PredFinal -> PhaseTransition
-    subgraph->edges(meshExchange3SM, predFinalSubgraph);
-    subgraph->edges(predFinalSubgraph, phaseTransTask);
+    // Merged MeshExch(3) + SyntheticTurbulence -> PredFinal -> output
+    subgraph->edges(changeTimeStepSubgraph, meshExch3SynTurbSM);
+    subgraph->edges(meshExch3SynTurbSM, predFinalSubgraph);
 
-    subgraph->outputs(phaseTransTask);
+    subgraph->outputs(predFinalSubgraph);
 
     return subgraph;
 }

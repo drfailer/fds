@@ -17,6 +17,7 @@
 
 #include "fds_fortran_interface.h"
 #include "data/mesh_data.h"
+#include "data/mesh_dim.h"
 #include "graph/fds_graph.h"
 
 int main(int argc, char *argv[]) {
@@ -26,10 +27,15 @@ int main(int argc, char *argv[]) {
     // Parse command-line arguments.
     // Usage: fds_hh [options] <input_file>
     std::string inputFile;
+    MeshDim meshDim;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        if (arg[0] != '-') {
+        if (arg == "--mesh-dim" && i + 3 < argc) {
+            meshDim.i = std::atoi(argv[++i]);
+            meshDim.j = std::atoi(argv[++i]);
+            meshDim.k = std::atoi(argv[++i]);
+        } else if (arg[0] != '-') {
             inputFile = arg;
         }
     }
@@ -38,6 +44,15 @@ int main(int argc, char *argv[]) {
     // The Fortran runtime's GET_COMMAND_ARGUMENT may not work when main is C++.
     if (!inputFile.empty()) {
         fds_set_input_file(inputFile.c_str(), static_cast<int>(inputFile.size()));
+    }
+
+    // Step 0b: Set target mesh dimensions for automatic re-decomposition.
+    // Each user-configured mesh will be split into sub-meshes of approximately
+    // meshDim cells per dimension.
+    if (meshDim.enabled()) {
+        fds_set_target_mesh_dims(meshDim.i, meshDim.j, meshDim.k);
+        std::cout << "[FDS-HH] Mesh re-decomposition: target dims="
+                  << meshDim.i << "x" << meshDim.j << "x" << meshDim.k << std::endl;
     }
 
     // Step 1: Run the entire Fortran initialization sequence.

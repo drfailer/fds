@@ -509,6 +509,9 @@ REAL(EB) :: XS_MIN=1.E6_EB,XF_MAX=-1.E6_EB,YS_MIN=1.E6_EB,YF_MAX=-1.E6_EB,ZS_MIN
             DZS_MAX=-1._EB,DZF_MAX=-1._EB
 CHARACTER(LABEL_LENGTH), DIMENSION(:), ALLOCATABLE :: MESH_NAME
 
+! Target mesh dimensions for automatic re-decomposition (0 = disabled)
+INTEGER :: TARGET_IBAR=0, TARGET_JBAR=0, TARGET_KBAR=0
+
 ! Variables related to pressure solver
 
 LOGICAL :: ITERATE_PRESSURE=.FALSE.                              !< Flag indicating if pressure solution is iterated
