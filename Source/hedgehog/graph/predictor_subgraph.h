@@ -9,7 +9,6 @@
 #include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/fork_join_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -47,22 +46,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, meshThreads);
     auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(tEnd, nmeshes, meshThreads);
 
-    // --- Barrier states ---
-
-    auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
-        "CC_DENSITY\\nMESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
-        [ccIBM](auto& meshes) {
-            if (ccIBM) { fds_cc_density(meshes[0]->t, meshes[0]->dt); }
-            fds_mesh_exchange(1);
-            fds_exchange_inserted_particles();
-        });
-
-    auto predDivExchangeSM = makeBarrierSM(nmeshes, "PredDivExchange",
-        "EXCHANGE_DIVERGENCE_INFO\\nGLOBAL_MATRIX_REASSIGN",
-        [](auto& meshes) {
-            fds_exchange_divergence_info();
-            fds_global_matrix_reassign(0);
-        });
+    // --- Common barrier states ---
 
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
@@ -80,17 +64,19 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     subgraph->inputs(predStep1OrchSM);
 
-    // PredStep1 -> Density -> MeshExchange(1)
+    // PredStep1 -> Density
     subgraph->edges(predStep1OrchSM, predStep1KernelTask);
     subgraph->edges(predStep1KernelTask, densPredKernelTask);
-    subgraph->edges(densPredKernelTask, meshExchange1SM);
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
     if (!ccIBM) {
-        auto hvacInitDivPreforkSM = makeBarrierSM(nmeshes, "HvacInitDivPrefork",
-            "HVAC_CALC\\nINIT_DIV\\nDIV_P1_PREFORK",
+        // Merged barrier: MeshExchange(1) + HvacInitDivPrefork
+        auto meshExch1DivPreforkSM = makeBarrierSM(nmeshes, "MeshExch1+DivPrefork",
+            "MESH_EXCHANGE(1)\\nEXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV\\nDIV_P1_PREFORK",
             [](auto& meshes) {
+                fds_mesh_exchange(1);
+                fds_exchange_inserted_particles();
                 fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
                 fds_initialize_divergence_integrals();
                 for (auto &md : meshes) {
@@ -98,24 +84,46 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
                 }
             });
 
-        subgraph->edges(meshExchange1SM, hvacInitDivPreforkSM);
+        subgraph->edges(densPredKernelTask, meshExch1DivPreforkSM);
 
         // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early)
         auto predForkVFluxSG = buildPredForkVFluxSubgraph(nmeshes);
         auto predForkDivSG = buildPredForkDivSubgraph(nmeshes);
-        auto predJoinSM = std::make_shared<hh::StateManager<
-            1, MeshData, MeshData>>(
-            std::make_shared<ForkJoinState>(2), "PredJoin");
 
-        subgraph->edges(hvacInitDivPreforkSM, predForkVFluxSG);
-        subgraph->edges(hvacInitDivPreforkSM, predForkDivSG);
-        subgraph->edges(predForkVFluxSG, predJoinSM);
-        subgraph->edges(predForkDivSG, predJoinSM);
+        subgraph->edges(meshExch1DivPreforkSM, predForkVFluxSG);
+        subgraph->edges(meshExch1DivPreforkSM, predForkDivSG);
 
-        auto divP1LateTask = std::make_shared<DivP1LateTask>(meshThreads);
-        subgraph->edges(predJoinSM, divP1LateTask);
-        subgraph->edges(divP1LateTask, predDivExchangeSM);
+        // Merged barrier: PredJoin + DivP1Late + PredDivExchange
+        // Collects 2*N tokens from fork branches, runs DivP1Late per mesh,
+        // then EXCHANGE_DIVERGENCE_INFO + GLOBAL_MATRIX_REASSIGN.
+        auto predJoinDivExchangeSM = makeBarrierSM(nmeshes, "PredJoin+DivLate+DivExch",
+            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN",
+            [](auto& meshes) {
+                for (auto &md : meshes) {
+                    fds_divergence_part_1_late_b(md->nm, md->t, md->dt);
+                }
+                fds_exchange_divergence_info();
+                fds_global_matrix_reassign(0);
+            },
+            2 * nmeshes);  // Expects 2*N tokens from 2 fork branches
+
+        subgraph->edges(predForkVFluxSG, predJoinDivExchangeSM);
+        subgraph->edges(predForkDivSG, predJoinDivExchangeSM);
+
+        // DivP2 -> Pressure -> VelPred
+        subgraph->edges(predJoinDivExchangeSM, predDivP2KernelTask);
     } else {
+        // CC_IBM: MeshExchange(1) only
+        auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
+            "CC_DENSITY\\nMESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
+            [](auto& meshes) {
+                fds_cc_density(meshes[0]->t, meshes[0]->dt);
+                fds_mesh_exchange(1);
+                fds_exchange_inserted_particles();
+            });
+
+        subgraph->edges(densPredKernelTask, meshExchange1SM);
+
         // CC_IBM sequential path
         auto hvacInitDivSM = makeBarrierSM(nmeshes, "Hvac+InitDiv",
             "HVAC_CALC\\nINITIALIZE_DIVERGENCE_INTEGRALS",
@@ -134,12 +142,25 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, meshThreads);
         subgraph->edges(hvacInitDivSM, predWallBCSubgraph);
 
-        auto predWallDivKernelTask = std::make_shared<PredWallDivKernelTask>(meshThreads);
-        subgraph->edges(predWallBCSubgraph, predWallDivKernelTask);
-        subgraph->edges(predWallDivKernelTask, predDivExchangeSM);
+        // Merged barrier: PredWallDivKernel + PredDivExchange
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "PredWallDiv+DivExch",
+            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN",
+            [](auto& meshes) {
+                for (auto &md : meshes) {
+                    fds_particle_momentum_kernel(md->nm, md->dt);
+                    fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
+                }
+                fds_exchange_divergence_info();
+                fds_global_matrix_reassign(0);
+            });
+
+        subgraph->edges(predWallBCSubgraph, predDivExchangeSM);
+
+        // DivP2 -> Pressure -> VelPred
+        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
     }
 
-    // --- Common downstream: DivExchange -> DivP2 -> Pressure -> VelPred -> ... ---
+    // --- Common downstream: DivP2 -> Pressure -> VelPred -> ... ---
 
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
@@ -149,7 +170,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         auto predPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, true, termSignal,
             fds_get_pres_flag());
-        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
         subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
         subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
@@ -160,7 +180,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
                 fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
                 fds_init_change_time_step(meshes[0]->dt);
             });
-        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
         subgraph->edges(predDivP2KernelTask, predPressureSM);
         subgraph->edges(predPressureSM, velPredKernelTask);
     }

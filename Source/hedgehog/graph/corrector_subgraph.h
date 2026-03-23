@@ -64,12 +64,14 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             fds_mesh_exchange(4);
         });
 
-    auto sootHvacSM = makeBarrierSM(nmeshes, "Soot+Hvac",
+    // Merged: Fork1 Join (2*N tokens) + Soot+HVAC barrier
+    auto sootHvacSM = makeBarrierSM(nmeshes, "Join1+Soot+Hvac",
         "SOOT_OXIDATION_LOOP\\nHVAC_CALC",
         [](auto& meshes) {
             fds_soot_oxidation_loop(meshes[0]->dt);
             fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
-        });
+        },
+        2 * nmeshes);
 
     auto removeMoveSM = makeBarrierSM(nmeshes, "RemoveMove",
         "REMOVE_PARTICLES\\nMOVE_PARTICLES",
@@ -113,20 +115,17 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->inputs(corrStep1KernelTask);
     subgraph->edges(corrStep1KernelTask, meshExchange4SM);
 
-    // --- Fork 1: VFLUX || COMBUSTION ---
+    // --- Fork 1: VFLUX || COMBUSTION → merged Join+Soot+HVAC barrier ---
 
     auto fork1VFluxSubgraph = buildFork1VFluxSubgraph(nmeshes, ccIBM);
     auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(meshThreads);
-    auto join1SM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<ForkJoinState>(2), "Join1");
 
     subgraph->edges(meshExchange4SM, fork1VFluxSubgraph);
     subgraph->edges(meshExchange4SM, fork1CombTask);
-    subgraph->edges(fork1VFluxSubgraph, join1SM);
-    subgraph->edges(fork1CombTask, join1SM);
 
-    // After join: Soot+HVAC barrier
-    subgraph->edges(join1SM, sootHvacSM);
+    // Merged: Join(2*N) + Soot+HVAC barrier
+    subgraph->edges(fork1VFluxSubgraph, sootHvacSM);
+    subgraph->edges(fork1CombTask, sootHvacSM);
 
     // CorrCondens -> Particle pipeline
     subgraph->edges(sootHvacSM, corrCondensKernelTask);

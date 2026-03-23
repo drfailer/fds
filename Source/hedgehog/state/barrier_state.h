@@ -22,16 +22,23 @@ using BarrierFn = std::function<void(std::vector<std::shared_ptr<MeshData>>&)>;
 
 class BarrierState : public hh::AbstractState<1, MeshData, MeshData> {
 public:
-    BarrierState(int nmeshes, std::string routines, BarrierFn fn)
+    /// @param nmeshes Number of unique meshes (determines output count)
+    /// @param routines Label for dot-file display
+    /// @param fn Barrier function called when all tokens arrive
+    /// @param totalExpected Total tokens to collect before firing (default: nmeshes).
+    ///        Set to numBranches*nmeshes for fork-join+barrier merges.
+    BarrierState(int nmeshes, std::string routines, BarrierFn fn,
+                 int totalExpected = 0)
         : hh::AbstractState<1, MeshData, MeshData>(),
           nmeshes_(nmeshes), routines_(std::move(routines)), fn_(std::move(fn)),
+          totalExpected_(totalExpected > 0 ? totalExpected : nmeshes),
           nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<MeshData> data) override {
         collected_[data->nm - nmOffset_] = data;
-        if (++count_ == nmeshes_) {
+        if (++count_ == totalExpected_) {
             auto t0 = std::chrono::steady_clock::now();
             fn_(collected_);
             auto t1 = std::chrono::steady_clock::now();
@@ -57,7 +64,7 @@ public:
     }
 
 private:
-    int nmeshes_, nmOffset_, count_ = 0;
+    int nmeshes_, nmOffset_, count_ = 0, totalExpected_;
     std::string routines_;
     BarrierFn fn_;
     double totalTime_ = 0.0;
@@ -85,9 +92,11 @@ public:
 
 /// Helper to create a BarrierStateManager wrapping a BarrierState.
 inline auto makeBarrierSM(int nmeshes, std::string name,
-                           std::string routines, BarrierFn fn) {
+                           std::string routines, BarrierFn fn,
+                           int totalExpected = 0) {
     return std::make_shared<BarrierStateManager>(
-        std::make_shared<BarrierState>(nmeshes, std::move(routines), std::move(fn)),
+        std::make_shared<BarrierState>(nmeshes, std::move(routines), std::move(fn),
+                                       totalExpected),
         std::move(name));
 }
 
