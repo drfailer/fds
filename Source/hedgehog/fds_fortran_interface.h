@@ -27,6 +27,8 @@ int fds_get_lower_mesh_index();
 int fds_get_upper_mesh_index();
 int fds_get_kbar(int nm);
 int fds_is_cc_ibm();
+int fds_has_radiation();
+int fds_exchange_radiation();
 int fds_use_pressure_subgraph();
 int fds_iterate_pressure();
 int fds_get_pres_flag();

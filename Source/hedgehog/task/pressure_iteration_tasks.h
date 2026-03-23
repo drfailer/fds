@@ -4,57 +4,7 @@
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
-#include "../data/barrier_data.h"
-#include "../data/pressure_iteration_data.h"
 #include "../fds_fortran_interface.h"
-
-/// Pre-kernel task for the pressure iteration sub-graph.
-///
-/// Accepts BarrierData (first entry from outside) or PressureIterData (cycle
-/// back from convergence check). Runs pressure iteration init (first entry
-/// only), increments the iteration counter, then executes Phase 1:
-///   - Baroclinic correction per mesh (sequential — needs exchange after)
-///   - MESH_EXCHANGE(5)
-///
-/// match_velocity_flux_kernel has been moved into PressureSolveKernelTask
-/// to parallelize it (it runs after the exchange, safe per-mesh).
-///
-/// Scatters individual MeshData tokens for parallel Phase 2 kernel.
-class PressurePreKernelTask
-    : public hh::AbstractTask<2, BarrierData, PressureIterData, MeshData> {
-public:
-    PressurePreKernelTask()
-        : hh::AbstractTask<2, BarrierData, PressureIterData, MeshData>(
-              "PressurePreKernel", 1) {}
-
-    void execute(std::shared_ptr<BarrierData> data) override {
-        fds_pressure_iteration_init();
-        runPhase1(data->meshes, data->t(), data->dt());
-    }
-
-    void execute(std::shared_ptr<PressureIterData> data) override {
-        runPhase1(data->meshes, data->t, data->dt);
-    }
-
-private:
-    void runPhase1(std::vector<std::shared_ptr<MeshData>>& meshes,
-                   double t, double /*dt*/) {
-        fds_pressure_iteration_increment();
-
-        if (fds_pressure_iteration_needs_baroclinic()) {
-            for (auto& md : meshes) {
-                fds_baroclinic_correction(t, md->nm);
-            }
-            fds_mesh_exchange(5);
-            // match_velocity_flux_kernel moved to SolveKernel (parallelized)
-        }
-
-        // Scatter MeshData for parallel kernel
-        for (auto& md : meshes) {
-            this->addResult(md);
-        }
-    }
-};
 
 /// Parallel pressure solve kernel task.
 ///
@@ -74,7 +24,7 @@ public:
 
     void execute(std::shared_ptr<MeshData> md) override {
         // match_velocity_flux_kernel: moved from PreKernel for parallelization.
-        // Safe to call per-mesh after mesh_exchange(5) completed in PreKernel.
+        // Safe to call per-mesh after mesh_exchange(5) completed in PreCollector.
         if (fds_pressure_iteration_needs_baroclinic()) {
             fds_match_velocity_flux_kernel(md->nm);
         }

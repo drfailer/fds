@@ -119,6 +119,16 @@ FUNCTION C_FDS_IS_CC_IBM() RESULT(FLAG) BIND(C, NAME="fds_is_cc_ibm")
     ENDIF
 END FUNCTION C_FDS_IS_CC_IBM
 
+FUNCTION C_FDS_HAS_RADIATION() RESULT(FLAG) BIND(C, NAME="fds_has_radiation")
+    INTEGER(C_INT) :: FLAG
+    IF (RADIATION) THEN; FLAG = 1; ELSE; FLAG = 0; ENDIF
+END FUNCTION C_FDS_HAS_RADIATION
+
+FUNCTION C_FDS_EXCHANGE_RADIATION() RESULT(FLAG) BIND(C, NAME="fds_exchange_radiation")
+    INTEGER(C_INT) :: FLAG
+    IF (RADIATION .AND. EXCHANGE_RADIATION) THEN; FLAG = 1; ELSE; FLAG = 0; ENDIF
+END FUNCTION C_FDS_EXCHANGE_RADIATION
+
 ! Pressure iteration state queries
 FUNCTION C_FDS_USE_PRESSURE_SUBGRAPH() RESULT(FLAG) BIND(C, NAME="fds_use_pressure_subgraph")
     ! Returns 1 if conditions are met for parallel pressure sub-graph (FFT or ULMAT, non-CC_IBM, no tunnel).

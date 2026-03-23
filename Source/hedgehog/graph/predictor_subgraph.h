@@ -167,13 +167,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
     if (useParallelPressure) {
-        auto predPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-            std::make_shared<CollectorState>(nmeshes), "PredPressureCollector");
         auto predPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, true, termSignal,
             fds_get_pres_flag());
-        subgraph->edges(predDivP2KernelTask, predPressureCollectorSM);
-        subgraph->edges(predPressureCollectorSM, predPressureSubgraph);
+        subgraph->edges(predDivP2KernelTask, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
     } else {
         auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",

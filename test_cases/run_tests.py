@@ -145,6 +145,15 @@ TEST_CASES = {
     # --- Mesh re-decomposition tests (--mesh-dim) ---
     # These only verify successful completion (no gold comparison) since splitting
     # changes the problem (different mesh boundaries = different numerics).
+    'fire_2mesh_2mpi': {
+        'input': 'fire_const_gamma_2mesh.fds',
+        'chid': 'fire_const_gamma_2mesh',
+        'meshes': 2,
+        'mpi_processes': 2,
+        'description': '2-mesh fire with 2 MPI processes (1 mesh per process)',
+        'compare_files': [],
+        'timeout': 120,
+    },
     'split_eddies_1to3': {
         'input': 'dancing_eddies_1mesh_short.fds',
         'chid': 'dancing_eddies_1mesh_short',
@@ -212,7 +221,8 @@ class TestRunner:
         return True
 
     def run_fds(self, input_file: Path, chid: str, exe: Path, work_dir: Path,
-                timeout: int = 60, mesh_dim: tuple = None) -> Tuple[bool, float]:
+                timeout: int = 60, mesh_dim: tuple = None,
+                mpi_processes: int = 1) -> Tuple[bool, float]:
         """
         Run FDS simulation.
 
@@ -227,6 +237,7 @@ class TestRunner:
             work_dir: Working directory for execution
             timeout: Safety timeout in seconds
             mesh_dim: Optional (i,j,k) tuple for mesh re-decomposition
+            mpi_processes: Number of MPI processes (default 1)
 
         Returns:
             (success, elapsed_time)
@@ -246,7 +257,7 @@ class TestRunner:
         # (fds_hh does not use OpenMP; OpenMP vectorized reductions change FP order)
         env = os.environ.copy()
         env['OMP_NUM_THREADS'] = '1'
-        cmd = ['mpiexec', '--oversubscribe', '-n', '1', str(exe)]
+        cmd = ['mpiexec', '--oversubscribe', '-n', str(mpi_processes), str(exe)]
         if mesh_dim and 'fds_hh' in exe.name:
             cmd.extend(['--mesh-dim', str(mesh_dim[0]), str(mesh_dim[1]), str(mesh_dim[2])])
         cmd.append(input_file.name)
@@ -448,12 +459,16 @@ class TestRunner:
             # Run FDS
             test_timeout = test_config.get('timeout', 60)
             mesh_dim = test_config.get('mesh_dim', None)
+            mpi_procs = test_config.get('mpi_processes', 1)
             if mesh_dim:
                 self.log(f"Running FDS ({self.fds_exe.name}) --mesh-dim {mesh_dim}...", "RUN")
+            elif mpi_procs > 1:
+                self.log(f"Running FDS ({self.fds_exe.name}) with {mpi_procs} MPI processes...", "RUN")
             else:
                 self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
             success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir,
-                                             timeout=test_timeout, mesh_dim=mesh_dim)
+                                             timeout=test_timeout, mesh_dim=mesh_dim,
+                                             mpi_processes=mpi_procs)
             result['run_time'] = elapsed
 
             if not success:

@@ -5,7 +5,6 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../state/collector_state.h"
 #include "../state/barrier_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/fork_join_state.h"
@@ -169,13 +168,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // --- Common downstream: DivP2 -> Pressure -> VelCorr -> CorrFinal ---
 
     if (useParallelPressure) {
-        auto corrPressureCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-            std::make_shared<CollectorState>(nmeshes), "CorrPressureCollector");
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, false, termSignal,
             fds_get_pres_flag());
-        subgraph->edges(corrDivP2KernelTask, corrPressureCollectorSM);
-        subgraph->edges(corrPressureCollectorSM, corrPressureSubgraph);
+        subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);
         subgraph->edges(corrPressureSubgraph, velCorrKernelTask);
     } else {
         auto corrPressureSM = makeBarrierSM(nmeshes, "CorrPressure",

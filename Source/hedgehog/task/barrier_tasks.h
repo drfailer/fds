@@ -41,7 +41,7 @@ public:
         auto t0 = std::chrono::steady_clock::now();
         if (ccDensity_) { fds_cc_density(data->t(), data->dt()); }
         if (ccEndStep_) { fds_cc_end_step(data->t(), data->dt(), 0); }
-        fds_mesh_exchange(code_);
+        if (code_ != 2 || fds_exchange_radiation()) { fds_mesh_exchange(code_); }
         if (code_ == 1) { fds_exchange_inserted_particles(); }
         if (initDiv_) { fds_initialize_divergence_integrals(); }
         auto t1 = std::chrono::steady_clock::now();
@@ -87,7 +87,7 @@ public:
 
     void execute(std::shared_ptr<BarrierData> data) override {
         auto t0 = std::chrono::steady_clock::now();
-        fds_mesh_exchange(2);
+        if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
         for (auto &md : data->meshes) {
             fds_divergence_part_1_add_qr_b(md->nm);
         }
