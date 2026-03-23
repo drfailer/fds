@@ -9,7 +9,7 @@
 #include "../state/barrier_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/fork_join_state.h"
-#include "../state/pipeline_fork2_state.h"
+// pipeline_fork2_state.h no longer needed — fork2SM merged into barrier
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -86,15 +86,18 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         "MESH_EXCHANGE(7)",
         [](auto& meshes) { fds_mesh_exchange(7); });
 
-    auto meshExchange6aSM = makeBarrierSM(nmeshes, "MeshExchange(6a)",
-        "MESH_EXCHANGE(6)",
-        [](auto& meshes) { fds_mesh_exchange(6); });
-
     auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, false, false, ccIBM);
 
+    // QR addition absorbed for non-CC_IBM path
     auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
-        "EXCHANGE_DIVERGENCE_INFO\\nRTE_SOURCE_CORRECTION\\nGLOBAL_MATRIX_REASSIGN",
-        [](auto& meshes) {
+        ccIBM ? "EXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN"
+              : "QR_ADD\\nEXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN",
+        [ccIBM](auto& meshes) {
+            if (!ccIBM) {
+                for (auto &md : meshes) {
+                    fds_divergence_part_1_add_qr_b(md->nm);
+                }
+            }
             fds_exchange_divergence_info();
             fds_rte_source_correction();
             fds_global_matrix_reassign(0);
@@ -136,18 +139,26 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // WallBC sub-graph
     subgraph->edges(meshExchange7SM, wallBCSubgraph);
-    subgraph->edges(wallBCSubgraph, meshExchange6aSM);
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
     if (ccIBM) {
+        auto meshExchange6aSM = makeBarrierSM(nmeshes, "MeshExchange(6a)",
+            "MESH_EXCHANGE(6)",
+            [](auto& meshes) { fds_mesh_exchange(6); });
+        subgraph->edges(wallBCSubgraph, meshExchange6aSM);
         subgraph->edges(meshExchange6aSM, corrRadiationSubgraph);
         subgraph->edges(corrRadiationSubgraph, meshExchange2);
         subgraph->edges(meshExchange2, corrDivP1KernelTask);
         subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
     } else {
-        auto fork2SM = std::make_shared<hh::StateManager<
-            1, MeshData, MeshData>>(
-            std::make_shared<PipelineFork2State>(nmeshes), "Fork2");
+        // Merged: MeshExchange(6a) + InitDivIntegrals (was separate fork2SM)
+        auto meshExch6aInitDivSM = makeBarrierSM(nmeshes, "MeshExch6a+InitDiv",
+            "MESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
+            [](auto& meshes) {
+                fds_mesh_exchange(6);
+                fds_initialize_divergence_integrals();
+            });
+        subgraph->edges(wallBCSubgraph, meshExch6aInitDivSM);
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(meshThreads);
         auto fork2DivP1CollSM = std::make_shared<hh::StateManager<
@@ -157,17 +168,16 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         auto join2SM = std::make_shared<hh::StateManager<
             1, BarrierData, BarrierData>>(
             std::make_shared<BarrierJoinState>(2), "Join2");
-        auto qrAddTask = std::make_shared<DivP1QRAdditionTask>(meshThreads);
 
-        subgraph->edges(meshExchange6aSM, fork2SM);
-        subgraph->edges(fork2SM, corrRadiationSubgraph);
+        // Multicast to both branches (Hedgehog routes by type)
+        subgraph->edges(meshExch6aInitDivSM, corrRadiationSubgraph);
+        subgraph->edges(meshExch6aInitDivSM, fork2DivP1Task);
         subgraph->edges(corrRadiationSubgraph, join2SM);
-        subgraph->edges(fork2SM, fork2DivP1Task);
         subgraph->edges(fork2DivP1Task, fork2DivP1CollSM);
         subgraph->edges(fork2DivP1CollSM, join2SM);
         subgraph->edges(join2SM, meshExchange2);
-        subgraph->edges(meshExchange2, qrAddTask);
-        subgraph->edges(qrAddTask, corrDivExchangeSM);
+        // QR addition absorbed into corrDivExchangeSM
+        subgraph->edges(meshExchange2, corrDivExchangeSM);
     }
 
     // --- Common downstream: DivExchange -> DivP2 -> Pressure -> VelCorr -> ... ---
