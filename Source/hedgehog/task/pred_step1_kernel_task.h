@@ -6,7 +6,8 @@
 #include "../fds_fortran_interface.h"
 
 /// Parallel kernel task for predictor step 1.
-/// Calls COMPUTE_VISCOSITY_KERNEL + MASS_FINITE_DIFFERENCES_NEW_KERNEL per mesh.
+/// Calls COMPUTE_VISCOSITY_KERNEL + MASS_FINITE_DIFFERENCES_NEW_KERNEL +
+/// DENSITY_KERNEL per mesh (matches corrector's CorrStep1KernelTask pattern).
 class PredStep1KernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
@@ -17,6 +18,7 @@ public:
     void execute(std::shared_ptr<MeshData> data) override {
         fds_compute_viscosity_kernel(data->nm, 0);  // estimated=0 for predictor
         fds_mass_finite_differences_kernel(data->nm);
+        fds_density_kernel(data->nm, data->t, data->dt);
         this->addResult(data);
     }
 

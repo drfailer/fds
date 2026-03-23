@@ -12,7 +12,6 @@
 #include "../task/barrier_tasks.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
-#include "../task/density_pred_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/pred_fork_tasks.h"
 #include "../task/pred_wall_div_kernel_task.h"
@@ -37,7 +36,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(meshThreads);
-    auto densPredKernelTask = std::make_shared<DensityPredKernelTask>(meshThreads);
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(meshThreads);
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(meshThreads);
 
@@ -64,9 +62,8 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     subgraph->inputs(predStep1OrchSM);
 
-    // PredStep1 -> Density
+    // PredStep1 (VISC + MASS_FD + DENSITY merged)
     subgraph->edges(predStep1OrchSM, predStep1KernelTask);
-    subgraph->edges(predStep1KernelTask, densPredKernelTask);
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
@@ -84,7 +81,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
                 }
             });
 
-        subgraph->edges(densPredKernelTask, meshExch1DivPreforkSM);
+        subgraph->edges(predStep1KernelTask, meshExch1DivPreforkSM);
 
         // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early)
         auto predForkVFluxSG = buildPredForkVFluxSubgraph(nmeshes);
@@ -122,7 +119,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
                 fds_exchange_inserted_particles();
             });
 
-        subgraph->edges(densPredKernelTask, meshExchange1SM);
+        subgraph->edges(predStep1KernelTask, meshExchange1SM);
 
         // CC_IBM sequential path
         auto hvacInitDivSM = makeBarrierSM(nmeshes, "Hvac+InitDiv",

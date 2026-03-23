@@ -18,7 +18,6 @@
 #include "../task/pipeline_fork1_tasks.h"
 #include "pipeline_fork1_vflux_subgraph.h"
 #include "../task/corr_condens_kernel_task.h"
-#include "../task/particle_mass_energy_kernel_task.h"
 #include "../task/particle_momentum_kernel_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
@@ -46,7 +45,6 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     bool ccIBM = fds_is_cc_ibm() != 0;
 
-    auto particleMassEnergyKernelTask = std::make_shared<ParticleMassEnergyKernelTask>(meshThreads);
     auto partMomKernelTask = std::make_shared<ParticleMomentumKernelTask>(meshThreads);
 
     // --- Sub-graphs ---
@@ -130,10 +128,9 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     subgraph->edges(fork1VFluxSubgraph, sootHvacSM);
     subgraph->edges(fork1CombTask, sootHvacSM);
 
-    // CorrCondens -> Particle pipeline
+    // CorrCondens+PartME -> Particle pipeline
     subgraph->edges(sootHvacSM, corrCondensKernelTask);
-    subgraph->edges(corrCondensKernelTask, particleMassEnergyKernelTask);
-    subgraph->edges(particleMassEnergyKernelTask, removeMoveSM);
+    subgraph->edges(corrCondensKernelTask, removeMoveSM);
     subgraph->edges(removeMoveSM, partMomKernelTask);
     subgraph->edges(partMomKernelTask, meshExchange7SM);
 
