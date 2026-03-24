@@ -1,7 +1,7 @@
 # CMakeLists.txt for the fds_hh target (Hedgehog dataflow integration)
 #
 # Build with:
-#   cmake -DUSE_HEDGEHOG=ON -DHEDGEHOG_INCLUDE_DIR=/path/to/hedgehog ..
+#   cmake -DUSE_HEDGEHOG=ON ..
 #   cmake --build . --target fds_hh
 
 # Enable C++ for this subdirectory
@@ -11,18 +11,15 @@ enable_language(CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Hedgehog is header-only; user must provide the include path
-if(NOT DEFINED HEDGEHOG_INCLUDE_DIR)
-    # Try to find it as a sibling directory
-    if(EXISTS "${CMAKE_SOURCE_DIR}/../hedgehog/hedgehog")
-        set(HEDGEHOG_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../hedgehog")
-        message(STATUS "Found Hedgehog at ${HEDGEHOG_INCLUDE_DIR}")
-    else()
-        message(FATAL_ERROR
-            "HEDGEHOG_INCLUDE_DIR not set. Please provide the path to the Hedgehog library, e.g.:\n"
-            "  cmake -DHEDGEHOG_INCLUDE_DIR=/path/to/hedgehog ..")
-    endif()
-endif()
+include(FetchContent)
+
+# Hedgehog communicator task library (also pulls in hedgehog itself)
+FetchContent_Declare(
+    hh_communicator
+    GIT_REPOSITORY https://github.com/drfailer/hh_communicator_draft.git
+    GIT_TAG new-profiling
+)
+FetchContent_MakeAvailable(hh_communicator)
 
 # Hedgehog requires threading and TBB
 find_package(Threads REQUIRED)
@@ -42,15 +39,18 @@ add_executable(fds_hh
 # Include directories
 target_include_directories(fds_hh PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}     # For fds_fortran_interface.h and subdirs
-    ${HEDGEHOG_INCLUDE_DIR}         # For hedgehog/hedgehog.h
     ${CMAKE_SOURCE_DIR}             # For the top-level directory
+    ${hedgehog_SOURCE_DIR}          # For <hedgehog/hedgehog.h> style includes
 )
+
+# Link hedgehog communicator (brings hedgehog::hedgehog + MPI::MPI_CXX transitively)
+target_link_libraries(fds_hh PRIVATE hedgehog::comm)
 
 # Link threading and TBB (required by Hedgehog)
 target_link_libraries(fds_hh PRIVATE Threads::Threads)
 target_link_libraries(fds_hh PRIVATE TBB::tbb)
 
-# Link MPI (mandatory for FDS)
+# Link MPI (mandatory for FDS Fortran code)
 target_link_libraries(fds_hh PRIVATE MPI::MPI_Fortran)
 
 # Link MKL if available

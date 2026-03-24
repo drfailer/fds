@@ -191,6 +191,13 @@ int fds_check_call_ht_1d();
 void fds_reset_wall_counter();
 void fds_update_bc_clock(double t);
 
+// Per-neighbor flux exchange (CODE 5 decomposition)
+int fds_flux_get_neighbor_count(int nm);
+int fds_flux_get_neighbor_mesh(int nm, int idx);
+int fds_flux_has_send_cells(int nm, int nom);
+int fds_flux_recv_count(int nm);
+void fds_flux_copy_neighbor(int nm, int nom);
+
 } // extern "C"
 
 #endif // FDS_FORTRAN_INTERFACE_H

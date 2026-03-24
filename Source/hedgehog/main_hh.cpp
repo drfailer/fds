@@ -18,6 +18,7 @@
 #include "fds_fortran_interface.h"
 #include "data/mesh_data.h"
 #include "data/mesh_dim.h"
+#include "service/fds_comm_service.h"
 #include "graph/fds_graph.h"
 
 int main(int argc, char *argv[]) {
@@ -92,7 +93,13 @@ int main(int argc, char *argv[]) {
         ? static_cast<size_t>(cliKernelThreads)
         : static_cast<size_t>(local_nmeshes);
     std::cout << "[FDS-HH] Kernel threads=" << kernelThreads << std::endl;
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads);
+
+    // Initialize communicator service (reuses FDS's already-initialized MPI)
+    FDSMPIService commService;
+    std::cout << "[FDS-HH] CommService: rank=" << commService.rank()
+              << " nbProcesses=" << commService.nbProcesses() << std::endl;
+
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads, &commService);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
@@ -123,13 +130,14 @@ int main(int argc, char *argv[]) {
     // Flush Fortran I/O buffers to ensure all outputs are written to disk
     fds_flush_output_files();
 
-    // Step 7: Generate dot file for visualization
+    // Step 7: Generate dot file for visualization (per-rank to avoid collisions)
+    std::string dotFile = "fds_hh_graph_" + std::to_string(commService.rank()) + ".dot";
     graph->createDotFile(
-        "fds_hh_graph.dot",
+        dotFile,
         hh::ColorScheme::EXECUTION,
         hh::StructureOptions::QUEUE);
 
-    std::cout << "[FDS-HH] Graph dot file written to fds_hh_graph.dot" << std::endl;
+    std::cout << "[FDS-HH] Graph dot file written to " << dotFile << std::endl;
 
     // Step 8: Finalize FDS (deallocate solvers, MPI_Finalize, etc.)
     fds_finalize_all(t, dt);

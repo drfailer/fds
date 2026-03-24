@@ -81,9 +81,9 @@ private:
             auto t1 = std::chrono::steady_clock::now();
             baroTime_ += std::chrono::duration<double>(t1 - t0).count();
 
-            fds_mesh_exchange(5);
-            auto t2 = std::chrono::steady_clock::now();
-            exchTime_ += std::chrono::duration<double>(t2 - t1).count();
+            // NOTE: fds_mesh_exchange(5) removed — now handled by
+            // FluxPackState -> CommunicatorTask -> FluxCollectorState
+            // in the pressure iteration sub-graph.
         }
 
         ++invocations_;

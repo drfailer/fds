@@ -2,6 +2,7 @@
 #define PREDICTOR_SUBGRAPH_H
 
 #include <hedgehog/hedgehog.h>
+#include <service/comm_service.hpp>
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
@@ -30,7 +31,8 @@
 ///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
 ///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
 inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
-                                    std::shared_ptr<TerminationSignal> termSignal) {
+                                    std::shared_ptr<TerminationSignal> termSignal,
+                                    hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
 
     size_t meshThreads = static_cast<size_t>(nmeshes);
@@ -169,7 +171,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     if (useParallelPressure) {
         auto predPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, true, termSignal,
-            fds_get_pres_flag());
+            commService, fds_get_pres_flag());
         subgraph->edges(predDivP2KernelTask, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
     } else {

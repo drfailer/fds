@@ -2,6 +2,7 @@
 #define CORRECTOR_SUBGRAPH_H
 
 #include <hedgehog/hedgehog.h>
+#include <service/comm_service.hpp>
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
@@ -32,7 +33,8 @@
 ///   - Opt 3: MeshExchange(2) + CorrDivExchange merged (non-CC_IBM)
 ///   - Opt 4: MeshExchange(6b) removed — absorbed into CorrFinalOrchestrator
 inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
-                                    std::shared_ptr<TerminationSignal> termSignal) {
+                                    std::shared_ptr<TerminationSignal> termSignal,
+                                    hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("Corrector");
 
     size_t meshThreads = static_cast<size_t>(nmeshes);
@@ -170,7 +172,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, false, termSignal,
-            fds_get_pres_flag());
+            commService, fds_get_pres_flag());
         subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);
         subgraph->edges(corrPressureSubgraph, velCorrKernelTask);
     } else {

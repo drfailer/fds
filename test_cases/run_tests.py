@@ -12,8 +12,6 @@ import subprocess
 import argparse
 import json
 import select
-import shutil
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 import time
@@ -437,14 +435,8 @@ class TestRunner:
         chid = test_config.get('chid', input_file.stem)  # Use explicit CHID or derive from filename
         run_only = not test_config['compare_files']
 
-        # Run-only tests (e.g., mesh-dim) use a temp dir to avoid leftover files
-        tmp_dir = None
-        if run_only:
-            tmp_dir = tempfile.mkdtemp(prefix=f'fds_test_{test_name}_')
-            work_dir = Path(tmp_dir)
-        else:
-            work_dir = RUN_DIR / test_name
-            work_dir.mkdir(exist_ok=True)
+        work_dir = RUN_DIR / test_name
+        work_dir.mkdir(exist_ok=True)
 
         result = {
             'test_name': test_name,
@@ -455,53 +447,48 @@ class TestRunner:
             'comparison': {}
         }
 
-        try:
-            # Run FDS
-            test_timeout = test_config.get('timeout', 60)
-            mesh_dim = test_config.get('mesh_dim', None)
-            mpi_procs = test_config.get('mpi_processes', 1)
-            if mesh_dim:
-                self.log(f"Running FDS ({self.fds_exe.name}) --mesh-dim {mesh_dim}...", "RUN")
-            elif mpi_procs > 1:
-                self.log(f"Running FDS ({self.fds_exe.name}) with {mpi_procs} MPI processes...", "RUN")
-            else:
-                self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
-            success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir,
-                                             timeout=test_timeout, mesh_dim=mesh_dim,
-                                             mpi_processes=mpi_procs)
-            result['run_time'] = elapsed
+        # Run FDS
+        test_timeout = test_config.get('timeout', 60)
+        mesh_dim = test_config.get('mesh_dim', None)
+        mpi_procs = test_config.get('mpi_processes', 1)
+        if mesh_dim:
+            self.log(f"Running FDS ({self.fds_exe.name}) --mesh-dim {mesh_dim}...", "RUN")
+        elif mpi_procs > 1:
+            self.log(f"Running FDS ({self.fds_exe.name}) with {mpi_procs} MPI processes...", "RUN")
+        else:
+            self.log(f"Running FDS ({self.fds_exe.name})...", "RUN")
+        success, elapsed = self.run_fds(input_file, chid, self.fds_exe, work_dir,
+                                         timeout=test_timeout, mesh_dim=mesh_dim,
+                                         mpi_processes=mpi_procs)
+        result['run_time'] = elapsed
 
-            if not success:
-                self.log(f"FDS run failed ({elapsed:.2f}s)", "FAIL")
-                return result
+        if not success:
+            self.log(f"FDS run failed ({elapsed:.2f}s)", "FAIL")
+            return result
 
-            self.log(f"FDS completed ({elapsed:.2f}s)", "PASS")
+        self.log(f"FDS completed ({elapsed:.2f}s)", "PASS")
 
-            # Compare with gold (if comparison files are specified)
-            if not run_only:
-                self.log(f"Comparing outputs...", "RUN")
-                gold_subdir = GOLD_DIR / test_name
-                test_tol = test_config.get('tolerance', None)
-                test_ignore_cols = test_config.get('ignore_columns', None)
-                test_row_diff = test_config.get('allow_row_diff', 0)
-                all_passed, comparison = self.compare_files(chid, work_dir, gold_subdir, test_config['compare_files'],
-                                                            tolerance=test_tol, ignore_columns=test_ignore_cols,
-                                                            allow_row_diff=test_row_diff)
-                result['comparison'] = comparison
+        # Compare with gold (if comparison files are specified)
+        if not run_only:
+            self.log(f"Comparing outputs...", "RUN")
+            gold_subdir = GOLD_DIR / test_name
+            test_tol = test_config.get('tolerance', None)
+            test_ignore_cols = test_config.get('ignore_columns', None)
+            test_row_diff = test_config.get('allow_row_diff', 0)
+            all_passed, comparison = self.compare_files(chid, work_dir, gold_subdir, test_config['compare_files'],
+                                                        tolerance=test_tol, ignore_columns=test_ignore_cols,
+                                                        allow_row_diff=test_row_diff)
+            result['comparison'] = comparison
 
-                if all_passed:
-                    result['passed'] = True
-                    self.log(f"All comparisons passed", "PASS")
-                else:
-                    self.log(f"Some comparisons failed", "FAIL")
-            else:
-                # Run-only test: pass if FDS completed
+            if all_passed:
                 result['passed'] = True
-                self.log(f"Run-only test (no gold comparison)", "PASS")
-        finally:
-            # Clean up temp directory for run-only tests
-            if tmp_dir:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+                self.log(f"All comparisons passed", "PASS")
+            else:
+                self.log(f"Some comparisons failed", "FAIL")
+        else:
+            # Run-only test: pass if FDS completed
+            result['passed'] = True
+            self.log(f"Run-only test (no gold comparison)", "PASS")
 
         return result
 
