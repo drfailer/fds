@@ -8,6 +8,7 @@
 #include "../data/termination_signal.h"
 #include "../task/baroclinic_kernel_task.h"
 #include "../task/pressure_iteration_tasks.h"
+#include "../task/exchange_push_task.h"
 #include "../state/pressure_convergence_state.h"
 #include "../state/barrier_state.h"
 #include "../state/exchange_orchestrator_state.h"
@@ -15,20 +16,20 @@
 
 /// Build the pressure iteration sub-graph.
 ///
-/// Architecture (dependency-aware exchange + 2 parallel kernel tasks):
+/// Architecture (dependency-aware exchange + 3 parallel kernel tasks):
 ///
 ///   BaroclinicKernel(task, parallel)
-///     → ExchangeOrchestrator(state: push copies + dependency gate)
+///     → ExchangePush(task, parallel: copy to targets' OMESHes)
+///     → ExchangeGate(state: pure dependency tracker)
 ///     → PressureSolveKernel(task, parallel)
 ///     → PressureConvergence(barrier: exchange(5) + vel_error + check)
 ///       → PressureIterMeshData → BaroclinicKernel (cycle)
 ///       → MeshData → subgraph output (converged)
 ///
-/// The ExchangeOrchestrator replaces the global fds_mesh_exchange(5) barrier
-/// with per-mesh dependency tracking.  When a mesh arrives, its data is
-/// immediately pushed (copied) to all same-rank targets' OMESHes.  A mesh
-/// can proceed to the pressure solve once all its receive-dependencies
-/// have also pushed.
+/// The ExchangePush task copies each mesh's flux data to all same-rank
+/// targets when it arrives.  The ExchangeGate state is a pure dependency
+/// tracker — it holds each mesh until all its receive-dependencies have
+/// also completed their push, then releases it for pressure solving.
 ///
 /// IMPORTANT: fds_pressure_iteration_init() and the first
 /// fds_pressure_iteration_increment() must be called in the upstream
@@ -56,10 +57,11 @@ inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
     auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(kernelThreads);
     auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
 
-    // --- Dependency-aware exchange ---
-    auto exchangeOrchestratorSM = std::make_shared<ExchangeOrchestratorManager>(
-        std::make_shared<ExchangeOrchestratorState>(depGraph),
-        "ExchangeOrchestrator");
+    // --- Dependency-aware exchange (push task + gate state) ---
+    auto exchangePushTask = std::make_shared<ExchangePushTask>(kernelThreads, depGraph);
+    auto exchangeGateSM = std::make_shared<ExchangeGateManager>(
+        std::make_shared<ExchangeGateState>(depGraph),
+        "ExchangeGate");
 
     // --- Convergence barrier (exchange2 + vel_error + convergence check) ---
     auto convergenceSM = std::make_shared<PressureConvergenceManager>(
@@ -72,11 +74,14 @@ inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
     // Entry: MeshData -> baroclinicKernel
     subgraph->inputs(baroclinicKernel);
 
-    // baroclinicKernel -> ExchangeOrchestrator (push copies + dependency gate)
-    subgraph->edges(baroclinicKernel, exchangeOrchestratorSM);
+    // baroclinicKernel -> ExchangePush (parallel copies to targets)
+    subgraph->edges(baroclinicKernel, exchangePushTask);
 
-    // ExchangeOrchestrator -> PressureSolveKernel (emits when deps satisfied)
-    subgraph->edges(exchangeOrchestratorSM, solveKernel);
+    // ExchangePush -> ExchangeGate (dependency tracking)
+    subgraph->edges(exchangePushTask, exchangeGateSM);
+
+    // ExchangeGate -> PressureSolveKernel (emits when deps satisfied)
+    subgraph->edges(exchangeGateSM, solveKernel);
 
     // PressureSolveKernel -> PressureConvergence (barrier)
     subgraph->edges(solveKernel, convergenceSM);

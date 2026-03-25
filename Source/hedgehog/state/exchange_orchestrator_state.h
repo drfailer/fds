@@ -9,33 +9,26 @@
 #include <sstream>
 #include "../data/mesh_data.h"
 #include "../tool/mesh_dependency_graph.h"
-#include "../fds_fortran_interface.h"
 
-/// Dependency-aware mesh exchange state (push-then-gate).
+/// Pure dependency gate for mesh exchange orchestration.
 ///
-/// Replaces the global fds_mesh_exchange(5) barrier with per-mesh dependency
-/// tracking.  When a mesh NM arrives:
+/// Receives MeshData "push done" signals from the upstream ExchangePushTask.
+/// Each signal means that mesh NM has finished copying its data to all
+/// same-rank targets.  The gate tracks which meshes have pushed and emits
+/// a mesh downstream only when all of its receive-dependencies have also
+/// pushed.
 ///
-///   1. PUSH: Copy NM's FVX/FVY/FVZ/H to all same-rank targets' OMESH(NM).
-///      This reads NM's data BEFORE the pressure solve modifies it.
+/// This state contains NO I/O — all copies and communication happen in
+/// upstream/downstream tasks.  This makes it reusable across different
+/// exchange codes (5, 3, 1, etc.) by pairing it with different push tasks.
 ///
-///   2. GATE: Mark NM as "pushed" in the satisfied_ bitset.  Check if any
-///      local mesh's receive-dependencies are now fully satisfied.  For each
-///      satisfied mesh, emit MeshData to the downstream pressure solve.
-///
-/// A mesh can proceed to the pressure solve only when:
-///   - Its own data has been pushed (saved to targets' OMESHes)
-///   - All of its receive-dependencies have pushed (its OMESH has fresh data)
-///
-/// Thread safety: The state is single-threaded (Hedgehog guarantee).  Push
-/// copies run sequentially within execute(), which is correct because:
-///   - Different pushes write to disjoint OMESH entries
-///   - No mesh starts its solve before this state emits it
-///   - The state reads source mesh data before any solve modifies it
-class ExchangeOrchestratorState
+/// A mesh can proceed when:
+///   - It has been pushed (its data is saved in targets' OMESHes)
+///   - All of its receive-dependencies have been pushed (its OMESH is fresh)
+class ExchangeGateState
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
-    ExchangeOrchestratorState(std::shared_ptr<MeshDependencyGraph> depGraph)
+    ExchangeGateState(std::shared_ptr<MeshDependencyGraph> depGraph)
         : depGraph_(std::move(depGraph)),
           satisfied_(static_cast<size_t>(depGraph_->totalMeshes())),
           lower_(depGraph_->lowerMesh()),
@@ -45,7 +38,6 @@ public:
         pendingMeshes_.resize(static_cast<size_t>(depGraph_->totalMeshes() + 1));
         emitted_.resize(static_cast<size_t>(nmeshes), false);
 
-        // Pre-compute which local meshes have no same-rank dependencies
         noDeps_.resize(static_cast<size_t>(nmeshes), false);
         for (int nm = lower_; nm <= upper_; ++nm) {
             if (depGraph_->sameRankRecvDeps(nm).count() == 0) {
@@ -59,27 +51,13 @@ public:
 
         int nm = data->nm;
 
-        // Store the mesh pointer
         pendingMeshes_[static_cast<size_t>(nm)] = data;
-
-        // PUSH: Copy nm's data to all same-rank targets' OMESHes.
-        // Must happen NOW, before nm enters the pressure solve.
-        for (int target : depGraph_->sendTargets(nm)) {
-            if (fds_mesh_process(target) == fds_mesh_process(nm)) {
-                fds_flux_copy_neighbor_ts(nm, target);
-                ++copyCount_;
-            }
-        }
-
-        // Mark nm as "pushed" (0-based bit index)
         satisfied_.set(static_cast<size_t>(nm - 1));
 
-        // GATE: Check all local meshes for newly-satisfied dependencies
+        // Check all local meshes for newly-satisfied dependencies
         for (int destNM = lower_; destNM <= upper_; ++destNM) {
             size_t localIdx = static_cast<size_t>(destNM - lower_);
             if (emitted_[localIdx]) continue;
-
-            // destNM must have arrived (and pushed) itself
             if (!pendingMeshes_[static_cast<size_t>(destNM)]) continue;
 
             if (noDeps_[localIdx] ||
@@ -90,10 +68,9 @@ public:
         }
 
         auto t1 = std::chrono::steady_clock::now();
-        orchTime_ += std::chrono::duration<double>(t1 - t0).count();
+        gateTime_ += std::chrono::duration<double>(t1 - t0).count();
         ++invocations_;
 
-        // Reset state when all local meshes have been emitted
         if (allEmitted()) {
             resetRound();
         }
@@ -101,14 +78,13 @@ public:
 
     [[nodiscard]] std::string info() const {
         std::ostringstream oss;
-        oss << "EXCHANGE_ORCHESTRATOR\\n"
+        oss << "EXCHANGE_GATE\\n"
             << std::fixed << std::setprecision(3)
-            << "total " << orchTime_ << "s"
-            << " / " << invocations_ << " arrivals"
-            << " / " << copyCount_ << " copies";
+            << "gate " << gateTime_ << "s"
+            << " / " << invocations_ << " arrivals";
         if (invocations_ > 0) {
             oss << "\\navg " << std::setprecision(1)
-                << (orchTime_ * 1e6 / invocations_) << "us/arrival";
+                << (gateTime_ * 1e6 / invocations_) << "us";
         }
         return oss.str();
     }
@@ -134,24 +110,23 @@ private:
     std::vector<std::shared_ptr<MeshData>> pendingMeshes_;
     std::vector<bool> emitted_;
     std::vector<bool> noDeps_;
-    double orchTime_ = 0.0;
+    double gateTime_ = 0.0;
     int invocations_ = 0;
-    int copyCount_ = 0;
 };
 
-/// StateManager for ExchangeOrchestratorState, with dot-file diagnostics.
-class ExchangeOrchestratorManager
+/// StateManager for ExchangeGateState, with dot-file diagnostics.
+class ExchangeGateManager
     : public hh::StateManager<1, MeshData, MeshData> {
 public:
-    ExchangeOrchestratorManager(
-        std::shared_ptr<ExchangeOrchestratorState> const &state,
+    ExchangeGateManager(
+        std::shared_ptr<ExchangeGateState> const &state,
         std::string const &name)
         : hh::StateManager<1, MeshData, MeshData>(
               state, name) {}
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<ExchangeOrchestratorState>(
+        auto ret = std::dynamic_pointer_cast<ExchangeGateState>(
             this->state())->info();
         this->state()->unlock();
         return ret;

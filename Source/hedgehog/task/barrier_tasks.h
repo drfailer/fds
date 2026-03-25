@@ -82,8 +82,9 @@ private:
 /// non-CC_IBM corrector path.
 class CorrMeshExch2DivExchangeTask : public hh::AbstractTask<1, BarrierData, MeshData> {
 public:
-    CorrMeshExch2DivExchangeTask()
-        : hh::AbstractTask<1, BarrierData, MeshData>("MeshExch2+DivExch", 1) {}
+    explicit CorrMeshExch2DivExchangeTask(bool pressureInit = false)
+        : hh::AbstractTask<1, BarrierData, MeshData>("MeshExch2+DivExch", 1),
+          pressureInit_(pressureInit) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
         auto t0 = std::chrono::steady_clock::now();
@@ -94,6 +95,10 @@ public:
         fds_exchange_divergence_info();
         fds_rte_source_correction();
         fds_global_matrix_reassign(0);
+        if (pressureInit_) {
+            fds_pressure_iteration_init();
+            fds_pressure_iteration_increment();
+        }
         auto t1 = std::chrono::steady_clock::now();
         totalTime_ += std::chrono::duration<double>(t1 - t0).count();
         ++invocations_;
@@ -116,6 +121,7 @@ public:
     }
 
 private:
+    bool pressureInit_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
 };

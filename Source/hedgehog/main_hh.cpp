@@ -119,6 +119,14 @@ int main(int argc, char *argv[]) {
     // Step 5: Signal that no more data will be pushed from outside.
     graph->finishPushingData();
 
+    // Step 5b: Terminate the comm service so CommunicatorTask daemon threads
+    // can exit cleanly. This calls MPI_Barrier (syncs all processes) then
+    // unblocks waitForTermination() inside each CommunicatorTask's fini().
+    // Safe to call before waitForTermination: the graph continues processing
+    // in its own threads; when CommunicatorTask's core task eventually calls
+    // fini(), it returns immediately because terminated_ is already true.
+    commService.terminate();
+
     // Step 6: Wait for the graph to complete.
     // TimestepLoopStateManager::canTerminate() breaks the main cycle when done.
     std::cout << "[FDS-HH] Waiting for graph termination..." << std::endl;
