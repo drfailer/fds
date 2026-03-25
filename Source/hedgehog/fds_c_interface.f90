@@ -1476,14 +1476,16 @@ FUNCTION C_FDS_FLUX_HAS_SEND_CELLS(NM, NOM) RESULT(HAS) BIND(C, NAME="fds_flux_h
 END FUNCTION C_FDS_FLUX_HAS_SEND_CELLS
 
 FUNCTION C_FDS_FLUX_RECV_COUNT(NM) RESULT(COUNT) BIND(C, NAME="fds_flux_recv_count")
+    ! Count how many neighbors send flux data TO mesh NM.
+    ! Uses local perspective (NM's NIC_R) which is safe for multi-process.
     INTEGER(C_INT), VALUE :: NM
     INTEGER(C_INT) :: COUNT
     INTEGER :: NNN, NOM
     COUNT = 0
     DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
         NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
-        IF (NOM == NM .AND. MESHES(NOM)%OMESH(NM)%NIC_S == 0) CYCLE
-        IF (MESHES(NOM)%OMESH(NM)%NIC_S > 0) COUNT = COUNT + 1
+        IF (NOM == NM .AND. MESHES(NM)%OMESH(NOM)%NIC_R == 0) CYCLE
+        IF (MESHES(NM)%OMESH(NOM)%NIC_R > 0) COUNT = COUNT + 1
     ENDDO
 END FUNCTION C_FDS_FLUX_RECV_COUNT
 
@@ -1491,5 +1493,137 @@ SUBROUTINE C_FDS_FLUX_COPY_NEIGHBOR(NM, NOM) BIND(C, NAME="fds_flux_copy_neighbo
     INTEGER(C_INT), VALUE :: NM, NOM
     CALL MESH_EXCHANGE_FLUX_NEIGHBOR(NM, NOM)
 END SUBROUTINE C_FDS_FLUX_COPY_NEIGHBOR
+
+SUBROUTINE C_FDS_FLUX_COPY_NEIGHBOR_TS(NM, NOM) BIND(C, NAME="fds_flux_copy_neighbor_ts")
+    INTEGER(C_INT), VALUE :: NM, NOM
+    CALL MESH_EXCHANGE_FLUX_NEIGHBOR_TS(NM, NOM)
+END SUBROUTINE C_FDS_FLUX_COPY_NEIGHBOR_TS
+
+SUBROUTINE C_FDS_FLUX_PACK(NM, NOM, BUF, BUFSIZE) BIND(C, NAME="fds_flux_pack")
+    INTEGER(C_INT), VALUE :: NM, NOM, BUFSIZE
+    REAL(C_DOUBLE), INTENT(OUT) :: BUF(BUFSIZE)
+    CALL MESH_EXCHANGE_FLUX_PACK(NM, NOM, BUF, BUFSIZE)
+END SUBROUTINE C_FDS_FLUX_PACK
+
+SUBROUTINE C_FDS_FLUX_UNPACK(NM, NOM, BUF, BUFSIZE) BIND(C, NAME="fds_flux_unpack")
+    INTEGER(C_INT), VALUE :: NM, NOM, BUFSIZE
+    REAL(C_DOUBLE), INTENT(IN) :: BUF(BUFSIZE)
+    CALL MESH_EXCHANGE_FLUX_UNPACK(NM, NOM, BUF, BUFSIZE)
+END SUBROUTINE C_FDS_FLUX_UNPACK
+
+FUNCTION C_FDS_FLUX_PACK_SIZE(NM, NOM) RESULT(NSIZE) BIND(C, NAME="fds_flux_pack_size")
+    INTEGER(C_INT), VALUE :: NM, NOM
+    INTEGER(C_INT) :: NSIZE
+    NSIZE = MESH_EXCHANGE_FLUX_PACK_SIZE(NM, NOM)
+END FUNCTION C_FDS_FLUX_PACK_SIZE
+
+FUNCTION C_FDS_FLUX_GET_PROCESS(NM) RESULT(P) BIND(C, NAME="fds_flux_get_process")
+    INTEGER(C_INT), VALUE :: NM
+    INTEGER(C_INT) :: P
+    P = MESH_EXCHANGE_FLUX_GET_PROCESS(NM)
+END FUNCTION C_FDS_FLUX_GET_PROCESS
+
+FUNCTION C_FDS_FLUX_MAX_BUFFER_SIZE() RESULT(MAX_SIZE) BIND(C, NAME="fds_flux_max_buffer_size")
+    INTEGER(C_INT) :: MAX_SIZE
+    MAX_SIZE = MESH_EXCHANGE_FLUX_MAX_BUFFER_SIZE()
+END FUNCTION C_FDS_FLUX_MAX_BUFFER_SIZE
+
+!==============================================================================
+! Generic mesh exchange dependency queries
+!==============================================================================
+
+!> Number of meshes that SEND data TO mesh NM (NOM%OMESH(NM)%NIC_S > 0).
+!> These are NM's receive-dependencies: NM cannot proceed until all senders
+!> have completed their sends.
+FUNCTION C_FDS_EXCHANGE_RECV_DEP_COUNT(NM) RESULT(COUNT) BIND(C, NAME="fds_exchange_recv_dep_count")
+    INTEGER(C_INT), VALUE :: NM
+    INTEGER(C_INT) :: COUNT
+    INTEGER :: NNN, NOM
+    COUNT = 0
+    DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+        NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+        IF (NOM == NM) CYCLE
+        ! NOM sends to NM when MESHES(NOM)%OMESH(NM)%NIC_S > 0.
+        ! But from NM's local view: MESHES(NM)%OMESH(NOM)%NIC_R > 0 means
+        ! NM expects to receive NIC_R cells from NOM.
+        IF (MESHES(NM)%OMESH(NOM)%NIC_R > 0) COUNT = COUNT + 1
+    ENDDO
+END FUNCTION C_FDS_EXCHANGE_RECV_DEP_COUNT
+
+!> Get the NOM mesh index of the I-th receive-dependency of NM (1-based).
+FUNCTION C_FDS_EXCHANGE_RECV_DEP_MESH(NM, IDX) RESULT(NOM) BIND(C, NAME="fds_exchange_recv_dep_mesh")
+    INTEGER(C_INT), VALUE :: NM, IDX
+    INTEGER(C_INT) :: NOM
+    INTEGER :: NNN, K
+    K = 0
+    NOM = 0
+    DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+        NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+        IF (NOM == NM) CYCLE
+        IF (MESHES(NM)%OMESH(NOM)%NIC_R > 0) THEN
+            K = K + 1
+            IF (K == IDX) RETURN
+        ENDIF
+    ENDDO
+    NOM = 0  ! invalid
+END FUNCTION C_FDS_EXCHANGE_RECV_DEP_MESH
+
+!> Number of meshes that mesh NM SENDS data TO (MESHES(NM)%OMESH(NOM)%NIC_S > 0).
+FUNCTION C_FDS_EXCHANGE_SEND_DEP_COUNT(NM) RESULT(COUNT) BIND(C, NAME="fds_exchange_send_dep_count")
+    INTEGER(C_INT), VALUE :: NM
+    INTEGER(C_INT) :: COUNT
+    INTEGER :: NNN, NOM
+    COUNT = 0
+    DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+        NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+        IF (NOM == NM) CYCLE
+        IF (MESHES(NM)%OMESH(NOM)%NIC_S > 0) COUNT = COUNT + 1
+    ENDDO
+END FUNCTION C_FDS_EXCHANGE_SEND_DEP_COUNT
+
+!> Get the NOM mesh index of the I-th send-target of NM (1-based).
+FUNCTION C_FDS_EXCHANGE_SEND_DEP_MESH(NM, IDX) RESULT(NOM) BIND(C, NAME="fds_exchange_send_dep_mesh")
+    INTEGER(C_INT), VALUE :: NM, IDX
+    INTEGER(C_INT) :: NOM
+    INTEGER :: NNN, K
+    K = 0
+    NOM = 0
+    DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+        NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+        IF (NOM == NM) CYCLE
+        IF (MESHES(NM)%OMESH(NOM)%NIC_S > 0) THEN
+            K = K + 1
+            IF (K == IDX) RETURN
+        ENDIF
+    ENDDO
+    NOM = 0  ! invalid
+END FUNCTION C_FDS_EXCHANGE_SEND_DEP_MESH
+
+!> Get the MPI process rank that owns mesh NM (0-based).
+FUNCTION C_FDS_MESH_PROCESS(NM) RESULT(P) BIND(C, NAME="fds_mesh_process")
+    INTEGER(C_INT), VALUE :: NM
+    INTEGER(C_INT) :: P
+    P = PROCESS(NM)
+END FUNCTION C_FDS_MESH_PROCESS
+
+!> Get the total number of meshes (global, not just local).
+FUNCTION C_FDS_GET_TOTAL_MESHES() RESULT(N) BIND(C, NAME="fds_get_total_meshes")
+    INTEGER(C_INT) :: N
+    N = NMESHES
+END FUNCTION C_FDS_GET_TOTAL_MESHES
+
+!> Debug: dump NIC_R, NIC_S, N_NEIGHBORING_MESHES for all mesh pairs.
+SUBROUTINE C_FDS_DUMP_MESH_EXCHANGE_TOPOLOGY() BIND(C, NAME="fds_dump_mesh_exchange_topology")
+    INTEGER :: NM, NOM, NNN
+    DO NM = 1, NMESHES
+        WRITE(0,'(A,I3,A,I3)') 'M', NM, ' N_NEIGHBORING_MESHES=', MESHES(NM)%N_NEIGHBORING_MESHES
+        DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+            NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+            WRITE(0,'(A,I3,A,I3,A,I6,A,I6)') '  neighbor M', NOM, &
+                ': NIC_R=', MESHES(NM)%OMESH(NOM)%NIC_R, &
+                ' NIC_S=', MESHES(NM)%OMESH(NOM)%NIC_S
+        ENDDO
+    ENDDO
+END SUBROUTINE C_FDS_DUMP_MESH_EXCHANGE_TOPOLOGY
 
 END MODULE FDS_C_INTERFACE

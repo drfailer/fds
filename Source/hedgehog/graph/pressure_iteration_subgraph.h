@@ -3,117 +3,89 @@
 
 #include <hedgehog/hedgehog.h>
 #include <memory>
-#include <communicator_task.hpp>
-#include <tool/memory_pool.hpp>
 #include "../data/pressure_iteration_data.h"
 #include "../data/mesh_data.h"
-#include "../data/flux_exchange_data.h"
 #include "../data/termination_signal.h"
+#include "../task/baroclinic_kernel_task.h"
 #include "../task/pressure_iteration_tasks.h"
-#include "../state/pressure_iteration_state.h"
-#include "../state/flux_exchange_state.h"
+#include "../state/pressure_convergence_state.h"
+#include "../state/barrier_state.h"
+#include "../state/exchange_orchestrator_state.h"
+#include "../tool/mesh_dependency_graph.h"
 
 /// Build the pressure iteration sub-graph.
 ///
-/// Architecture with per-neighbor flux exchange:
+/// Architecture (dependency-aware exchange + 2 parallel kernel tasks):
 ///
-///   PreCollector(state) -> FluxPack(state) -> FluxCollector(state)
-///                                               -> SolveKernel(task)
-///                                                    -> PostLoop(state)
-///                ^                                          | (cycle)
-///                +------------------------------------------+
+///   BaroclinicKernel(task, parallel)
+///     → ExchangeOrchestrator(state: push copies + dependency gate)
+///     → PressureSolveKernel(task, parallel)
+///     → PressureConvergence(barrier: exchange(5) + vel_error + check)
+///       → PressureIterMeshData → BaroclinicKernel (cycle)
+///       → MeshData → subgraph output (converged)
 ///
-/// Single-process: FluxPack emits FluxExchangeData and MeshData directly to
-/// FluxCollector (no CommunicatorTask needed — all data is same-rank).
+/// The ExchangeOrchestrator replaces the global fds_mesh_exchange(5) barrier
+/// with per-mesh dependency tracking.  When a mesh arrives, its data is
+/// immediately pushed (copied) to all same-rank targets' OMESHes.  A mesh
+/// can proceed to the pressure solve once all its receive-dependencies
+/// have also pushed.
 ///
-/// Multi-process (future): a CommunicatorTask is inserted between FluxPack
-/// and FluxCollector to route FluxExchangeData across MPI ranks.
-///
-/// FluxCollectorState emits MeshData when a mesh has received flux data
-/// from all its neighbors (per-neighbor barrier, not global barrier).
+/// IMPORTANT: fds_pressure_iteration_init() and the first
+/// fds_pressure_iteration_increment() must be called in the upstream
+/// barrier BEFORE entering this subgraph.
 ///
 /// @param tEnd Simulation end time
 /// @param nmeshes Number of local meshes
 /// @param kernelThreads Number of threads for parallel kernel tasks
 /// @param predictor True for predictor phase
 /// @param termSignal Shared termination signal
-/// @param commService Pointer to the MPI comm service for the communicator task
+/// @param depGraph Pre-built mesh dependency graph
+/// @param commService Pointer to the MPI comm service (unused, kept for API compat)
 /// @param presFlag Pressure solver flag (FFT_FLAG=0, ULMAT_FLAG=3)
 inline auto buildPressureIterationSubgraph(double tEnd, int nmeshes,
                                             size_t kernelThreads,
                                             bool predictor,
                                             std::shared_ptr<TerminationSignal> termSignal,
-                                            hh::comm::CommService *commService,
+                                            std::shared_ptr<MeshDependencyGraph> depGraph,
+                                            [[maybe_unused]] void *commService,
                                             int presFlag = 0) {
     using SubGraphType = hh::Graph<1, MeshData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PressureIteration");
 
-    int nmOffset = fds_get_lower_mesh_index();
-
-    // --- Phase 1: PreCollector (init + baroclinic, no exchange) ---
-    auto preCollSM = std::make_shared<PressurePreCollectorManager>(
-        std::make_shared<PressurePreCollector>(nmeshes),
-        "PressurePreCollector");
-
-    // --- Flux exchange: Pack -> Collect ---
-    auto fluxPackSM = std::make_shared<FluxPackStateManager>(
-        std::make_shared<FluxPackState>(nmeshes, nmOffset),
-        "FluxPack");
-
-    auto fluxCollectSM = std::make_shared<FluxCollectorStateManager>(
-        std::make_shared<FluxCollectorState>(nmeshes, nmOffset),
-        "FluxCollect");
-
-    // --- Phase 2: Parallel pressure solve kernel ---
+    // --- Parallel kernel tasks ---
+    auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(kernelThreads);
     auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
 
-    // --- Phase 3: PostLoop (exchange(5) + velocity error + convergence) ---
-    auto postLoopSM = std::make_shared<PressurePostLoopManager>(
-        std::make_shared<PressurePostLoop>(nmeshes, tEnd, predictor, termSignal),
-        "PressurePostLoop");
+    // --- Dependency-aware exchange ---
+    auto exchangeOrchestratorSM = std::make_shared<ExchangeOrchestratorManager>(
+        std::make_shared<ExchangeOrchestratorState>(depGraph),
+        "ExchangeOrchestrator");
+
+    // --- Convergence barrier (exchange2 + vel_error + convergence check) ---
+    auto convergenceSM = std::make_shared<PressureConvergenceManager>(
+        std::make_shared<PressureConvergenceState>(
+            nmeshes, tEnd, predictor, termSignal),
+        "PressureConvergence");
 
     // --- Wire the sub-graph ---
 
-    // Entry: MeshData -> PreCollector
-    subgraph->inputs(preCollSM);
+    // Entry: MeshData -> baroclinicKernel
+    subgraph->inputs(baroclinicKernel);
 
-    // PreCollector -> FluxPack (MeshData)
-    subgraph->edges(preCollSM, fluxPackSM);
+    // baroclinicKernel -> ExchangeOrchestrator (push copies + dependency gate)
+    subgraph->edges(baroclinicKernel, exchangeOrchestratorSM);
 
-    bool multiProcess = commService && commService->nbProcesses() > 1;
+    // ExchangeOrchestrator -> PressureSolveKernel (emits when deps satisfied)
+    subgraph->edges(exchangeOrchestratorSM, solveKernel);
 
-    if (multiProcess) {
-        // Multi-process: route FluxExchangeData through CommunicatorTask
-        auto commTask = std::make_shared<hh::CommunicatorTask<FluxExchangeData>>(
-            commService, "FluxExchange");
-        // Send strategy: compute destination rank from destNM
-        // For now: same rank (TODO: compute PROCESS(destNM) for cross-rank)
-        commTask->strategy<FluxExchangeData>([commService](auto data) {
-            return std::vector<hh::comm::rank_t>{commService->rank()};
-        });
-        auto mm = std::make_shared<hh::comm::tool::MemoryPool<FluxExchangeData>>();
-        mm->fill<FluxExchangeData>(2);
-        commTask->setMemoryManager(mm);
+    // PressureSolveKernel -> PressureConvergence (barrier)
+    subgraph->edges(solveKernel, convergenceSM);
 
-        subgraph->edge<FluxExchangeData>(fluxPackSM, commTask);
-        subgraph->edge<MeshData>(fluxPackSM, fluxCollectSM);
-        subgraph->edge<FluxExchangeData>(commTask, fluxCollectSM);
-    } else {
-        // Single-process: FluxPack -> FluxCollect directly (no MPI needed)
-        subgraph->edges(fluxPackSM, fluxCollectSM);
-    }
-
-    // FluxCollector -> SolveKernel (MeshData)
-    subgraph->edges(fluxCollectSM, solveKernel);
-
-    // SolveKernel -> PostLoop (MeshData)
-    subgraph->edges(solveKernel, postLoopSM);
-
-    // Cycle: PressureIterData -> back to PreCollector
-    subgraph->edge<PressureIterData>(postLoopSM, preCollSM);
+    // Cycle: PressureIterMeshData -> back to baroclinicKernel
+    subgraph->edge<PressureIterMeshData>(convergenceSM, baroclinicKernel);
 
     // Exit: MeshData -> subgraph output
-    subgraph->outputs(postLoopSM);
+    subgraph->outputs(convergenceSM);
 
     return subgraph;
 }

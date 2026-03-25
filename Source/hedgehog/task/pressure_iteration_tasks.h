@@ -23,9 +23,12 @@ public:
           presFlag_(presFlag) {}
 
     void execute(std::shared_ptr<MeshData> md) override {
-        // match_velocity_flux_kernel: moved from PreKernel for parallelization.
-        // Safe to call per-mesh after mesh_exchange(5) completed in PreCollector.
-        if (fds_pressure_iteration_needs_baroclinic()) {
+        // match_velocity_flux_kernel: only called when baroclinic term is active
+        // (or first iteration). Guards must match the original Fortran conditional:
+        // IF (ITERATE_BAROCLINIC_TERM .OR. PRESSURE_ITERATIONS==1).
+        // The flag is stable during parallel execution (set/cleared in barriers).
+        if (fds_pressure_iteration_needs_baroclinic() ||
+            fds_get_pressure_iterations() == 1) {
             fds_match_velocity_flux_kernel(md->nm);
         }
         fds_no_flux_kernel(md->nm, md->dt);

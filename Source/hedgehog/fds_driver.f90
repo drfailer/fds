@@ -1852,6 +1852,163 @@ HP2(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)    = HP(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)
 
 END SUBROUTINE MESH_EXCHANGE_FLUX_NEIGHBOR
 
+!> \brief Thread-safe version of MESH_EXCHANGE_FLUX_NEIGHBOR.
+!>
+!> Uses local pointer aliases instead of module-level M/M2/M3.
+!> Safe to call from multiple threads with different (NM,NOM) pairs,
+!> provided no two calls write to the same OMESH destination arrays.
+RECURSIVE SUBROUTINE MESH_EXCHANGE_FLUX_NEIGHBOR_TS(NM, NOM)
+INTEGER, INTENT(IN) :: NM, NOM
+TYPE(MESH_TYPE), POINTER :: ML
+TYPE(OMESH_TYPE), POINTER :: OM_SEND, OM_RECV
+INTEGER :: IMIN, IMAX, JMIN, JMAX, KMIN, KMAX
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP, HP2
+
+ML => MESHES(NM)
+OM_SEND => ML%OMESH(NOM)
+
+IF (OM_SEND%NIC_S == 0) RETURN
+
+IMIN = OM_SEND%I_MIN_S ; IMAX = OM_SEND%I_MAX_S
+JMIN = OM_SEND%J_MIN_S ; JMAX = OM_SEND%J_MAX_S
+KMIN = OM_SEND%K_MIN_S ; KMAX = OM_SEND%K_MAX_S
+
+OM_RECV => MESHES(NOM)%OMESH(NM)
+
+IF (PREDICTOR) THEN
+   HP  => ML%H
+   HP2 => OM_RECV%H
+ELSE
+   HP  => ML%HS
+   HP2 => OM_RECV%HS
+ENDIF
+
+OM_RECV%FVX(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = ML%FVX(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)
+OM_RECV%FVY(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = ML%FVY(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)
+OM_RECV%FVZ(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = ML%FVZ(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)
+HP2(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)          = HP(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX)
+
+END SUBROUTINE MESH_EXCHANGE_FLUX_NEIGHBOR_TS
+
+
+!> \brief Pack flux data from MESHES(NM) for sending to NOM into a buffer.
+!>
+!> This is the cross-process pack path extracted from MESH_EXCHANGE_FLUX_DRIVER.
+!> Packs 3 doubles per interpolated cell: velocity + 2 pressure head values.
+SUBROUTINE MESH_EXCHANGE_FLUX_PACK(NM, NOM, BUF, BUFSIZE)
+INTEGER, INTENT(IN) :: NM, NOM, BUFSIZE
+REAL(EB), INTENT(OUT) :: BUF(BUFSIZE)
+INTEGER :: LL
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP
+
+M  => MESHES(NM)
+M3 => M%OMESH(NOM)
+
+IF (PREDICTOR) THEN
+   HP => M%H
+ELSE
+   HP => M%HS
+ENDIF
+
+DO LL=1,M3%NIC_S
+   SELECT CASE(M3%IOR_S(LL))
+      CASE(-1) ; BUF(3*LL-2) = M%FVX(M3%IIO_S(LL)-1,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)-1,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+      CASE( 1) ; BUF(3*LL-2) = M%FVX(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)+1,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+      CASE(-2) ; BUF(3*LL-2) = M%FVY(M3%IIO_S(LL)  ,M3%JJO_S(LL)-1,M3%KKO_S(LL)  )
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)-1,M3%KKO_S(LL)  )
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+      CASE( 2) ; BUF(3*LL-2) = M%FVY(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)+1,M3%KKO_S(LL)  )
+      CASE(-3) ; BUF(3*LL-2) = M%FVZ(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)-1)
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)-1)
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+      CASE( 3) ; BUF(3*LL-2) = M%FVZ(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL-1) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)  )
+                 BUF(3*LL  ) =    HP(M3%IIO_S(LL)  ,M3%JJO_S(LL)  ,M3%KKO_S(LL)+1)
+   END SELECT
+ENDDO
+END SUBROUTINE MESH_EXCHANGE_FLUX_PACK
+
+
+!> \brief Unpack flux data received from remote mesh NOM into local mesh NM.
+!>
+!> This is the cross-process unpack path extracted from MESH_EXCHANGE_FLUX_DRIVER.
+!> NM is the local receiving mesh, NOM is the remote sending mesh.
+SUBROUTINE MESH_EXCHANGE_FLUX_UNPACK(NM, NOM, BUF, BUFSIZE)
+INTEGER, INTENT(IN) :: NM, NOM, BUFSIZE
+REAL(EB), INTENT(IN) :: BUF(BUFSIZE)
+INTEGER :: LL
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP
+
+M  => MESHES(NM)
+M2 => M%OMESH(NOM)
+
+IF (PREDICTOR) THEN
+   HP => M2%H
+ELSE
+   HP => M2%HS
+ENDIF
+
+DO LL=1,M2%NIC_R
+   SELECT CASE(M2%IOR_R(LL))
+      CASE(-1) ; M2%FVX(M2%IIO_R(LL)-1,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)-1,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL  )
+      CASE( 1) ; M2%FVX(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)+1,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL  )
+      CASE(-2) ; M2%FVY(M2%IIO_R(LL)  ,M2%JJO_R(LL)-1,M2%KKO_R(LL)  ) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)-1,M2%KKO_R(LL)  ) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL  )
+      CASE( 2) ; M2%FVY(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)+1,M2%KKO_R(LL)  ) = BUF(3*LL  )
+      CASE(-3) ; M2%FVZ(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)-1) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)-1) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL  )
+      CASE( 3) ; M2%FVZ(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-2)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)  ) = BUF(3*LL-1)
+                     HP(M2%IIO_R(LL)  ,M2%JJO_R(LL)  ,M2%KKO_R(LL)+1) = BUF(3*LL  )
+   END SELECT
+ENDDO
+END SUBROUTINE MESH_EXCHANGE_FLUX_UNPACK
+
+
+!> \brief Return the pack buffer size (number of doubles) for NM→NOM flux exchange.
+FUNCTION MESH_EXCHANGE_FLUX_PACK_SIZE(NM, NOM) RESULT(NSIZE)
+INTEGER, INTENT(IN) :: NM, NOM
+INTEGER :: NSIZE
+NSIZE = 3 * MESHES(NM)%OMESH(NOM)%NIC_S
+END FUNCTION MESH_EXCHANGE_FLUX_PACK_SIZE
+
+
+!> \brief Return the MPI rank (PROCESS index) that owns mesh NM.
+FUNCTION MESH_EXCHANGE_FLUX_GET_PROCESS(NM) RESULT(P)
+INTEGER, INTENT(IN) :: NM
+INTEGER :: P
+P = PROCESS(NM)
+END FUNCTION MESH_EXCHANGE_FLUX_GET_PROCESS
+
+
+!> \brief Return the max buffer size (number of doubles) across all local mesh-neighbor pairs.
+!> Used for pre-allocating memory pool buffers.
+FUNCTION MESH_EXCHANGE_FLUX_MAX_BUFFER_SIZE() RESULT(MAX_SIZE)
+INTEGER :: MAX_SIZE, NM, NNN, NOM
+MAX_SIZE = 0
+DO NM = LOWER_MESH_INDEX, UPPER_MESH_INDEX
+    DO NNN = 1, MESHES(NM)%N_NEIGHBORING_MESHES
+        NOM = MESHES(NM)%NEIGHBORING_MESH(NNN)
+        MAX_SIZE = MAX(MAX_SIZE, 3 * MESHES(NM)%OMESH(NOM)%NIC_S)
+        MAX_SIZE = MAX(MAX_SIZE, 3 * MESHES(NM)%OMESH(NOM)%NIC_R)
+    ENDDO
+ENDDO
+END FUNCTION MESH_EXCHANGE_FLUX_MAX_BUFFER_SIZE
+
 
 !> \brief CODE 7: Exchange particle buffer sizes
 SUBROUTINE MESH_EXCHANGE_PARTICLE_SIZES_DRIVER()

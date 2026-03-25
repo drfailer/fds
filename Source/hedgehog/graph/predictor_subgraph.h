@@ -32,6 +32,7 @@
 ///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
 inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
                                     std::shared_ptr<TerminationSignal> termSignal,
+                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
 
@@ -46,6 +47,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(meshThreads);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
+    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, meshThreads);
     auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(tEnd, nmeshes, meshThreads);
@@ -99,15 +101,23 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         subgraph->edges(meshExch1DivPreforkSM, predForkVFluxSG);
         subgraph->edges(meshExch1DivPreforkSM, predForkDivSG);
 
-        // Merged barrier: PredJoin + DivP1Late + PredDivExchange
+        // Merged barrier: PredJoin + DivP1Late + PredDivExchange + PressureInit
         auto predJoinDivExchangeSM = makeBarrierSM(nmeshes, "PredJoin+DivLate+DivExch",
-            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN",
-            [](auto& meshes) {
+            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            [useParallelPressure](auto& meshes) {
                 for (auto &md : meshes) {
                     fds_divergence_part_1_late_b(md->nm, md->t, md->dt);
                 }
                 fds_exchange_divergence_info();
                 fds_global_matrix_reassign(0);
+                // Pressure iteration init + first increment (moved from
+                // PressurePreCollector so the subgraph has no entry barrier).
+                // Only needed for the parallel pressure subgraph; the monolithic
+                // fds_pressure_iteration() does its own init internally.
+                if (useParallelPressure) {
+                    fds_pressure_iteration_init();
+                    fds_pressure_iteration_increment();
+                }
             },
             2 * nmeshes);  // Expects 2*N tokens from 2 fork branches
 
@@ -146,16 +156,20 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, meshThreads);
         subgraph->edges(hvacInitDivSM, predWallBCSubgraph);
 
-        // Merged barrier: PredWallDivKernel + PredDivExchange
+        // Merged barrier: PredWallDivKernel + PredDivExchange + PressureInit
         auto predDivExchangeSM = makeBarrierSM(nmeshes, "PredWallDiv+DivExch",
-            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN",
-            [](auto& meshes) {
+            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            [useParallelPressure](auto& meshes) {
                 for (auto &md : meshes) {
                     fds_particle_momentum_kernel(md->nm, md->dt);
                     fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
                 }
                 fds_exchange_divergence_info();
                 fds_global_matrix_reassign(0);
+                if (useParallelPressure) {
+                    fds_pressure_iteration_init();
+                    fds_pressure_iteration_increment();
+                }
             });
 
         subgraph->edges(predWallBCSubgraph, predDivExchangeSM);
@@ -166,12 +180,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Common downstream: DivP2 -> Pressure -> VelPred -> ... ---
 
-    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
-
     if (useParallelPressure) {
         auto predPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, true, termSignal,
-            commService, fds_get_pres_flag());
+            depGraph, commService, fds_get_pres_flag());
         subgraph->edges(predDivP2KernelTask, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
     } else {

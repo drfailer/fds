@@ -8,6 +8,7 @@
 #include "../data/barrier_data.h"
 #include "../data/termination_signal.h"
 #include "../state/timestep_state.h"
+#include "../tool/mesh_dependency_graph.h"
 #include "predictor_subgraph.h"
 #include "corrector_subgraph.h"
 
@@ -34,9 +35,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     // --- Shared termination signal for sub-graph cycle termination ---
     auto termSignal = std::make_shared<TerminationSignal>();
 
+    // --- Build mesh dependency graph (once, shared by predictor & corrector) ---
+    auto depGraph = std::make_shared<MeshDependencyGraph>(
+        fds_get_lower_mesh_index(), fds_get_lower_mesh_index() + nmeshes - 1);
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, termSignal, commService);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, tEnd, kernelThreads, termSignal, commService);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, termSignal, depGraph, commService);
+    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, tEnd, kernelThreads, termSignal, depGraph, commService);
 
     // --- Create timestep pipeline components ---
 

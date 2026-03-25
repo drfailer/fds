@@ -34,6 +34,7 @@
 ///   - Opt 4: MeshExchange(6b) removed — absorbed into CorrFinalOrchestrator
 inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
                                     std::shared_ptr<TerminationSignal> termSignal,
+                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("Corrector");
 
@@ -91,6 +92,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Wire the sub-graph ---
 
+
     // CorrStep1 -> MeshExchange(4)
     subgraph->inputs(corrStep1KernelTask);
     subgraph->edges(corrStep1KernelTask, meshExchange4SM);
@@ -121,11 +123,15 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(meshThreads);
 
         auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
-            "EXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN",
-            [](auto& meshes) {
+            "EXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
                 fds_rte_source_correction();
                 fds_global_matrix_reassign(0);
+                if (useParallelPressure) {
+                    fds_pressure_iteration_init();
+                    fds_pressure_iteration_increment();
+                }
             });
 
         subgraph->edges(wallBCSubgraph, meshExchange6aSM);
@@ -154,7 +160,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             std::make_shared<BarrierJoinState>(2), "Join2");
 
         // Merged: MeshExch(2) + QR_ADD + DivExchange (Opt 3)
-        auto corrMeshExch2DivExchTask = std::make_shared<CorrMeshExch2DivExchangeTask>();
+        auto corrMeshExch2DivExchTask = std::make_shared<CorrMeshExch2DivExchangeTask>(
+            useParallelPressure);
 
         // Multicast to both branches (Hedgehog routes by type)
         subgraph->edges(meshExch6aInitDivSM, corrRadiationSubgraph);
@@ -172,7 +179,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
             tEnd, nmeshes, meshThreads, false, termSignal,
-            commService, fds_get_pres_flag());
+            depGraph, commService, fds_get_pres_flag());
         subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);
         subgraph->edges(corrPressureSubgraph, velCorrKernelTask);
     } else {
