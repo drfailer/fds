@@ -42,6 +42,13 @@ public:
         return true;
     }
 
+    /// Set all bits that are set in `other` (this |= other).
+    void orWith(const DynBitset &other) {
+        for (size_t i = 0; i < other.words_.size() && i < words_.size(); ++i) {
+            words_[i] |= other.words_[i];
+        }
+    }
+
     /// Number of set bits.
     [[nodiscard]] size_t count() const {
         size_t n = 0;

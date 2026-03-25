@@ -152,6 +152,15 @@ TEST_CASES = {
         'compare_files': [],
         'timeout': 120,
     },
+    'eddies_4mesh_2mpi': {
+        'input': 'dancing_eddies_4mesh_2mpi.fds',
+        'chid': 'dancing_eddies_4mesh_2mpi',
+        'meshes': 4,
+        'mpi_processes': 2,
+        'description': '4-mesh eddies with 2 MPI processes (pressure subgraph + CommunicatorTask)',
+        'compare_files': [],
+        'timeout': 120,
+    },
     'split_eddies_1to3': {
         'input': 'dancing_eddies_1mesh_short.fds',
         'chid': 'dancing_eddies_1mesh_short',

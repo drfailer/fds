@@ -33,6 +33,13 @@ K-block decomposition for intra-mesh parallelism.
 - Orchestrator/block-kernel/collector pattern
 - K-safety analysis (ghost cells, face values, wall loops)
 
+### [METHOD_DEPENDENCY_EXCHANGE.md](METHOD_DEPENDENCY_EXCHANGE.md)
+Replacing global exchange barriers with per-mesh dependency tracking.
+- Push-then-gate pattern (parallel push task + reusable gate state)
+- DynBitset and MeshDependencyGraph infrastructure
+- Thread safety analysis (push model avoids read-after-release races)
+- Extending to other exchange codes and MPI
+
 ## Progress Tracking
 
 ### [PARALLELIZATION_PROGRESS.md](PARALLELIZATION_PROGRESS.md)
@@ -52,7 +59,8 @@ docs/
 ├── METHOD_SUBGRAPH.md                  # Pattern A (pure kernel)
 ├── METHOD_PATTERN_B_COMPLEX.md         # Pattern B (complex routines)
 ├── METHOD_MODULE_SPLIT.md              # Module decomposition
-└── METHOD_MESH_BLOCK.md               # K-block decomposition
+├── METHOD_MESH_BLOCK.md               # K-block decomposition
+└── METHOD_DEPENDENCY_EXCHANGE.md      # Dependency-aware exchange
 ```
 
 ## Workflow for Parallelizing a New Routine
@@ -64,7 +72,8 @@ docs/
 2. Determine pattern
    ├─→ Pure kernel? → METHOD_SUBGRAPH.md (Pattern A)
    ├─→ Cross-mesh deps? → METHOD_PATTERN_B_COMPLEX.md (Pattern B)
-   └─→ K-block parallel? → METHOD_MESH_BLOCK.md
+   ├─→ K-block parallel? → METHOD_MESH_BLOCK.md
+   └─→ Exchange barrier? → METHOD_DEPENDENCY_EXCHANGE.md
 
 3. Extract/convert kernels
    └─→ METHOD_KERNEL_EXTRACTION.md

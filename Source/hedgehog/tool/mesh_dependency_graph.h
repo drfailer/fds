@@ -33,6 +33,9 @@ public:
         sameRankRecvDeps_.resize(totalMeshes + 1, DynBitset(static_cast<size_t>(totalMeshes)));
         sendTargets_.resize(totalMeshes + 1);
 
+        sameRankNeighbors_.resize(totalMeshes + 1, DynBitset(static_cast<size_t>(totalMeshes)));
+        sameRankNeighborsList_.resize(totalMeshes + 1);
+
         for (int nm = lowerMesh; nm <= upperMesh; ++nm) {
             // Who sends TO nm?
             int nRecv = fds_exchange_recv_dep_count(nm);
@@ -41,6 +44,7 @@ public:
                 recvDeps_[nm].set(static_cast<size_t>(nom - 1)); // 0-based bit index
                 if (fds_mesh_process(nom) == myRank) {
                     sameRankRecvDeps_[nm].set(static_cast<size_t>(nom - 1));
+                    sameRankNeighbors_[nm].set(static_cast<size_t>(nom - 1));
                 }
             }
 
@@ -50,6 +54,16 @@ public:
             for (int i = 1; i <= nSend; ++i) {
                 int nom = fds_exchange_send_dep_mesh(nm, i);
                 sendTargets_[nm].push_back(nom);
+                if (fds_mesh_process(nom) == myRank) {
+                    sameRankNeighbors_[nm].set(static_cast<size_t>(nom - 1));
+                }
+            }
+
+            // Build sorted neighbors list from the bitset
+            for (int i = 0; i < totalMeshes; ++i) {
+                if (sameRankNeighbors_[nm].contains(static_cast<size_t>(i))) {
+                    sameRankNeighborsList_[nm].push_back(i + 1); // 1-based
+                }
             }
         }
     }
@@ -62,6 +76,12 @@ public:
 
     /// List of meshes that nm sends data TO.
     [[nodiscard]] const std::vector<int> &sendTargets(int nm) const { return sendTargets_[nm]; }
+
+    /// Bitset of same-rank neighbors (union of recv deps + send targets).
+    [[nodiscard]] const DynBitset &sameRankNeighbors(int nm) const { return sameRankNeighbors_[nm]; }
+
+    /// Sorted list of same-rank neighbor mesh indices (1-based).
+    [[nodiscard]] const std::vector<int> &sameRankNeighborsList(int nm) const { return sameRankNeighborsList_[nm]; }
 
     /// Total number of meshes (global).
     [[nodiscard]] int totalMeshes() const { return totalMeshes_; }
@@ -102,6 +122,8 @@ private:
     std::vector<DynBitset> recvDeps_;
     std::vector<DynBitset> sameRankRecvDeps_;
     std::vector<std::vector<int>> sendTargets_;
+    std::vector<DynBitset> sameRankNeighbors_;
+    std::vector<std::vector<int>> sameRankNeighborsList_;
 };
 
 #endif // MESH_DEPENDENCY_GRAPH_H
