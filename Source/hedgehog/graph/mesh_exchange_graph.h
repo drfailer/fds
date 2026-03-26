@@ -27,8 +27,9 @@ public:
     /// @param exchangeTask Task performing the actual exchange copies
     MeshExchangeGraph(
         std::shared_ptr<MeshDependencyGraph> depGraph,
-        std::shared_ptr<hh::AbstractTask<1, MeshExchangeData, MeshExchangeData>> exchangeTask)
-        : hh::Graph<2, T, TerminationData, T>("MeshExchange") {
+        std::shared_ptr<hh::AbstractTask<1, MeshExchangeData, MeshExchangeData>> exchangeTask,
+        std::string const &name = "MeshExchange")
+        : hh::Graph<2, T, TerminationData, T>(name) {
 
         auto depManagerSM = std::make_shared<MeshDependenciesManager>(
             std::make_shared<MeshDependenciesManagerState>(std::move(depGraph)),

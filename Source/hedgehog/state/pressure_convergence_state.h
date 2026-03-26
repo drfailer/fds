@@ -10,12 +10,10 @@
 #include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Pressure iteration convergence barrier.
+/// Pressure iteration convergence check barrier.
 ///
-/// Collects N MeshData tokens from PressureSolveKernel, then runs:
-///   1. fds_mesh_exchange(5) — exchange FVX/FVY/FVZ/H between neighbors
-///   2. velocity_error_kernel — compute velocity error per mesh
-///   3. convergence_check — MPI reduction + tolerance check
+/// Collects N MeshData tokens (after post-solve exchange and velocity error),
+/// then runs the MPI convergence check.
 ///
 /// Routes:
 ///   - Converged: emit N MeshData tokens (exit subgraph)
@@ -44,10 +42,6 @@ public:
             int converged;
             if (fds_iterate_pressure()) {
                 auto t0 = std::chrono::steady_clock::now();
-                fds_mesh_exchange(5);
-                for (int i = 0; i < nmeshes_; ++i) {
-                    fds_compute_velocity_error_kernel(collected_[i]->nm, dt);
-                }
                 fds_pressure_iteration_check_convergence(t, dt);
                 auto t1 = std::chrono::steady_clock::now();
                 convTime_ += std::chrono::duration<double>(t1 - t0).count();
@@ -88,9 +82,9 @@ public:
 
     [[nodiscard]] std::string info() const {
         std::ostringstream oss;
-        oss << "MESH_EXCHANGE(5)\\nVEL_ERROR\\nCONVERGENCE_CHECK\\n"
+        oss << "CONVERGENCE_CHECK\\n"
             << std::fixed << std::setprecision(3)
-            << "conv " << convTime_ << "s"
+            << "check " << convTime_ << "s"
             << " / " << invocations_ << " calls";
         if (invocations_ > 0) {
             oss << " / avg " << std::setprecision(3)
