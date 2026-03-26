@@ -28,6 +28,10 @@ public:
         }
         this->addResult(data);
     }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshExchangeData, MeshExchangeData>> copy() override {
+        return std::make_shared<FluxExchangeTask>(this->numberThreads());
+    }
 };
 
 #endif // FLUX_EXCHANGE_TASK_H

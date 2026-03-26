@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
         : static_cast<size_t>(local_nmeshes);
     size_t exchangeThreads = (cliExchangeThreads > 0)
         ? static_cast<size_t>(cliExchangeThreads)
-        : 1;
+        : static_cast<size_t>(local_nmeshes);
     std::cout << "[FDS-HH] Kernel threads=" << kernelThreads
               << " Exchange threads=" << exchangeThreads << std::endl;
 
