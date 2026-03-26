@@ -6,14 +6,14 @@
 #include <ostream>
 #include "mesh_data.h"
 
-/// Token emitted by MeshDependenciesManagerState to MeshExchangeTask.
+/// Token emitted by MeshDependenciesManagerState to FluxExchangeTask.
 ///
-/// Carries the mesh to be exchanged and the list of neighbors that still
-/// need bidirectional copies.  Neighbors already exchanged by a previous
-/// mesh are excluded from this list.
+/// Carries the mesh to be exchanged and its full list of same-rank neighbors.
+/// The exchange task uses pull-only copies: each mesh pulls from all its
+/// neighbors, writing only to its own OMESH buffers.
 struct MeshExchangeData {
     std::shared_ptr<MeshData> mesh;   ///< The mesh to exchange
-    std::vector<int> neighbors;       ///< Same-rank neighbors needing exchange (1-based)
+    std::vector<int> neighbors;       ///< Same-rank neighbors to pull from (1-based)
 
     MeshExchangeData() = default;
     MeshExchangeData(std::shared_ptr<MeshData> m, std::vector<int> nbrs)

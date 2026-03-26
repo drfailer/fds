@@ -9,7 +9,6 @@
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
-#include "../data/termination_signal.h"
 #include "../fds_fortran_interface.h"
 
 /// Pure data-flow state for the time-stepping cycle.
@@ -22,15 +21,12 @@
 /// step.
 class TimestepLoopState : public hh::AbstractState<1, BarrierData, MeshData, BarrierData> {
 public:
-    explicit TimestepLoopState(std::shared_ptr<TerminationSignal> termSignal)
-        : hh::AbstractState<1, BarrierData, MeshData, BarrierData>(),
-          termSignal_(std::move(termSignal)) {}
+    TimestepLoopState()
+        : hh::AbstractState<1, BarrierData, MeshData, BarrierData>() {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
         if (data->done) {
             done_ = true;
-            // Signal all sub-graphs with internal cycles to terminate
-            termSignal_->terminate();
             // Emit BarrierData to graph output (different type than MeshData cycle)
             this->addResult(data);
             return;
@@ -49,7 +45,6 @@ public:
 
 private:
     bool done_ = false;
-    std::shared_ptr<TerminationSignal> termSignal_;
 };
 
 /// Custom state manager for the time-stepping cycle.

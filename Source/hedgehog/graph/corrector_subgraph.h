@@ -6,6 +6,7 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/termination_data.h"
 #include "../state/barrier_state.h"
 #include "../state/div_setup_state.h"
 #include "../state/fork_join_state.h"
@@ -32,11 +33,11 @@
 ///            RemoveMove + PartMom + MeshExch(7) merged into single barrier
 ///   - Opt 3: MeshExchange(2) + CorrDivExchange merged (non-CC_IBM)
 ///   - Opt 4: MeshExchange(6b) removed — absorbed into CorrFinalOrchestrator
-inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
-                                    std::shared_ptr<TerminationSignal> termSignal,
+inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("Corrector");
+                                    hh::comm::CommService *commService = nullptr,
+                                    size_t exchangeThreads = 1) {
+    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, BarrierData>>("Corrector");
 
     size_t meshThreads = static_cast<size_t>(nmeshes);
 
@@ -178,8 +179,9 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, meshThreads, false, termSignal,
+            nmeshes, meshThreads, exchangeThreads, false,
             depGraph, commService, fds_get_pres_flag());
+        subgraph->input<TerminationData>(corrPressureSubgraph);
         subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);
         subgraph->edges(corrPressureSubgraph, velCorrKernelTask);
     } else {
@@ -190,6 +192,10 @@ inline auto buildCorrectorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             });
         subgraph->edges(corrDivP2KernelTask, corrPressureSM);
         subgraph->edges(corrPressureSM, velCorrKernelTask);
+        // Sink for TerminationData when parallel pressure is not used
+        auto termSinkSM = std::make_shared<hh::StateManager<1, TerminationData, TerminationData>>(
+            std::make_shared<TerminationDataSink>(), "TermDataSink");
+        subgraph->input<TerminationData>(termSinkSM);
     }
 
     // CorrFinal sub-graph (MeshExch6b merged into CorrFinalOrchestrator — Opt 4)

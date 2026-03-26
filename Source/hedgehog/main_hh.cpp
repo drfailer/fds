@@ -18,6 +18,7 @@
 #include "fds_fortran_interface.h"
 #include "data/mesh_data.h"
 #include "data/mesh_dim.h"
+#include "data/termination_data.h"
 #include "service/fds_comm_service.h"
 #include "graph/fds_graph.h"
 
@@ -80,26 +81,32 @@ int main(int argc, char *argv[]) {
               << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
-    // kernelThreads: for mesh-level kernel tasks (1 thread per mesh)
-    // Parse --kernel-threads option (default: local_nmeshes)
+    // Parse --kernel-threads and --exchange-threads options
     int cliKernelThreads = 0;
+    int cliExchangeThreads = 0;
     for (int i = 1; i < argc; ++i) {
         std::string karg(argv[i]);
         if (karg == "--kernel-threads" && i + 1 < argc) {
             cliKernelThreads = std::atoi(argv[++i]);
+        } else if (karg == "--exchange-threads" && i + 1 < argc) {
+            cliExchangeThreads = std::atoi(argv[++i]);
         }
     }
     size_t kernelThreads = (cliKernelThreads > 0)
         ? static_cast<size_t>(cliKernelThreads)
         : static_cast<size_t>(local_nmeshes);
-    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads << std::endl;
+    size_t exchangeThreads = (cliExchangeThreads > 0)
+        ? static_cast<size_t>(cliExchangeThreads)
+        : 1;
+    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads
+              << " Exchange threads=" << exchangeThreads << std::endl;
 
     // Initialize communicator service (reuses FDS's already-initialized MPI)
     FDSMPIService commService;
     std::cout << "[FDS-HH] CommService: rank=" << commService.rank()
               << " nbProcesses=" << commService.nbProcesses() << std::endl;
 
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads, &commService);
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads, &commService, exchangeThreads);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
@@ -116,21 +123,28 @@ int main(int argc, char *argv[]) {
         graph->pushData(md);
     }
 
-    // Step 5: Signal that no more data will be pushed from outside.
-    graph->finishPushingData();
-
-    // Step 5b: Terminate the comm service so CommunicatorTask daemon threads
-    // can exit cleanly. This calls MPI_Barrier (syncs all processes) then
-    // unblocks waitForTermination() inside each CommunicatorTask's fini().
-    // Safe to call before waitForTermination: the graph continues processing
-    // in its own threads; when CommunicatorTask's core task eventually calls
-    // fini(), it returns immediately because terminated_ is already true.
-    commService.terminate();
-
-    // Step 6: Wait for the graph to complete.
-    // TimestepLoopStateManager::canTerminate() breaks the main cycle when done.
+    // Step 5: Wait for graph output (simulation complete).
+    // getBlockingResult() blocks until the graph produces BarrierData output,
+    // which happens when TimestepLoopState receives done=true from TimestepDump.
     std::cout << "[FDS-HH] Waiting for graph termination..." << std::endl;
 
+    graph->getBlockingResult();
+
+    // Step 5b: Push TerminationData to signal all inner cycles to terminate.
+    // This flows through the sub-graph hierarchy to MeshDepsManager and
+    // PressureConvergence states, setting done_=true so canTerminate() returns
+    // true and the cycles can shut down cleanly.
+    graph->pushData(std::make_shared<TerminationData>());
+
+    // Step 5c: Signal that no more data will be pushed from outside.
+    graph->finishPushingData();
+
+    // Step 5d: Terminate the comm service so CommunicatorTask daemon threads
+    // can exit cleanly. This calls MPI_Barrier (syncs all processes) then
+    // unblocks waitForTermination() inside each CommunicatorTask's fini().
+    commService.terminate();
+
+    // Step 6: Wait for the graph to fully terminate.
     graph->waitForTermination();
 
     std::cout << "[FDS-HH] Graph terminated." << std::endl;

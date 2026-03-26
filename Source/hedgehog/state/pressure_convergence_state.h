@@ -7,7 +7,7 @@
 #include <sstream>
 #include "../data/pressure_iteration_data.h"
 #include "../data/mesh_data.h"
-#include "../data/termination_signal.h"
+#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Pressure iteration convergence barrier.
@@ -22,14 +22,15 @@
 ///   - Not converged: call increment(), emit PressureIterMeshData (cycle back)
 ///
 /// Also handles ITERATE_PRESSURE=false (always exit after first pass).
+///
+/// Termination: receives TerminationData from the graph input when the
+/// simulation is complete, setting done_=true so canTerminate() returns true.
 class PressureConvergenceState
-    : public hh::AbstractState<1, MeshData, PressureIterMeshData, MeshData> {
+    : public hh::AbstractState<2, MeshData, TerminationData, PressureIterMeshData, MeshData> {
 public:
-    PressureConvergenceState(int nmeshes, double tEnd, bool predictor,
-                             std::shared_ptr<TerminationSignal> termSignal)
+    PressureConvergenceState(int nmeshes, bool predictor)
         : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
-          tEnd_(tEnd), predictor_(predictor),
-          termSignal_(std::move(termSignal)) {
+          predictor_(predictor) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -39,8 +40,6 @@ public:
         if (++count_ == nmeshes_) {
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
-            lastT_ = t;
-            lastDt_ = dt;
 
             int converged;
             if (fds_iterate_pressure()) {
@@ -59,7 +58,6 @@ public:
             }
 
             ++invocations_;
-            lastConverged_ = (converged != 0);
 
             if (converged) {
                 if (predictor_) {
@@ -81,19 +79,12 @@ public:
         }
     }
 
-    [[nodiscard]] bool reachedEnd() const {
-        if (predictor_) {
-            return lastT_ + lastDt_ >= tEnd_;
-        } else {
-            return lastT_ >= tEnd_;
-        }
+    /// Handle termination signal from graph input.
+    void execute(std::shared_ptr<TerminationData>) override {
+        done_ = true;
     }
 
-    [[nodiscard]] bool isTerminated() const {
-        return termSignal_->isTerminated();
-    }
-
-    [[nodiscard]] bool lastConverged() const { return lastConverged_; }
+    [[nodiscard]] bool isDone() const { return done_; }
 
     [[nodiscard]] std::string info() const {
         std::ostringstream oss;
@@ -113,31 +104,27 @@ private:
     int nmOffset_;
     int count_ = 0;
     std::vector<std::shared_ptr<MeshData>> collected_;
-    double tEnd_;
     bool predictor_;
-    std::shared_ptr<TerminationSignal> termSignal_;
-    double lastT_ = 0.0;
-    double lastDt_ = 0.0;
-    bool lastConverged_ = false;
+    bool done_ = false;
     double convTime_ = 0.0;
     int invocations_ = 0;
 };
 
 /// Custom state manager for PressureConvergenceState with canTerminate.
 class PressureConvergenceManager
-    : public hh::StateManager<1, MeshData, PressureIterMeshData, MeshData> {
+    : public hh::StateManager<2, MeshData, TerminationData, PressureIterMeshData, MeshData> {
 public:
     PressureConvergenceManager(
         std::shared_ptr<PressureConvergenceState> const& state,
         std::string const& name)
-        : hh::StateManager<1, MeshData, PressureIterMeshData, MeshData>(
+        : hh::StateManager<2, MeshData, TerminationData, PressureIterMeshData, MeshData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
         auto s = std::dynamic_pointer_cast<PressureConvergenceState>(
             this->state());
-        bool ret = (s->reachedEnd() && s->lastConverged()) || s->isTerminated();
+        bool ret = s->isDone();
         this->state()->unlock();
         return ret;
     }

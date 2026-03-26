@@ -6,6 +6,7 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/termination_data.h"
 #include "../state/collector_state.h"
 #include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
@@ -31,10 +32,10 @@
 ///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
 ///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
 inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
-                                    std::shared_ptr<TerminationSignal> termSignal,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("Predictor");
+                                    hh::comm::CommService *commService = nullptr,
+                                    size_t exchangeThreads = 1) {
+    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, MeshData>>("Predictor");
 
     size_t meshThreads = static_cast<size_t>(nmeshes);
 
@@ -71,7 +72,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     // --- Wire the sub-graph ---
 
-    subgraph->inputs(predStep1OrchSM);
+    subgraph->input<MeshData>(predStep1OrchSM);
 
     // PredStep1 (VISC + MASS_FD + DENSITY merged)
     subgraph->edges(predStep1OrchSM, predStep1KernelTask);
@@ -182,8 +183,9 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
 
     if (useParallelPressure) {
         auto predPressureSubgraph = buildPressureIterationSubgraph(
-            tEnd, nmeshes, meshThreads, true, termSignal,
+            nmeshes, meshThreads, exchangeThreads, true,
             depGraph, commService, fds_get_pres_flag());
+        subgraph->input<TerminationData>(predPressureSubgraph);
         subgraph->edges(predDivP2KernelTask, predPressureSubgraph);
         subgraph->edges(predPressureSubgraph, velPredKernelTask);
     } else {
@@ -195,6 +197,10 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             });
         subgraph->edges(predDivP2KernelTask, predPressureSM);
         subgraph->edges(predPressureSM, velPredKernelTask);
+        // Sink for TerminationData when parallel pressure is not used
+        auto termSinkSM = std::make_shared<hh::StateManager<1, TerminationData, TerminationData>>(
+            std::make_shared<TerminationDataSink>(), "TermDataSink");
+        subgraph->input<TerminationData>(termSinkSM);
     }
 
     // VelocityPredictor -> ChangeTimeStep
