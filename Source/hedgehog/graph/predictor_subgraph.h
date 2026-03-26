@@ -31,7 +31,7 @@
 ///   - MeshExchange(3) + PredFinalOrch merged into single barrier
 ///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
 ///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
-inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThreads,
+inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr,
                                     size_t exchangeThreads = 1) {
@@ -51,7 +51,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, meshThreads);
-    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(tEnd, nmeshes, meshThreads);
+    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, meshThreads);
 
     // --- Common barrier states ---
 
@@ -73,6 +73,7 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
     // --- Wire the sub-graph ---
 
     subgraph->input<MeshData>(predStep1OrchSM);
+    subgraph->input<TerminationData>(changeTimeStepSubgraph);
 
     // PredStep1 (VISC + MASS_FD + DENSITY merged)
     subgraph->edges(predStep1OrchSM, predStep1KernelTask);
@@ -197,10 +198,6 @@ inline auto buildPredictorSubgraph(int nmeshes, double tEnd, size_t kernelThread
             });
         subgraph->edges(predDivP2KernelTask, predPressureSM);
         subgraph->edges(predPressureSM, velPredKernelTask);
-        // Sink for TerminationData when parallel pressure is not used
-        auto termSinkSM = std::make_shared<hh::StateManager<1, TerminationData, TerminationData>>(
-            std::make_shared<TerminationDataSink>(), "TermDataSink");
-        subgraph->input<TerminationData>(termSinkSM);
     }
 
     // VelocityPredictor -> ChangeTimeStep

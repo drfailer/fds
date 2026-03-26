@@ -42,7 +42,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto depGraph = std::make_shared<MeshDependencyGraph>(
         fds_get_lower_mesh_index(), fds_get_lower_mesh_index() + nmeshes - 1);
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, tEnd, kernelThreads, depGraph, commService, exchangeThreads);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, kernelThreads, depGraph, commService, exchangeThreads);
     auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, kernelThreads, depGraph, commService, exchangeThreads);
 
     // --- Create timestep pipeline components ---

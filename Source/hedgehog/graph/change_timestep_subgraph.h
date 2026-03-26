@@ -5,6 +5,7 @@
 #include <memory>
 #include "../data/change_timestep_data.h"
 #include "../data/mesh_data.h"
+#include "../data/termination_data.h"
 #include "../task/change_timestep_tasks.h"
 #include "../state/change_timestep_state.h"
 
@@ -20,9 +21,8 @@
 /// RetryLoopSM uses type-based routing:
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
 ///   - MeshData → exits the sub-graph (retry complete or no retry needed)
-inline auto buildChangeTimeStepSubgraph(double tEnd, int nmeshes,
-                                         size_t kernelThreads) {
-    using SubGraphType = hh::Graph<1, BarrierData, MeshData>;
+inline auto buildChangeTimeStepSubgraph(int nmeshes, size_t kernelThreads) {
+    using SubGraphType = hh::Graph<2, BarrierData, TerminationData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("ChangeTimeStepSubgraph");
 
     auto retryPreKernel = std::make_shared<RetryPreKernelTask>();
@@ -33,10 +33,11 @@ inline auto buildChangeTimeStepSubgraph(double tEnd, int nmeshes,
         std::make_shared<RetryMomentumDivCollector>(nmeshes), "RetryMomDivCollector");
 
     auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
-        std::make_shared<RetryLoopState>(tEnd), "RetryLoop");
+        std::make_shared<RetryLoopState>(), "RetryLoop");
 
     // Entry point
-    subgraph->inputs(retryPreKernel);
+    subgraph->input<BarrierData>(retryPreKernel);
+    subgraph->input<TerminationData>(retryLoopSM);
 
     // RetryPreKernel outputs:
     //   MeshData → parallel kernel (retry path)

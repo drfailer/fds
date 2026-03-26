@@ -4,6 +4,7 @@
 #include <hedgehog/hedgehog.h>
 #include "../data/change_timestep_data.h"
 #include "../data/mesh_data.h"
+#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// State that manages the retry loop cycle.
@@ -15,14 +16,11 @@
 /// Two output types for Hedgehog type-based routing:
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
 ///   - MeshData → exits the subgraph (retry complete or no retry needed)
-class RetryLoopState : public hh::AbstractState<1, RetrySequenceData, RetrySequenceData, MeshData> {
+class RetryLoopState : public hh::AbstractState<2, RetrySequenceData, TerminationData, RetrySequenceData, MeshData> {
 public:
-    explicit RetryLoopState(double tEnd) : tEnd_(tEnd) {}
+    RetryLoopState() = default;
 
     void execute(std::shared_ptr<RetrySequenceData> data) override {
-        lastT_ = data->t;
-        lastDt_ = data->dt;
-
         if (data->done) {
             // No retry needed: emit MeshData to exit
             for (auto &md : data->meshes) {
@@ -72,30 +70,31 @@ public:
         }
     }
 
-    [[nodiscard]] bool reachedEnd() const {
-        return lastT_ + lastDt_ >= tEnd_;
+    /// Handle termination signal from graph input.
+    void execute(std::shared_ptr<TerminationData>) override {
+        done_ = true;
     }
 
+    [[nodiscard]] bool isDone() const { return done_; }
+
 private:
-    double tEnd_;
-    double lastT_ = 0.0;
-    double lastDt_ = 0.0;
+    bool done_ = false;
 };
 
 /// Custom state manager for the retry loop cycle.
 class RetryLoopStateManager
-    : public hh::StateManager<1, RetrySequenceData, RetrySequenceData, MeshData> {
+    : public hh::StateManager<2, RetrySequenceData, TerminationData, RetrySequenceData, MeshData> {
 public:
     RetryLoopStateManager(
         std::shared_ptr<RetryLoopState> const &state,
         std::string const &name)
-        : hh::StateManager<1, RetrySequenceData, RetrySequenceData, MeshData>(
+        : hh::StateManager<2, RetrySequenceData, TerminationData, RetrySequenceData, MeshData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
         auto s = std::dynamic_pointer_cast<RetryLoopState>(this->state());
-        bool ret = s->reachedEnd();
+        bool ret = s->isDone();
         this->state()->unlock();
         return ret;
     }
