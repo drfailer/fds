@@ -149,6 +149,8 @@ void fds_write_strings(double t, double dt);
 void fds_write_diagnostics(double t, double dt);
 void fds_set_diagnostics(int icyc, double t, double dt);
 void fds_flush_output_files();
+void fds_close_all_mesh_output_files();
+void fds_check_dump_schedule(double t, int nm, bool* any_dump);
 
 // Barrier / exchange subroutines
 void fds_mesh_exchange(int code);

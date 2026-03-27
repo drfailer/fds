@@ -155,7 +155,8 @@ int main(int argc, char *argv[]) {
 
     std::cout << "[FDS-HH] Graph terminated." << std::endl;
 
-    // Flush Fortran I/O buffers to ensure all outputs are written to disk
+    // Close all per-mesh output files and flush remaining I/O buffers
+    fds_close_all_mesh_output_files();
     fds_flush_output_files();
 
     // Step 7: Generate dot file for visualization (per-rank to avoid collisions)

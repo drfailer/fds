@@ -54,7 +54,8 @@ PUBLIC ASSIGN_FILE_NAMES,INITIALIZE_GLOBAL_DUMPS,INITIALIZE_MESH_DUMPS,WRITE_STA
        TIMINGS,FLUSH_GLOBAL_BUFFERS,READ_RESTART,WRITE_DIAGNOSTICS, &
        WRITE_SMOKEVIEW_FILE,DUMP_MESH_OUTPUTS,UPDATE_GLOBAL_OUTPUTS,DUMP_DEVICES,DUMP_HRR,&
        DUMP_MASS,DUMP_CONTROLS,INITIALIZE_DIAGNOSTIC_FILE,DUMP_RESTART,DUMP_HVAC,&
-       DUMP_GEOM,UPDATE_DEVICES_2,WRITE_DEVC_CTRL_LOG,DUMP_CVODE_SUBSTEPS
+       DUMP_GEOM,UPDATE_DEVICES_2,WRITE_DEVC_CTRL_LOG,DUMP_CVODE_SUBSTEPS, &
+       CHECK_DUMP_SCHEDULE,ADVANCE_DUMP_COUNTERS,CLOSE_ALL_MESH_OUTPUT_FILES
 
 CONTAINS
 
@@ -93,76 +94,28 @@ REAL(EB) :: TNOW
 REAL(EB), INTENT(IN) :: T,DT
 INTEGER, INTENT(IN) :: NM
 CHARACTER(80) :: FN_UVW,FN_MMS,FN_SPECTRUM,FN_TMP,FN_SPEC
+LOGICAL :: DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC
 
 TNOW = CURRENT_TIME()
 
 CALL POINT_TO_MESH(NM)
 
-IF (T>=PART_CLOCK(PART_COUNTER(NM)) .AND. PARTICLE_FILE) THEN
-   CALL DUMP_PART(T,NM)
-   DO WHILE(PART_COUNTER(NM)<SIZE(PART_CLOCK)-1)
-      PART_COUNTER(NM) = PART_COUNTER(NM) + 1
-      IF (PART_CLOCK(PART_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
+! Determine which outputs are due this timestep
 
-IF (T>=ISOF_CLOCK(ISOF_COUNTER(NM))) THEN
-   CALL DUMP_ISOF(T,DT,NM)
-   DO WHILE(ISOF_COUNTER(NM)<SIZE(ISOF_CLOCK)-1)
-      ISOF_COUNTER(NM) = ISOF_COUNTER(NM) + 1
-      IF (ISOF_CLOCK(ISOF_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
+CALL CHECK_DUMP_SCHEDULE(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
 
-IF (T>=SM3D_CLOCK(SM3D_COUNTER(NM)) .AND. SMOKE3D) THEN
-   CALL DUMP_SMOKE3D(T,DT,NM)
-   DO WHILE(SM3D_COUNTER(NM)<SIZE(SM3D_CLOCK)-1)
-      SM3D_COUNTER(NM) = SM3D_COUNTER(NM) + 1
-      IF (SM3D_CLOCK(SM3D_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
+! Execute scheduled dumps
 
-IF (T>=SLCF_CLOCK(SLCF_COUNTER(NM))) THEN
-   CALL DUMP_SLCF(T,DT,NM,0)
-   DO WHILE(SLCF_COUNTER(NM)<SIZE(SLCF_CLOCK)-1)
-      SLCF_COUNTER(NM) = SLCF_COUNTER(NM) + 1
-      IF (SLCF_CLOCK(SLCF_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
+IF (DO_PART) CALL DUMP_PART(T,NM)
+IF (DO_ISOF) CALL DUMP_ISOF(T,DT,NM)
+IF (DO_SM3D) CALL DUMP_SMOKE3D(T,DT,NM)
+IF (DO_SLCF) CALL DUMP_SLCF(T,DT,NM,0)
+IF (DO_SL3D) CALL DUMP_SLCF(T,DT,NM,2)
+IF (DO_BNDF) CALL DUMP_BNDF(T,DT,NM)
+IF (DO_PL3D) CALL DUMP_SLCF(T,DT,NM,1)
+IF (DO_PROF) CALL DUMP_PROF(T,NM)
 
-IF (T>=SL3D_CLOCK(SL3D_COUNTER(NM)) .OR. STOP_STATUS==INSTABILITY_STOP) THEN
-   CALL DUMP_SLCF(T,DT,NM,2)
-   DO WHILE(SL3D_COUNTER(NM)<SIZE(SL3D_CLOCK)-1)
-      SL3D_COUNTER(NM) = SL3D_COUNTER(NM) + 1
-      IF (SL3D_CLOCK(SL3D_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
-
-IF (T>=BNDF_CLOCK(BNDF_COUNTER(NM))) THEN
-   CALL DUMP_BNDF(T,DT,NM)
-   DO WHILE(BNDF_COUNTER(NM)<SIZE(BNDF_CLOCK)-1)
-      BNDF_COUNTER(NM) = BNDF_COUNTER(NM) + 1
-      IF (BNDF_CLOCK(BNDF_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
-
-IF (T>=PL3D_CLOCK(PL3D_COUNTER(NM)) .OR. STOP_STATUS==INSTABILITY_STOP) THEN
-   CALL DUMP_SLCF(T,DT,NM,1)
-   DO WHILE(PL3D_COUNTER(NM)<SIZE(PL3D_CLOCK)-1)
-      PL3D_COUNTER(NM) = PL3D_COUNTER(NM) + 1
-      IF (PL3D_CLOCK(PL3D_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
-
-IF (T>=PROF_CLOCK(PROF_COUNTER(NM))) THEN
-   CALL DUMP_PROF(T,NM)
-   DO WHILE(PROF_COUNTER(NM)<SIZE(PROF_CLOCK)-1)
-      PROF_COUNTER(NM) = PROF_COUNTER(NM) + 1
-      IF (PROF_CLOCK(PROF_COUNTER(NM))>=T) EXIT
-   ENDDO
-ENDIF
-
-IF (T>=UVW_CLOCK(UVW_COUNTER(NM))) THEN
+IF (DO_UVW) THEN
    IF (PERIODIC_TEST==9) THEN
       WRITE(FN_SPECTRUM,'(A,A,I0,A)') TRIM(RESULTS_DIR)//TRIM(CHID),'_spec_',UVW_COUNTER(NM),'.csv'
       CALL DUMP_UVW(FN_SPECTRUM)
@@ -170,29 +123,19 @@ IF (T>=UVW_CLOCK(UVW_COUNTER(NM))) THEN
       WRITE(FN_UVW,'(A,A,I0,A,I0,A)') TRIM(RESULTS_DIR)//TRIM(CHID),'_uvw_t',UVW_COUNTER(NM),'_m',NM,'.csv'
       CALL DUMP_UVW(FN_UVW)
    ENDIF
-   DO WHILE(UVW_COUNTER(NM)<SIZE(UVW_CLOCK)-1)
-      UVW_COUNTER(NM) = UVW_COUNTER(NM) + 1
-      IF (UVW_CLOCK(UVW_COUNTER(NM))>=T) EXIT
-   ENDDO
 ENDIF
 
-IF (T>=TMP_CLOCK(TMP_COUNTER(NM))) THEN
+IF (DO_TMP) THEN
    WRITE(FN_TMP,'(A,A,I0,A,I0,A)') TRIM(RESULTS_DIR)//TRIM(CHID),'_tmp_t',TMP_COUNTER(NM),'_m',NM,'.csv'
    CALL DUMP_TMP(FN_TMP)
-   DO WHILE(TMP_COUNTER(NM)<SIZE(TMP_CLOCK)-1)
-      TMP_COUNTER(NM) = TMP_COUNTER(NM) + 1
-      IF (TMP_CLOCK(TMP_COUNTER(NM))>=T) EXIT
-   ENDDO
 ENDIF
 
-IF (T>=SPEC_CLOCK(SPEC_COUNTER(NM))) THEN
+IF (DO_SPEC) THEN
    WRITE(FN_SPEC,'(A,A,I0,A,I0,A)') TRIM(RESULTS_DIR)//TRIM(CHID),'_spec_t',SPEC_COUNTER(NM),'_m',NM,'.csv'
    CALL DUMP_SPEC(FN_SPEC)
-   DO WHILE(SPEC_COUNTER(NM)<SIZE(SPEC_CLOCK)-1)
-      SPEC_COUNTER(NM) = SPEC_COUNTER(NM) + 1
-      IF (SPEC_CLOCK(SPEC_COUNTER(NM))>=T) EXIT
-   ENDDO
 ENDIF
+
+! Handle periodic test special cases
 
 PERIODIC_TEST_SELECT: SELECT CASE(PERIODIC_TEST)
    CASE(7,11)
@@ -214,8 +157,125 @@ PERIODIC_TEST_SELECT: SELECT CASE(PERIODIC_TEST)
       ENDIF
 END SELECT PERIODIC_TEST_SELECT
 
+! Advance counters past the current time
+
+CALL ADVANCE_DUMP_COUNTERS(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
+
 T_USED(7) = T_USED(7) + CURRENT_TIME() - TNOW
 END SUBROUTINE DUMP_MESH_OUTPUTS
+
+
+!> \brief Determine which mesh output types are due at the current simulation time
+!> \details Pure scheduling check with no side effects, no file I/O, no counter modification
+
+SUBROUTINE CHECK_DUMP_SCHEDULE(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
+
+REAL(EB), INTENT(IN) :: T
+INTEGER, INTENT(IN) :: NM
+LOGICAL, INTENT(OUT) :: DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC
+
+DO_PART = T>=PART_CLOCK(PART_COUNTER(NM)) .AND. PARTICLE_FILE
+DO_ISOF = T>=ISOF_CLOCK(ISOF_COUNTER(NM))
+DO_SM3D = T>=SM3D_CLOCK(SM3D_COUNTER(NM)) .AND. SMOKE3D
+DO_SLCF = T>=SLCF_CLOCK(SLCF_COUNTER(NM))
+DO_SL3D = T>=SL3D_CLOCK(SL3D_COUNTER(NM)) .OR. STOP_STATUS==INSTABILITY_STOP
+DO_BNDF = T>=BNDF_CLOCK(BNDF_COUNTER(NM))
+DO_PL3D = T>=PL3D_CLOCK(PL3D_COUNTER(NM)) .OR. STOP_STATUS==INSTABILITY_STOP
+DO_PROF = T>=PROF_CLOCK(PROF_COUNTER(NM))
+DO_UVW  = T>=UVW_CLOCK(UVW_COUNTER(NM))
+DO_TMP  = T>=TMP_CLOCK(TMP_COUNTER(NM))
+DO_SPEC = T>=SPEC_CLOCK(SPEC_COUNTER(NM))
+
+END SUBROUTINE CHECK_DUMP_SCHEDULE
+
+
+!> \brief Advance dump counters past the current simulation time for outputs that were executed
+!> \details Called after dump execution. Each counter is advanced until the next clock time >= T.
+
+SUBROUTINE ADVANCE_DUMP_COUNTERS(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
+
+REAL(EB), INTENT(IN) :: T
+INTEGER, INTENT(IN) :: NM
+LOGICAL, INTENT(IN) :: DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC
+
+IF (DO_PART) THEN
+   DO WHILE(PART_COUNTER(NM)<SIZE(PART_CLOCK)-1)
+      PART_COUNTER(NM) = PART_COUNTER(NM) + 1
+      IF (PART_CLOCK(PART_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_ISOF) THEN
+   DO WHILE(ISOF_COUNTER(NM)<SIZE(ISOF_CLOCK)-1)
+      ISOF_COUNTER(NM) = ISOF_COUNTER(NM) + 1
+      IF (ISOF_CLOCK(ISOF_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_SM3D) THEN
+   DO WHILE(SM3D_COUNTER(NM)<SIZE(SM3D_CLOCK)-1)
+      SM3D_COUNTER(NM) = SM3D_COUNTER(NM) + 1
+      IF (SM3D_CLOCK(SM3D_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_SLCF) THEN
+   DO WHILE(SLCF_COUNTER(NM)<SIZE(SLCF_CLOCK)-1)
+      SLCF_COUNTER(NM) = SLCF_COUNTER(NM) + 1
+      IF (SLCF_CLOCK(SLCF_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_SL3D) THEN
+   DO WHILE(SL3D_COUNTER(NM)<SIZE(SL3D_CLOCK)-1)
+      SL3D_COUNTER(NM) = SL3D_COUNTER(NM) + 1
+      IF (SL3D_CLOCK(SL3D_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_BNDF) THEN
+   DO WHILE(BNDF_COUNTER(NM)<SIZE(BNDF_CLOCK)-1)
+      BNDF_COUNTER(NM) = BNDF_COUNTER(NM) + 1
+      IF (BNDF_CLOCK(BNDF_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_PL3D) THEN
+   DO WHILE(PL3D_COUNTER(NM)<SIZE(PL3D_CLOCK)-1)
+      PL3D_COUNTER(NM) = PL3D_COUNTER(NM) + 1
+      IF (PL3D_CLOCK(PL3D_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_PROF) THEN
+   DO WHILE(PROF_COUNTER(NM)<SIZE(PROF_CLOCK)-1)
+      PROF_COUNTER(NM) = PROF_COUNTER(NM) + 1
+      IF (PROF_CLOCK(PROF_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_UVW) THEN
+   DO WHILE(UVW_COUNTER(NM)<SIZE(UVW_CLOCK)-1)
+      UVW_COUNTER(NM) = UVW_COUNTER(NM) + 1
+      IF (UVW_CLOCK(UVW_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_TMP) THEN
+   DO WHILE(TMP_COUNTER(NM)<SIZE(TMP_CLOCK)-1)
+      TMP_COUNTER(NM) = TMP_COUNTER(NM) + 1
+      IF (TMP_CLOCK(TMP_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+IF (DO_SPEC) THEN
+   DO WHILE(SPEC_COUNTER(NM)<SIZE(SPEC_CLOCK)-1)
+      SPEC_COUNTER(NM) = SPEC_COUNTER(NM) + 1
+      IF (SPEC_CLOCK(SPEC_COUNTER(NM))>=T) EXIT
+   ENDDO
+ENDIF
+
+END SUBROUTINE ADVANCE_DUMP_COUNTERS
 
 
 !> \brief Assign names and logical units for all output files
@@ -4161,77 +4221,8 @@ LAGRANGIAN_PARTICLE_CLASS_LOOP: DO N=1,N_LAGRANGIAN_CLASSES
 
    LPC => LAGRANGIAN_PARTICLE_CLASS(N)
 
-   ! Count the number of particles to dump out
-
-   NPLIM = 0
-   DO IP=1,NLP
-      LP=>LAGRANGIAN_PARTICLE(IP)
-      IF (LP%SHOW .AND. LP%CLASS_INDEX==N) NPLIM = NPLIM + 1
-   ENDDO
-
-   ! Allocate some temporary 4 byte arrays just to hold the data that is to be dumped to the file
-
-   ALLOCATE(TA(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','TA',IZERO)
-   ALLOCATE(XP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','XP',IZERO)
-   ALLOCATE(YP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','YP',IZERO)
-   ALLOCATE(ZP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','ZP',IZERO)
-   ALLOCATE(QP(NPLIM,LPC%N_QUANTITIES),STAT=IZERO) ; CALL ChkMemErr('DUMP','QP',IZERO)
-
-   ! Load particle data into single precision arrays
-
-   NPP = 0
-   LOAD_LOOP: DO IP=1,NLP
-      LP=>LAGRANGIAN_PARTICLE(IP)
-      BC=>BOUNDARY_COORD(LP%BC_INDEX)
-      IF (.NOT.LP%SHOW .OR. LP%CLASS_INDEX/=N) CYCLE LOAD_LOOP
-      NPP = NPP + 1
-      IF (NPP > NPLIM) EXIT LOAD_LOOP
-      TA(NPP) = LP%TAG
-      XP(NPP) = BC%X
-      YP(NPP) = BC%Y
-      ZP(NPP) = BC%Z
-      DO NN=1,LPC%N_QUANTITIES
-         QP(NPP,NN) = PARTICLE_OUTPUT(NM,T,LPC%QUANTITIES_INDEX(NN),IP,&
-            Y_INDEX=LPC%QUANTITIES_Y_INDEX(NN),Z_INDEX=LPC%QUANTITIES_Z_INDEX(NN))
-      ENDDO
-   ENDDO LOAD_LOOP
-
-   ! Dump particle data into the .prt5 file
-
-   WRITE(LU_PART(NM)) NPLIM
-   WRITE(LU_PART(NM)) (REAL(XP(IP),FB),IP=1,NPLIM),(REAL(YP(IP),FB),IP=1,NPLIM),(REAL(ZP(IP),FB),IP=1,NPLIM)
-   WRITE(LU_PART(NM)) (TA(IP),IP=1,NPLIM)
-   IF (LPC%DEBUG) THEN
-      PFACTOR = 0.0_EB
-      IF(NPLIM > 1) PFACTOR = 2.0_EB*STIME/REAL(NPLIM-1,FB)
-      IF (LPC%N_QUANTITIES > 0) THEN
-         PFACTOR_FB = REAL(PFACTOR,FB)
-         WRITE(LU_PART(NM)) ((REAL(-STIME,FB)+REAL(IP-1,FB)*PFACTOR_FB,IP=1,NPLIM),NN=1,LPC%N_QUANTITIES)
-      ENDIF
-   ELSE
-      IF (LPC%N_QUANTITIES > 0) WRITE(LU_PART(NM)) ((REAL(QP(IP,NN),FB),IP=1,NPLIM),NN=1,LPC%N_QUANTITIES)
-   ENDIF
-
-   WRITE(LU_PART(NM+NMESHES),'(I4,1X,I7)')LPC%N_QUANTITIES, NPLIM
-   DO NN = 1, LPC%N_QUANTITIES
-      IF (LPC%DEBUG) THEN
-         PART_MIN = -STIME
-         PART_MAX =  STIME
-      ELSE
-         IF (NPLIM > 0) THEN
-            PART_MAX = QP(1,NN)
-            PART_MIN = PART_MAX
-            DO IP = 2, NPLIM
-               PART_MIN = MIN(QP(IP,NN),PART_MIN)
-               PART_MAX = MAX(QP(IP,NN),PART_MAX)
-            ENDDO
-         ELSE
-            PART_MIN = 1.0_EB
-            PART_MAX = 0.0_EB
-         ENDIF
-      ENDIF
-      WRITE(LU_PART(NM+NMESHES),'(5X,ES13.6,1X,ES13.6)')PART_MIN, PART_MAX
-   ENDDO
+   CALL COMPUTE_PART_CLASS_DATA
+   CALL WRITE_PART_CLASS_DATA
 
    DEALLOCATE(XP)
    DEALLOCATE(YP)
@@ -4243,6 +4234,89 @@ ENDDO LAGRANGIAN_PARTICLE_CLASS_LOOP
 
 CLOSE(LU_PART(NM))
 CLOSE(LU_PART(NM+NMESHES))
+
+CONTAINS
+
+SUBROUTINE COMPUTE_PART_CLASS_DATA
+
+! Count the number of particles to dump out
+
+NPLIM = 0
+DO IP=1,NLP
+   LP=>LAGRANGIAN_PARTICLE(IP)
+   IF (LP%SHOW .AND. LP%CLASS_INDEX==N) NPLIM = NPLIM + 1
+ENDDO
+
+! Allocate some temporary 4 byte arrays just to hold the data that is to be dumped to the file
+
+ALLOCATE(TA(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','TA',IZERO)
+ALLOCATE(XP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','XP',IZERO)
+ALLOCATE(YP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','YP',IZERO)
+ALLOCATE(ZP(NPLIM),STAT=IZERO)                  ; CALL ChkMemErr('DUMP','ZP',IZERO)
+ALLOCATE(QP(NPLIM,LPC%N_QUANTITIES),STAT=IZERO) ; CALL ChkMemErr('DUMP','QP',IZERO)
+
+! Load particle data into single precision arrays
+
+NPP = 0
+LOAD_LOOP: DO IP=1,NLP
+   LP=>LAGRANGIAN_PARTICLE(IP)
+   BC=>BOUNDARY_COORD(LP%BC_INDEX)
+   IF (.NOT.LP%SHOW .OR. LP%CLASS_INDEX/=N) CYCLE LOAD_LOOP
+   NPP = NPP + 1
+   IF (NPP > NPLIM) EXIT LOAD_LOOP
+   TA(NPP) = LP%TAG
+   XP(NPP) = BC%X
+   YP(NPP) = BC%Y
+   ZP(NPP) = BC%Z
+   DO NN=1,LPC%N_QUANTITIES
+      QP(NPP,NN) = PARTICLE_OUTPUT(NM,T,LPC%QUANTITIES_INDEX(NN),IP,&
+         Y_INDEX=LPC%QUANTITIES_Y_INDEX(NN),Z_INDEX=LPC%QUANTITIES_Z_INDEX(NN))
+   ENDDO
+ENDDO LOAD_LOOP
+
+END SUBROUTINE COMPUTE_PART_CLASS_DATA
+
+
+SUBROUTINE WRITE_PART_CLASS_DATA
+
+! Dump particle data into the .prt5 file
+
+WRITE(LU_PART(NM)) NPLIM
+WRITE(LU_PART(NM)) (REAL(XP(IP),FB),IP=1,NPLIM),(REAL(YP(IP),FB),IP=1,NPLIM),(REAL(ZP(IP),FB),IP=1,NPLIM)
+WRITE(LU_PART(NM)) (TA(IP),IP=1,NPLIM)
+IF (LPC%DEBUG) THEN
+   PFACTOR = 0.0_EB
+   IF(NPLIM > 1) PFACTOR = 2.0_EB*STIME/REAL(NPLIM-1,FB)
+   IF (LPC%N_QUANTITIES > 0) THEN
+      PFACTOR_FB = REAL(PFACTOR,FB)
+      WRITE(LU_PART(NM)) ((REAL(-STIME,FB)+REAL(IP-1,FB)*PFACTOR_FB,IP=1,NPLIM),NN=1,LPC%N_QUANTITIES)
+   ENDIF
+ELSE
+   IF (LPC%N_QUANTITIES > 0) WRITE(LU_PART(NM)) ((REAL(QP(IP,NN),FB),IP=1,NPLIM),NN=1,LPC%N_QUANTITIES)
+ENDIF
+
+WRITE(LU_PART(NM+NMESHES),'(I4,1X,I7)')LPC%N_QUANTITIES, NPLIM
+DO NN = 1, LPC%N_QUANTITIES
+   IF (LPC%DEBUG) THEN
+      PART_MIN = -STIME
+      PART_MAX =  STIME
+   ELSE
+      IF (NPLIM > 0) THEN
+         PART_MAX = QP(1,NN)
+         PART_MIN = PART_MAX
+         DO IP = 2, NPLIM
+            PART_MIN = MIN(QP(IP,NN),PART_MIN)
+            PART_MAX = MAX(QP(IP,NN),PART_MAX)
+         ENDDO
+      ELSE
+         PART_MIN = 1.0_EB
+         PART_MAX = 0.0_EB
+      ENDIF
+   ENDIF
+   WRITE(LU_PART(NM+NMESHES),'(5X,ES13.6,1X,ES13.6)')PART_MIN, PART_MAX
+ENDDO
+
+END SUBROUTINE WRITE_PART_CLASS_DATA
 
 END SUBROUTINE DUMP_PART
 
@@ -4316,17 +4390,77 @@ ISOF_LOOP: DO N=1,N_ISOF
    ISOOFFSET = 1
    HAVE_ISO2 = 0
 
-   ! Fill up the dummy array QUANTITY with the appropriate gas phase output
+   CALL COMPUTE_ISOF_QUANTITY
+   CALL WRITE_ISOF_DATA
+
+ENDDO ISOF_LOOP
+
+CONTAINS
+
+SUBROUTINE COMPUTE_ISOF_QUANTITY
+
+! Fill up the dummy array QUANTITY with the appropriate gas phase output
+
+IF (IS%DEBUG) THEN
+
+   ISO_CENX = REAL((XS_MIN + XF_MAX)/2.0_EB, FB)
+   ISO_CENY = REAL((YS_MIN + YF_MAX)/2.0_EB, FB)
+   ISO_CENZ = REAL((ZS_MIN + ZF_MAX)/2.0_EB, FB)
+   DO K=0,KBAR
+      DO J=0,JBAR
+         DO I=0,IBAR
+            QQ(I,J,K,1) = SQRT( (XPLT(I)-ISO_CENX)**2 + (YPLT(J)-ISO_CENY)**2 + (ZPLT(K)-ISO_CENZ)**2)
+         ENDDO
+      ENDDO
+   ENDDO
+
+ELSE
+
+   DO K=0,KBP1
+      DO J=0,JBP1
+         DO I=0,IBP1
+            QUANTITY(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IS%INDEX,0,IS%Y_INDEX,IS%Z_INDEX,0,0,IS%VELO_INDEX,0,0,0,0)
+         ENDDO
+      ENDDO
+   ENDDO
+
+   CALL FILL_EDGES_KERNEL(MESHES(NM),QUANTITY)
+
+   ! Average the data (which is assumed to be cell-centered) at cell corners
+
+   DO K=0,KBAR
+      DO J=0,JBAR
+         DO I=0,IBAR
+            QQ(I,J,K,1) = REAL(S(I,J,K)*(QUANTITY(I,J,K)*B(I,J,K)        + QUANTITY(I+1,J,K)*B(I+1,J,K)+ &
+                                         QUANTITY(I,J,K+1)*B(I,J,K+1)    + QUANTITY(I+1,J,K+1)*B(I+1,J,K+1)+ &
+                                         QUANTITY(I,J+1,K)*B(I,J+1,K)    + QUANTITY(I+1,J+1,K)*B(I+1,J+1,K)+ &
+                                         QUANTITY(I,J+1,K+1)*B(I,J+1,K+1)+ QUANTITY(I+1,J+1,K+1)*B(I+1,J+1,K+1)),FB)
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDIF
+
+! Fill up QUANTITY2 and QQ2 arrays if the isosurface is colored with a second quantity
+
+INDEX2_IF: IF ( IS%INDEX2 /= -1 ) THEN
+
+   HAVE_ISO2 = 1
+   QUANTITY2 => WORK4
+
+   ! Fill up the dummy array QUANTITY2 with the appropriate gas phase output
 
    IF (IS%DEBUG) THEN
 
-      ISO_CENX = REAL((XS_MIN + XF_MAX)/2.0_EB, FB)
-      ISO_CENY = REAL((YS_MIN + YF_MAX)/2.0_EB, FB)
-      ISO_CENZ = REAL((ZS_MIN + ZF_MAX)/2.0_EB, FB)
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               QQ(I,J,K,1) = SQRT( (XPLT(I)-ISO_CENX)**2 + (YPLT(J)-ISO_CENY)**2 + (ZPLT(K)-ISO_CENZ)**2)
+      DO K=0,KBAR+1
+         IF (K.EQ.KBAR+1) THEN
+            ZZ = 2.0_FB*ZPLT(KBAR) - ZPLT(KBAR-1)
+         ELSE
+            ZZ = ZPLT(K)
+         ENDIF
+         DO J=0,JBAR+1
+            DO I=0,IBAR+1
+               QQ2(I,J,K,1) = ZZ
             ENDDO
          ENDDO
       ENDDO
@@ -4336,102 +4470,56 @@ ISOF_LOOP: DO N=1,N_ISOF
       DO K=0,KBP1
          DO J=0,JBP1
             DO I=0,IBP1
-               QUANTITY(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IS%INDEX,0,IS%Y_INDEX,IS%Z_INDEX,0,0,IS%VELO_INDEX,0,0,0,0)
+               QUANTITY2(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IS%INDEX2,0,IS%Y_INDEX2,IS%Z_INDEX2,0,0,IS%VELO_INDEX2,0,0,0,0)
             ENDDO
          ENDDO
       ENDDO
 
-      CALL FILL_EDGES_KERNEL(MESHES(NM),QUANTITY)
+      CALL FILL_EDGES_KERNEL(MESHES(NM),QUANTITY2)
 
       ! Average the data (which is assumed to be cell-centered) at cell corners
 
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               QQ(I,J,K,1) = REAL(S(I,J,K)*(QUANTITY(I,J,K)*B(I,J,K)        + QUANTITY(I+1,J,K)*B(I+1,J,K)+ &
-                                            QUANTITY(I,J,K+1)*B(I,J,K+1)    + QUANTITY(I+1,J,K+1)*B(I+1,J,K+1)+ &
-                                            QUANTITY(I,J+1,K)*B(I,J+1,K)    + QUANTITY(I+1,J+1,K)*B(I+1,J+1,K)+ &
-                                            QUANTITY(I,J+1,K+1)*B(I,J+1,K+1)+ QUANTITY(I+1,J+1,K+1)*B(I+1,J+1,K+1)),FB)
+      DO KK=0,KBAR+1
+         K = MIN(KK, KBAR)
+         DO JJ=0,JBAR+1
+            J = MIN(JJ, JBAR)
+            DO II=0,IBAR+1
+               I = MIN(II, IBAR)
+               QQ2(I,J,K,1) = REAL(S(I,J,K)*(QUANTITY2(I,J,K)*B(I,J,K)        + QUANTITY2(I+1,J,K)*B(I+1,J,K)+ &
+                                                   QUANTITY2(I,J,K+1)*B(I,J,K+1)    + QUANTITY2(I+1,J,K+1)*B(I+1,J,K+1)+ &
+                                                   QUANTITY2(I,J+1,K)*B(I,J+1,K)    + QUANTITY2(I+1,J+1,K)*B(I+1,J+1,K)+ &
+                                                   QUANTITY2(I,J+1,K+1)*B(I,J+1,K+1)+ QUANTITY2(I+1,J+1,K+1)*B(I+1,J+1,K+1)),FB)
             ENDDO
          ENDDO
       ENDDO
 
    ENDIF
 
-   ! Fill up QUANTITY2 and QQ2 arrays if the isosurface is colored with a second quantity
+ENDIF INDEX2_IF
 
-   INDEX2_IF: IF ( IS%INDEX2 /= -1 ) THEN
+END SUBROUTINE COMPUTE_ISOF_QUANTITY
 
-      HAVE_ISO2 = 1
-      QUANTITY2 => WORK4
 
-      ! Fill up the dummy array QUANTITY2 with the appropriate gas phase output
+SUBROUTINE WRITE_ISOF_DATA
 
-      IF (IS%DEBUG) THEN
+OPEN(ABS(LU_ISOF(N,NM)),FILE=FN_ISOF(N,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
+IF (IS%INDEX2 /= -1 ) OPEN(ABS(LU_ISOF2(N,NM)),FILE=FN_ISOF2(N,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
 
-         DO K=0,KBAR+1
-            IF (K.EQ.KBAR+1) THEN
-               ZZ = 2.0_FB*ZPLT(KBAR) - ZPLT(KBAR-1)
-            ELSE
-               ZZ = ZPLT(K)
-            ENDIF
-            DO J=0,JBAR+1
-               DO I=0,IBAR+1
-                  QQ2(I,J,K,1) = ZZ
-               ENDDO
-            ENDDO
-         ENDDO
+IF (IS%DEBUG) THEN
+   TIME_FACTOR = MAX(0.05_EB, (STIME - T_BEGIN)/(T_END - T_BEGIN))
+   ISO_LEVEL(1) = REAL(TIME_FACTOR*(ZF_MAX-ZS_MIN)/2.0_EB, FB)
+   ISO_NLEVEL = 1
+   CALL ISO_TO_FILE(LU_ISOF(N,NM),LU_ISOF2(N,NM),NM,IBAR,JBAR,KBAR,STIME,QQ,QQ2,HAVE_ISO2,&
+        ISO_LEVEL(1:ISO_NLEVEL), ISO_NLEVEL, IBLK, IS%SKIP, IS%DELTA, XPLT, IBP1, YPLT, JBP1, ZPLT, KBP1)
+ELSE
+   CALL ISO_TO_FILE(LU_ISOF(N,NM),LU_ISOF2(N,NM),NM,IBAR,JBAR,KBAR,STIME,QQ,QQ2,HAVE_ISO2,&
+        IS%VALUE(1:IS%N_VALUES), IS%N_VALUES, IBLK, IS%SKIP, IS%DELTA, XPLT, IBP1, YPLT, JBP1, ZPLT, KBP1)
+ENDIF
 
-      ELSE
+CLOSE(ABS(LU_ISOF(N,NM)))
+IF (IS%INDEX2 /= -1 ) CLOSE(ABS(LU_ISOF2(N,NM)))
 
-         DO K=0,KBP1
-            DO J=0,JBP1
-               DO I=0,IBP1
-                  QUANTITY2(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IS%INDEX2,0,IS%Y_INDEX2,IS%Z_INDEX2,0,0,IS%VELO_INDEX2,0,0,0,0)
-               ENDDO
-            ENDDO
-         ENDDO
-
-         CALL FILL_EDGES_KERNEL(MESHES(NM),QUANTITY2)
-
-         ! Average the data (which is assumed to be cell-centered) at cell corners
-
-         DO KK=0,KBAR+1
-            K = MIN(KK, KBAR)
-            DO JJ=0,JBAR+1
-               J = MIN(JJ, JBAR)
-               DO II=0,IBAR+1
-                  I = MIN(II, IBAR)
-                  QQ2(I,J,K,1) = REAL(S(I,J,K)*(QUANTITY2(I,J,K)*B(I,J,K)        + QUANTITY2(I+1,J,K)*B(I+1,J,K)+ &
-                                                      QUANTITY2(I,J,K+1)*B(I,J,K+1)    + QUANTITY2(I+1,J,K+1)*B(I+1,J,K+1)+ &
-                                                      QUANTITY2(I,J+1,K)*B(I,J+1,K)    + QUANTITY2(I+1,J+1,K)*B(I+1,J+1,K)+ &
-                                                      QUANTITY2(I,J+1,K+1)*B(I,J+1,K+1)+ QUANTITY2(I+1,J+1,K+1)*B(I+1,J+1,K+1)),FB)
-               ENDDO
-            ENDDO
-         ENDDO
-
-      ENDIF
-
-   ENDIF INDEX2_IF
-
-   OPEN(ABS(LU_ISOF(N,NM)),FILE=FN_ISOF(N,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
-   IF (IS%INDEX2 /= -1 ) OPEN(ABS(LU_ISOF2(N,NM)),FILE=FN_ISOF2(N,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
-
-   IF (IS%DEBUG) THEN
-      TIME_FACTOR = MAX(0.05_EB, (STIME - T_BEGIN)/(T_END - T_BEGIN))
-      ISO_LEVEL(1) = REAL(TIME_FACTOR*(ZF_MAX-ZS_MIN)/2.0_EB, FB)
-      ISO_NLEVEL = 1
-      CALL ISO_TO_FILE(LU_ISOF(N,NM),LU_ISOF2(N,NM),NM,IBAR,JBAR,KBAR,STIME,QQ,QQ2,HAVE_ISO2,&
-           ISO_LEVEL(1:ISO_NLEVEL), ISO_NLEVEL, IBLK, IS%SKIP, IS%DELTA, XPLT, IBP1, YPLT, JBP1, ZPLT, KBP1)
-   ELSE
-      CALL ISO_TO_FILE(LU_ISOF(N,NM),LU_ISOF2(N,NM),NM,IBAR,JBAR,KBAR,STIME,QQ,QQ2,HAVE_ISO2,&
-           IS%VALUE(1:IS%N_VALUES), IS%N_VALUES, IBLK, IS%SKIP, IS%DELTA, XPLT, IBP1, YPLT, JBP1, ZPLT, KBP1)
-   ENDIF
-
-   CLOSE(ABS(LU_ISOF(N,NM)))
-   IF (IS%INDEX2 /= -1 ) CLOSE(ABS(LU_ISOF2(N,NM)))
-
-ENDDO ISOF_LOOP
+END SUBROUTINE WRITE_ISOF_DATA
 
 END SUBROUTINE DUMP_ISOF
 
@@ -4465,37 +4553,7 @@ DATA_FILE_LOOP: DO N=1,N_SMOKE3D
    S3 => SMOKE3D_FILE(N)
    IF (S3%QUANTITY_INDEX==0) CYCLE
 
-   ! Obtain Smoke3D output at cell centers
-
-   DO K=0,KBP1
-      DO J=0,JBP1
-         DO I=0,IBP1
-            FF(I,J,K)=GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,S3%QUANTITY_INDEX,0,S3%Y_INDEX,S3%Z_INDEX,0,0,0,0,0,0,0)
-         ENDDO
-      ENDDO
-   ENDDO
-
-   ! Interpolate data to cell nodes
-
-   DO K=0,KBAR
-      DO J=0,JBAR
-         DO I=0,IBAR
-            QQ(I,J,K,1) = REAL((FF(I,J,K)  +FF(I+1,J,K)  +FF(I,J,K+1)  +FF(I+1,J,K+1)+ &
-                                FF(I,J+1,K)+FF(I+1,J+1,K)+FF(I,J+1,K+1)+FF(I+1,J+1,K+1))*0.125_FB,FB)
-         ENDDO
-      ENDDO
-   ENDDO
-
-   IF (CC_IBM) THEN
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               IF(MESHES(NM)%VERTVAR(I,J,K,CC_VGSC) /= CC_SOLID) CYCLE
-               QQ(I,J,K,1) = 0._FB
-            ENDDO
-         ENDDO
-      ENDDO
-   ENDIF
+   CALL COMPUTE_SMOKE3D_QUANTITY
 
    ! Pack the data into a 1-D array and send to the routine that writes the file for Smokeview
 
@@ -4505,6 +4563,44 @@ DATA_FILE_LOOP: DO N=1,N_SMOKE3D
    DEALLOCATE(QQ_PACK)
 
 ENDDO DATA_FILE_LOOP
+
+CONTAINS
+
+SUBROUTINE COMPUTE_SMOKE3D_QUANTITY
+
+! Obtain Smoke3D output at cell centers
+
+DO K=0,KBP1
+   DO J=0,JBP1
+      DO I=0,IBP1
+         FF(I,J,K)=GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,S3%QUANTITY_INDEX,0,S3%Y_INDEX,S3%Z_INDEX,0,0,0,0,0,0,0)
+      ENDDO
+   ENDDO
+ENDDO
+
+! Interpolate data to cell nodes
+
+DO K=0,KBAR
+   DO J=0,JBAR
+      DO I=0,IBAR
+         QQ(I,J,K,1) = REAL((FF(I,J,K)  +FF(I+1,J,K)  +FF(I,J,K+1)  +FF(I+1,J,K+1)+ &
+                             FF(I,J+1,K)+FF(I+1,J+1,K)+FF(I,J+1,K+1)+FF(I+1,J+1,K+1))*0.125_FB,FB)
+      ENDDO
+   ENDDO
+ENDDO
+
+IF (CC_IBM) THEN
+   DO K=0,KBAR
+      DO J=0,JBAR
+         DO I=0,IBAR
+            IF(MESHES(NM)%VERTVAR(I,J,K,CC_VGSC) /= CC_SOLID) CYCLE
+            QQ(I,J,K,1) = 0._FB
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
+
+END SUBROUTINE COMPUTE_SMOKE3D_QUANTITY
 
 END SUBROUTINE DUMP_SMOKE3D
 
@@ -6132,293 +6228,311 @@ QUANTITY_LOOP: DO IQ=1,NQT
       IF ((I2-I1==0 .OR. J2-J1==0 .OR. K2-K1==0) .AND.      SLCF3D) CYCLE QUANTITY_LOOP
    ENDIF
 
-   ! Determine what cells need to be evaluated to form cell-corner averages
+   CALL COMPUTE_SLCF_QUANTITY
 
-   II1 = I1
-   II2 = I2+1
-   JJ1 = J1
-   JJ2 = J2+1
-   KK1 = K1
-   KK2 = K2+1
-
-   SELECT CASE(OUTPUT_QUANTITY(IND)%CELL_POSITION)
-      CASE(CELL_FACE)
-         QUANTITY = 0._EB
-         IF (OUTPUT_QUANTITY(IND)%IOR==1) II2 = I2
-         IF (OUTPUT_QUANTITY(IND)%IOR==2) JJ2 = J2
-         IF (OUTPUT_QUANTITY(IND)%IOR==3) KK2 = K2
-      CASE(CELL_EDGE)
-         II2 = I2
-         JJ2 = J2
-         KK2 = K2
-   END SELECT
-
-   ! Loop through the necessary cells, storing the desired output QUANTITY
-
-   IF (.NOT.AGL_TERRAIN_SLICE) THEN
-      DO K=KK1,KK2
-         DO J=JJ1,JJ2
-            DO I=II1,II2
-               QUANTITY(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IND,IND2,Y_INDEX,Z_INDEX,0,PART_INDEX,VELO_INDEX,0,&
-                                                  PROP_INDEX,REAC_INDEX,MATL_INDEX)
-            ENDDO
-         ENDDO
-      ENDDO
-   ELSE
-      NTSL = NTSL + 1
-      DO I=II1,II2
-         DO J=JJ1,JJ2
-            KTS = K_AGL_SLICE(I,J,NTSL)
-            QUANTITY(I,J,K1) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,KTS,IND,IND2,Y_INDEX,Z_INDEX,0,PART_INDEX,VELO_INDEX,0,0,0,0)
-         ENDDO
-      ENDDO
-   ENDIF
-
-   ! Average the QUANTITY at cell nodes, faces, or edges, as appropriate
-
-   IF (PLOT3D) THEN
-      IQQ = IQ
-   ELSE
-      IQQ = 1
-   ENDIF
-
-   IF (AGL_TERRAIN_SLICE) THEN
-
-      I_INC = 1
-      J_INC = 1
-      IF (OUTPUT_QUANTITY(IND)%CELL_POSITION==CELL_FACE .AND. OUTPUT_QUANTITY(IND)%IOR==1) I_INC = 0
-      IF (OUTPUT_QUANTITY(IND)%CELL_POSITION==CELL_FACE .AND. OUTPUT_QUANTITY(IND)%IOR==2) J_INC = 0
-
-      DO J=J1,J2
-         DO I=I1,I2
-            QQ(I,J,K1,IQQ) = REAL(0.25_EB*(QUANTITY(I,J      ,K1)+QUANTITY(I+I_INC,J      ,K1)+&
-                                           QUANTITY(I,J+J_INC,K1)+QUANTITY(I+I_INC,J+J_INC,K1)),FB)
-         ENDDO
-      ENDDO
-
-   ELSEIF (CC_CELL_CENTERED) THEN
-
-      DO K=KK1,KK2
-         DO J=JJ1,JJ2
-            DO I=II1,II2
-               QQ(I,J,K,IQQ) = REAL(QUANTITY(I,J,K),FB)
-            ENDDO
-         ENDDO
-      ENDDO
-
-   ELSEIF (CC_INTERP2FACES) THEN
-
-      DO K=KK1,KK2
-         DO J=JJ1,JJ2
-            DO I=II1,II2
-            !xxx need to change the following code to use face centered interpolation
-            ! (perhaps copy some variant of node centered interpolation code above)
-               QQ(I,J,K,IQQ) = REAL(QUANTITY(I,J,K),FB)
-            ENDDO
-         ENDDO
-      ENDDO
-
-   ELSE  ! Node interpolated slice
-
-      DO K=K1,K2
-         DO J=J1,J2
-            DO I=I1,I2
-               SELECT CASE(OUTPUT_QUANTITY(IND)%CELL_POSITION)
-                  CASE(CELL_CENTER)
-                     QQ(I,J,K,IQQ) = REAL(CORNER_VALUE(QUANTITY,B,S,IND),FB)
-                  CASE(CELL_FACE)
-                     QQ(I,J,K,IQQ) = REAL(FACE_VALUE(),FB)
-                  CASE(CELL_EDGE)
-                     QQ(I,J,K,IQQ) = REAL(EDGE_VALUE(QUANTITY,S,IND),FB)
-               END SELECT
-            ENDDO
-         ENDDO
-      ENDDO
-
-   ENDIF
-
-   ! Dump out the slice file to a .sf file
-
-   IF (.NOT.PLOT3D) THEN
-      SL => SLICE(IQ)
-      IF (SL%SLICETYPE=='STRUCTURED') THEN ! write out slice file using original slice file format
-         STIME = REAL(T_BEGIN + (T-T_BEGIN)*TIME_SHRINK_FACTOR,FB)
-         OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
-         WRITE(LU_SLCF(IQ,NM)) STIME
-         IF (.NOT. SL%DEBUG) WRITE(LU_SLCF(IQ,NM)) (((QQ(I,J,K,1),I=I1,I2),J=J1,J2),K=K1,K2)
-         IF (SL%DEBUG) THEN
-             SLICE_MIN = STIME + REAL(IQ, FB)
-             SLICE_MAX = STIME + REAL(IQ, FB)
-             WRITE(LU_SLCF(IQ,NM)) (((SLICE_MAX  ,I=I1,I2),J=J1,J2),K=K1,K2)
-         ENDIF
-         CLOSE(LU_SLCF(IQ,NM))
-
-         IF (SL%RLE) THEN
-            IQ3 = IQ + 2*N_SLCF_MAX
-            OPEN(LU_SLCF(IQ3,NM),FILE=FN_SLCF(IQ3,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
-            NX = I2 + 1 - I1
-            NY = J2 + 1 - J1
-            NZ = K2 + 1 - K1
-            IF (NX*NY*NZ>0) THEN
-               ALLOCATE(QQ_PACK(NX*NY*NZ))
-
-               DO K = K1, K2
-                  KFACT = (K-K1)
-                  DO J = J1, J2
-                     JFACT = (J-J1)*NZ
-                     DO I = I1, I2
-                        IFACT = (I - I1)*NY*NZ
-                        QQ_PACK(1+IFACT+JFACT+KFACT) = QQ(I,J,K,1)
-                     ENDDO
-                  ENDDO
-               ENDDO
-
-               CALL SLICE_TO_RLEFILE(LU_SLCF(IQ3,NM), STIME, NX, NY, NZ, QQ_PACK, SL%RLE_MIN, SL%RLE_MAX)
-               DEALLOCATE(QQ_PACK)
-            ENDIF
-            CLOSE(LU_SLCF(IQ3,NM))
-         ENDIF
-
-         IF (.NOT.SL%DEBUG) THEN
-            IF (CC_CELL_CENTERED) THEN
-               SLICE_MIN = QQ(MIN(I1+1,I2),MIN(J1+1,J2),MIN(K1+1,K2),1)
-               SLICE_MAX = SLICE_MIN
-               DO K = MIN(K1+1,K2), K2
-                  DO J = MIN(J1+1,J2), J2
-                     DO I = MIN(I1+1,I2), I2
-                        SLICE_MIN = MIN(SLICE_MIN,QQ(I,J,K,1))
-                        SLICE_MAX = MAX(SLICE_MAX,QQ(I,J,K,1))
-                     ENDDO
-                  ENDDO
-               ENDDO
-            ELSE
-               SLICE_MIN = QQ(I1,J1,K1,1)
-               SLICE_MAX = SLICE_MIN
-               DO K = K1, K2
-                  DO J = J1, J2
-                     DO I = I1, I2
-                        SLICE_MIN = MIN(SLICE_MIN,QQ(I,J,K,1))
-                        SLICE_MAX = MAX(SLICE_MAX,QQ(I,J,K,1))
-                     ENDDO
-                  ENDDO
-               ENDDO
-            ENDIF
-         ENDIF
-
-         IQ2 = IQ + N_SLCF_MAX
-         CHANGE_BOUND = 0
-         IF (ABS(STIME-T_BEGIN)<TWENTY_EPSILON_EB) THEN
-           SLICE_MIN_BOUND = SLICE_MIN
-           SLICE_MAX_BOUND = SLICE_MAX
-           CHANGE_BOUND    = 1
-         ELSE
-            OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),ACTION='READ')
-            READ(LU_SLCF(IQ2,NM),FMT=*,IOSTAT=IERROR)T_BOUND, SLICE_MIN_BOUND, SLICE_MAX_BOUND
-            CLOSE(LU_SLCF(IQ2,NM))
-            IF (IERROR /= 0 .OR. SLICE_MIN < SLICE_MIN_BOUND) THEN
-              SLICE_MIN_BOUND = SLICE_MIN
-              CHANGE_BOUND = 1
-            ENDIF
-            IF (IERROR /= 0 .OR. SLICE_MAX > SLICE_MAX_BOUND) THEN
-              SLICE_MAX_BOUND = SLICE_MAX
-              CHANGE_BOUND = 1
-            ENDIF
-         ENDIF
-         IF (CHANGE_BOUND == 1) THEN
-            OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),FORM='FORMATTED',STATUS='REPLACE',DECIMAL=DECIMAL_SPECIFIER)
-            WRITE(LU_SLCF(IQ2,NM),'(ES13.6,1X,ES13.6,1X,ES13.6)') STIME, SLICE_MIN_BOUND, SLICE_MAX_BOUND
-            CLOSE(LU_SLCF(IQ2,NM))
-         ENDIF
-      ELSE
-         IQ2 = IQ + N_SLCF_MAX
-         STIME = REAL(T_BEGIN + (T-T_BEGIN)*TIME_SHRINK_FACTOR,FB)
-         ! write geometry for slice file
-         CHANGE_BOUND = 0
-         IF (ABS(STIME-T_BEGIN)<TWENTY_EPSILON_EB) THEN
-            ! geometry and data file at first time step
-            OPEN(LU_SLCF_GEOM(IQ,NM),FILE=FN_SLCF_GEOM(IQ,NM),FORM='UNFORMATTED',STATUS='REPLACE')
-            CALL DUMP_SLICE_GEOM(LU_SLCF_GEOM(IQ,NM),SL%SLICETYPE,1,STIME,I1,I2,J1,J2,K1,K2)
-            CLOSE(LU_SLCF_GEOM(IQ,NM))
-
-            OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='REPLACE')
-            CALL DUMP_SLICE_GEOM_DATA(LU_SLCF(IQ,NM),CC_INTERP2FACES,SL%CELL_CENTERED,SL%SLICETYPE, &
-                              1,STIME,I1,I2,J1,J2,K1,K2,DEBUG,&
-                              IND,IND2,Y_INDEX,Z_INDEX,PART_INDEX,VELO_INDEX,0,PROP_INDEX,REAC_INDEX,MATL_INDEX,T,DT,NM, &
-                              SLICE_MIN, SLICE_MAX)
-            SLICE_MIN_BOUND = SLICE_MIN
-            SLICE_MAX_BOUND = SLICE_MAX
-            CHANGE_BOUND = 1
-         ELSE
-            ! data file at subsequent time steps
-            OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
-            CALL DUMP_SLICE_GEOM_DATA(LU_SLCF(IQ,NM),CC_INTERP2FACES,SL%CELL_CENTERED,SL%SLICETYPE, &
-                              0,STIME,I1,I2,J1,J2,K1,K2,DEBUG,&
-                              IND,IND2,Y_INDEX,Z_INDEX,PART_INDEX,VELO_INDEX,0,PROP_INDEX,REAC_INDEX,MATL_INDEX,T,DT,NM, &
-                              SLICE_MIN, SLICE_MAX)
-            OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),ACTION='READ')
-            READ(LU_SLCF(IQ2,NM),FMT=*,IOSTAT=IERROR)T_BOUND, SLICE_MIN_BOUND, SLICE_MAX_BOUND
-            CLOSE(LU_SLCF(IQ2,NM))
-            IF (IERROR /= 0 .OR. SLICE_MIN < SLICE_MIN_BOUND) THEN
-              SLICE_MIN_BOUND = SLICE_MIN
-              CHANGE_BOUND = 1
-            ENDIF
-            IF (IERROR /= 0 .OR. SLICE_MAX > SLICE_MAX_BOUND) THEN
-              SLICE_MAX_BOUND = SLICE_MAX
-              CHANGE_BOUND = 1
-            ENDIF
-         ENDIF
-         IF (CHANGE_BOUND == 1) THEN
-            OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),FORM='FORMATTED',STATUS='REPLACE',DECIMAL=DECIMAL_SPECIFIER)
-            WRITE(LU_SLCF(IQ2,NM),'(ES13.6,1X,ES13.6,1X,ES13.6)') STIME, SLICE_MIN_BOUND, SLICE_MAX_BOUND
-            CLOSE(LU_SLCF(IQ2,NM))
-         ENDIF
-         CLOSE(LU_SLCF(IQ,NM))
-      ENDIF
-   ENDIF
+   CALL WRITE_SLCF_DATA
 
 ENDDO QUANTITY_LOOP
 
-! Write out the PLOT3D ``q'' file
+CALL WRITE_PL3D_DATA
+
+CONTAINS
+
+SUBROUTINE COMPUTE_SLCF_QUANTITY
+
+! Determine what cells need to be evaluated to form cell-corner averages
+
+II1 = I1
+II2 = I2+1
+JJ1 = J1
+JJ2 = J2+1
+KK1 = K1
+KK2 = K2+1
+
+SELECT CASE(OUTPUT_QUANTITY(IND)%CELL_POSITION)
+   CASE(CELL_FACE)
+      QUANTITY = 0._EB
+      IF (OUTPUT_QUANTITY(IND)%IOR==1) II2 = I2
+      IF (OUTPUT_QUANTITY(IND)%IOR==2) JJ2 = J2
+      IF (OUTPUT_QUANTITY(IND)%IOR==3) KK2 = K2
+   CASE(CELL_EDGE)
+      II2 = I2
+      JJ2 = J2
+      KK2 = K2
+END SELECT
+
+! Loop through the necessary cells, storing the desired output QUANTITY
+
+IF (.NOT.AGL_TERRAIN_SLICE) THEN
+   DO K=KK1,KK2
+      DO J=JJ1,JJ2
+         DO I=II1,II2
+            QUANTITY(I,J,K) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,K,IND,IND2,Y_INDEX,Z_INDEX,0,PART_INDEX,VELO_INDEX,0,&
+                                               PROP_INDEX,REAC_INDEX,MATL_INDEX)
+         ENDDO
+      ENDDO
+   ENDDO
+ELSE
+   NTSL = NTSL + 1
+   DO I=II1,II2
+      DO J=JJ1,JJ2
+         KTS = K_AGL_SLICE(I,J,NTSL)
+         QUANTITY(I,J,K1) = GAS_PHASE_OUTPUT(T,DT,NM,I,J,KTS,IND,IND2,Y_INDEX,Z_INDEX,0,PART_INDEX,VELO_INDEX,0,0,0,0)
+      ENDDO
+   ENDDO
+ENDIF
+
+! Average the QUANTITY at cell nodes, faces, or edges, as appropriate
 
 IF (PLOT3D) THEN
-   ZERO = 0._EB
-   WRITE(LU_PL3D(NM)) IBP1,JBP1,KBP1
-   WRITE(LU_PL3D(NM)) ZERO,ZERO,ZERO,ZERO
-   WRITE(LU_PL3D(NM)) ((((QQ(I,J,K,IQ),I=0,IBAR),J=0,JBAR),K=0,KBAR),IQ=1,5)
-   CLOSE(LU_PL3D(NM))
-   DO IQ = 1, 5
-      PLOT3D_MIN = QQ(0,0,0,IQ)
-      PLOT3D_MAX = PLOT3D_MIN
-      DO K = 0, KBAR
-         DO J = 0, JBAR
-            DO I = 0, IBAR
-              PLOT3D_MIN = MIN(PLOT3D_MIN,QQ(I,J,K,IQ))
-              PLOT3D_MAX = MAX(PLOT3D_MAX,QQ(I,J,K,IQ))
-            END DO
-         END DO
-      END DO
-      WRITE(LU_PL3D(NM+NMESHES),'(1X,E13.6,1X,E13.6)')PLOT3D_MIN,PLOT3D_MAX
-   END DO
-   PLOT3D_MIN = 10.0_FB**30
-   PLOT3D_MAX = -PLOT3D_MIN
+   IQQ = IQ
+ELSE
+   IQQ = 1
+ENDIF
+
+IF (AGL_TERRAIN_SLICE) THEN
+
+   I_INC = 1
+   J_INC = 1
+   IF (OUTPUT_QUANTITY(IND)%CELL_POSITION==CELL_FACE .AND. OUTPUT_QUANTITY(IND)%IOR==1) I_INC = 0
+   IF (OUTPUT_QUANTITY(IND)%CELL_POSITION==CELL_FACE .AND. OUTPUT_QUANTITY(IND)%IOR==2) J_INC = 0
+
+   DO J=J1,J2
+      DO I=I1,I2
+         QQ(I,J,K1,IQQ) = REAL(0.25_EB*(QUANTITY(I,J      ,K1)+QUANTITY(I+I_INC,J      ,K1)+&
+                                        QUANTITY(I,J+J_INC,K1)+QUANTITY(I+I_INC,J+J_INC,K1)),FB)
+      ENDDO
+   ENDDO
+
+ELSEIF (CC_CELL_CENTERED) THEN
+
+   DO K=KK1,KK2
+      DO J=JJ1,JJ2
+         DO I=II1,II2
+            QQ(I,J,K,IQQ) = REAL(QUANTITY(I,J,K),FB)
+         ENDDO
+      ENDDO
+   ENDDO
+
+ELSEIF (CC_INTERP2FACES) THEN
+
+   DO K=KK1,KK2
+      DO J=JJ1,JJ2
+         DO I=II1,II2
+         !xxx need to change the following code to use face centered interpolation
+         ! (perhaps copy some variant of node centered interpolation code above)
+            QQ(I,J,K,IQQ) = REAL(QUANTITY(I,J,K),FB)
+         ENDDO
+      ENDDO
+   ENDDO
+
+ELSE  ! Node interpolated slice
+
+   DO K=K1,K2
+      DO J=J1,J2
+         DO I=I1,I2
+            SELECT CASE(OUTPUT_QUANTITY(IND)%CELL_POSITION)
+               CASE(CELL_CENTER)
+                  QQ(I,J,K,IQQ) = REAL(CORNER_VALUE(QUANTITY,B,S,IND),FB)
+               CASE(CELL_FACE)
+                  QQ(I,J,K,IQQ) = REAL(FACE_VALUE(),FB)
+               CASE(CELL_EDGE)
+                  QQ(I,J,K,IQQ) = REAL(EDGE_VALUE(QUANTITY,S,IND),FB)
+            END SELECT
+         ENDDO
+      ENDDO
+   ENDDO
+
+ENDIF
+
+END SUBROUTINE COMPUTE_SLCF_QUANTITY
+
+
+SUBROUTINE WRITE_SLCF_DATA
+
+IF (.NOT.PLOT3D) THEN
+   SL => SLICE(IQ)
+   IF (SL%SLICETYPE=='STRUCTURED') THEN ! write out slice file using original slice file format
+      STIME = REAL(T_BEGIN + (T-T_BEGIN)*TIME_SHRINK_FACTOR,FB)
+      OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
+      WRITE(LU_SLCF(IQ,NM)) STIME
+      IF (.NOT. SL%DEBUG) WRITE(LU_SLCF(IQ,NM)) (((QQ(I,J,K,1),I=I1,I2),J=J1,J2),K=K1,K2)
+      IF (SL%DEBUG) THEN
+          SLICE_MIN = STIME + REAL(IQ, FB)
+          SLICE_MAX = STIME + REAL(IQ, FB)
+          WRITE(LU_SLCF(IQ,NM)) (((SLICE_MAX  ,I=I1,I2),J=J1,J2),K=K1,K2)
+      ENDIF
+      CLOSE(LU_SLCF(IQ,NM))
+
+      IF (SL%RLE) THEN
+         IQ3 = IQ + 2*N_SLCF_MAX
+         OPEN(LU_SLCF(IQ3,NM),FILE=FN_SLCF(IQ3,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
+         NX = I2 + 1 - I1
+         NY = J2 + 1 - J1
+         NZ = K2 + 1 - K1
+         IF (NX*NY*NZ>0) THEN
+            ALLOCATE(QQ_PACK(NX*NY*NZ))
+
+            DO K = K1, K2
+               KFACT = (K-K1)
+               DO J = J1, J2
+                  JFACT = (J-J1)*NZ
+                  DO I = I1, I2
+                     IFACT = (I - I1)*NY*NZ
+                     QQ_PACK(1+IFACT+JFACT+KFACT) = QQ(I,J,K,1)
+                  ENDDO
+               ENDDO
+            ENDDO
+
+            CALL SLICE_TO_RLEFILE(LU_SLCF(IQ3,NM), STIME, NX, NY, NZ, QQ_PACK, SL%RLE_MIN, SL%RLE_MAX)
+            DEALLOCATE(QQ_PACK)
+         ENDIF
+         CLOSE(LU_SLCF(IQ3,NM))
+      ENDIF
+
+      IF (.NOT.SL%DEBUG) THEN
+         IF (CC_CELL_CENTERED) THEN
+            SLICE_MIN = QQ(MIN(I1+1,I2),MIN(J1+1,J2),MIN(K1+1,K2),1)
+            SLICE_MAX = SLICE_MIN
+            DO K = MIN(K1+1,K2), K2
+               DO J = MIN(J1+1,J2), J2
+                  DO I = MIN(I1+1,I2), I2
+                     SLICE_MIN = MIN(SLICE_MIN,QQ(I,J,K,1))
+                     SLICE_MAX = MAX(SLICE_MAX,QQ(I,J,K,1))
+                  ENDDO
+               ENDDO
+            ENDDO
+         ELSE
+            SLICE_MIN = QQ(I1,J1,K1,1)
+            SLICE_MAX = SLICE_MIN
+            DO K = K1, K2
+               DO J = J1, J2
+                  DO I = I1, I2
+                     SLICE_MIN = MIN(SLICE_MIN,QQ(I,J,K,1))
+                     SLICE_MAX = MAX(SLICE_MAX,QQ(I,J,K,1))
+                  ENDDO
+               ENDDO
+            ENDDO
+         ENDIF
+      ENDIF
+
+      IQ2 = IQ + N_SLCF_MAX
+      CHANGE_BOUND = 0
+      IF (ABS(STIME-T_BEGIN)<TWENTY_EPSILON_EB) THEN
+        SLICE_MIN_BOUND = SLICE_MIN
+        SLICE_MAX_BOUND = SLICE_MAX
+        CHANGE_BOUND    = 1
+      ELSE
+         OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),ACTION='READ')
+         READ(LU_SLCF(IQ2,NM),FMT=*,IOSTAT=IERROR)T_BOUND, SLICE_MIN_BOUND, SLICE_MAX_BOUND
+         CLOSE(LU_SLCF(IQ2,NM))
+         IF (IERROR /= 0 .OR. SLICE_MIN < SLICE_MIN_BOUND) THEN
+           SLICE_MIN_BOUND = SLICE_MIN
+           CHANGE_BOUND = 1
+         ENDIF
+         IF (IERROR /= 0 .OR. SLICE_MAX > SLICE_MAX_BOUND) THEN
+           SLICE_MAX_BOUND = SLICE_MAX
+           CHANGE_BOUND = 1
+         ENDIF
+      ENDIF
+      IF (CHANGE_BOUND == 1) THEN
+         OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),FORM='FORMATTED',STATUS='REPLACE',DECIMAL=DECIMAL_SPECIFIER)
+         WRITE(LU_SLCF(IQ2,NM),'(ES13.6,1X,ES13.6,1X,ES13.6)') STIME, SLICE_MIN_BOUND, SLICE_MAX_BOUND
+         CLOSE(LU_SLCF(IQ2,NM))
+      ENDIF
+   ELSE
+      IQ2 = IQ + N_SLCF_MAX
+      STIME = REAL(T_BEGIN + (T-T_BEGIN)*TIME_SHRINK_FACTOR,FB)
+      ! write geometry for slice file
+      CHANGE_BOUND = 0
+      IF (ABS(STIME-T_BEGIN)<TWENTY_EPSILON_EB) THEN
+         ! geometry and data file at first time step
+         OPEN(LU_SLCF_GEOM(IQ,NM),FILE=FN_SLCF_GEOM(IQ,NM),FORM='UNFORMATTED',STATUS='REPLACE')
+         CALL DUMP_SLICE_GEOM(LU_SLCF_GEOM(IQ,NM),SL%SLICETYPE,1,STIME,I1,I2,J1,J2,K1,K2)
+         CLOSE(LU_SLCF_GEOM(IQ,NM))
+
+         OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='REPLACE')
+         CALL DUMP_SLICE_GEOM_DATA(LU_SLCF(IQ,NM),CC_INTERP2FACES,SL%CELL_CENTERED,SL%SLICETYPE, &
+                           1,STIME,I1,I2,J1,J2,K1,K2,DEBUG,&
+                           IND,IND2,Y_INDEX,Z_INDEX,PART_INDEX,VELO_INDEX,0,PROP_INDEX,REAC_INDEX,MATL_INDEX,T,DT,NM, &
+                           SLICE_MIN, SLICE_MAX)
+         SLICE_MIN_BOUND = SLICE_MIN
+         SLICE_MAX_BOUND = SLICE_MAX
+         CHANGE_BOUND = 1
+      ELSE
+         ! data file at subsequent time steps
+         OPEN(LU_SLCF(IQ,NM),FILE=FN_SLCF(IQ,NM),FORM='UNFORMATTED',STATUS='OLD',POSITION='APPEND')
+         CALL DUMP_SLICE_GEOM_DATA(LU_SLCF(IQ,NM),CC_INTERP2FACES,SL%CELL_CENTERED,SL%SLICETYPE, &
+                           0,STIME,I1,I2,J1,J2,K1,K2,DEBUG,&
+                           IND,IND2,Y_INDEX,Z_INDEX,PART_INDEX,VELO_INDEX,0,PROP_INDEX,REAC_INDEX,MATL_INDEX,T,DT,NM, &
+                           SLICE_MIN, SLICE_MAX)
+         OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),ACTION='READ')
+         READ(LU_SLCF(IQ2,NM),FMT=*,IOSTAT=IERROR)T_BOUND, SLICE_MIN_BOUND, SLICE_MAX_BOUND
+         CLOSE(LU_SLCF(IQ2,NM))
+         IF (IERROR /= 0 .OR. SLICE_MIN < SLICE_MIN_BOUND) THEN
+           SLICE_MIN_BOUND = SLICE_MIN
+           CHANGE_BOUND = 1
+         ENDIF
+         IF (IERROR /= 0 .OR. SLICE_MAX > SLICE_MAX_BOUND) THEN
+           SLICE_MAX_BOUND = SLICE_MAX
+           CHANGE_BOUND = 1
+         ENDIF
+      ENDIF
+      IF (CHANGE_BOUND == 1) THEN
+         OPEN(LU_SLCF(IQ2,NM),FILE=FN_SLCF(IQ2,NM),FORM='FORMATTED',STATUS='REPLACE',DECIMAL=DECIMAL_SPECIFIER)
+         WRITE(LU_SLCF(IQ2,NM),'(ES13.6,1X,ES13.6,1X,ES13.6)') STIME, SLICE_MIN_BOUND, SLICE_MAX_BOUND
+         CLOSE(LU_SLCF(IQ2,NM))
+      ENDIF
+      CLOSE(LU_SLCF(IQ,NM))
+   ENDIF
+ENDIF
+
+END SUBROUTINE WRITE_SLCF_DATA
+
+
+SUBROUTINE WRITE_PL3D_DATA
+
+IF (PLOT3D) THEN
+ZERO = 0._EB
+WRITE(LU_PL3D(NM)) IBP1,JBP1,KBP1
+WRITE(LU_PL3D(NM)) ZERO,ZERO,ZERO,ZERO
+WRITE(LU_PL3D(NM)) ((((QQ(I,J,K,IQ),I=0,IBAR),J=0,JBAR),K=0,KBAR),IQ=1,5)
+CLOSE(LU_PL3D(NM))
+DO IQ = 1, 5
+   PLOT3D_MIN = QQ(0,0,0,IQ)
+   PLOT3D_MAX = PLOT3D_MIN
    DO K = 0, KBAR
       DO J = 0, JBAR
          DO I = 0, IBAR
-           UVW_MAX = MAX(ABS(QQ(I,J,K,2)), ABS(QQ(I,J,K,3)), ABS(QQ(I,J,K,4)), 1.0_FB)
-           UVEL = QQ(I,J,K,2)/UVW_MAX
-           VVEL = QQ(I,J,K,3)/UVW_MAX
-           WVEL = QQ(I,J,K,4)/UVW_MAX
-           VEL = UVW_MAX*SQRT(UVEL*UVEL + VVEL*VVEL + WVEL*WVEL)
-           PLOT3D_MIN = MIN(PLOT3D_MIN,VEL)
-           PLOT3D_MAX = MAX(PLOT3D_MAX,VEL)
+           PLOT3D_MIN = MIN(PLOT3D_MIN,QQ(I,J,K,IQ))
+           PLOT3D_MAX = MAX(PLOT3D_MAX,QQ(I,J,K,IQ))
          END DO
       END DO
    END DO
    WRITE(LU_PL3D(NM+NMESHES),'(1X,E13.6,1X,E13.6)')PLOT3D_MIN,PLOT3D_MAX
-   CLOSE(LU_PL3D(NM+NMESHES))
+END DO
+PLOT3D_MIN = 10.0_FB**30
+PLOT3D_MAX = -PLOT3D_MIN
+DO K = 0, KBAR
+   DO J = 0, JBAR
+      DO I = 0, IBAR
+        UVW_MAX = MAX(ABS(QQ(I,J,K,2)), ABS(QQ(I,J,K,3)), ABS(QQ(I,J,K,4)), 1.0_FB)
+        UVEL = QQ(I,J,K,2)/UVW_MAX
+        VVEL = QQ(I,J,K,3)/UVW_MAX
+        WVEL = QQ(I,J,K,4)/UVW_MAX
+        VEL = UVW_MAX*SQRT(UVEL*UVEL + VVEL*VVEL + WVEL*WVEL)
+        PLOT3D_MIN = MIN(PLOT3D_MIN,VEL)
+        PLOT3D_MAX = MAX(PLOT3D_MAX,VEL)
+      END DO
+   END DO
+END DO
+WRITE(LU_PL3D(NM+NMESHES),'(1X,E13.6,1X,E13.6)')PLOT3D_MIN,PLOT3D_MAX
+CLOSE(LU_PL3D(NM+NMESHES))
 ENDIF
 
-CONTAINS
+END SUBROUTINE WRITE_PL3D_DATA
+
+
 
 
 REAL(EB) FUNCTION CORNER_VALUE(A,B,S,INDX)
@@ -10609,114 +10723,8 @@ FILE_LOOP: DO NF=1,N_BNDF
    NC = 0
 
    PATCH_LOOP: DO IP=1,N_PATCH
-
-      PA => PATCH(IP)
-
-      PP  = REAL(OUTPUT_QUANTITY(-IND)%AMBIENT_VALUE,FB)
-      PPN = 0._FB
-      IBK = 0
-
-      ! Adjust PATCH indices depending on orientation
-
-      SELECT CASE(ABS(PA%IOR))
-         CASE(1) ; L1=PA%JG1 ; L2=PA%JG2 ; N1=PA%KG1 ; N2=PA%KG2
-         CASE(2) ; L1=PA%IG1 ; L2=PA%IG2 ; N1=PA%KG1 ; N2=PA%KG2
-         CASE(3) ; L1=PA%IG1 ; L2=PA%IG2 ; N1=PA%JG1 ; N2=PA%JG2
-      END SELECT
-
-      ! Evaluate the given boundary quantity at each cell of the current PATCH
-
-      DO K=PA%KG1,PA%KG2
-         DO J=PA%JG1,PA%JG2
-            DO I=PA%IG1,PA%IG2
-               IC = CELL_INDEX(I,J,K)
-               IW = CELL(IC)%WALL_INDEX(-PA%IOR) ; IF (IW==0) CYCLE
-               SELECT CASE(ABS(PA%IOR))
-                  CASE(1) ; L=J ; N=K
-                  CASE(2) ; L=I ; N=K
-                  CASE(3) ; L=I ; N=J
-               END SELECT
-               IF (WALL(IW)%BOUNDARY_TYPE/=NULL_BOUNDARY .AND. &
-                   WALL(IW)%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY .AND. .NOT.CELL(IC)%SOLID) THEN
-                  IBK(L,N) = 1
-                  PP(L,N)  = REAL(SOLID_PHASE_OUTPUT(IND,T,NM,BF%Y_INDEX,BF%Z_INDEX,BF%PART_INDEX,OPT_WALL_INDEX=IW,&
-                                                     OPT_BNDF_INDEX=NF),FB)
-               ENDIF
-            ENDDO
-         ENDDO
-      ENDDO
-
-      ! Integrate the boundary quantity in time
-
-      IF (BNDF_COUNTER(NM)>0 .AND. BF%TIME_INTEGRAL_INDEX>0) THEN
-         DO N=N1,N2
-            DO L=L1,L2
-               NC = NC + 1
-               BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX) = BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX) + &
-                  PP(L,N)*REAL(BNDF_CLOCK(BNDF_COUNTER(NM))-BNDF_CLOCK(BNDF_COUNTER(NM)-1),FB)
-               PP(L,N) = BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX)
-            ENDDO
-         ENDDO
-      ENDIF
-
-      ! Interpolate the boundary quantity PP at cell corners, PPN
-
-      IF (.NOT.BF%CELL_CENTERED) THEN
-
-         ! Dont include undetermined values in interpolation for FIRE ARRIVAL TIME
-         IF (OUTPUT_QUANTITY(BF%INDEX)%NAME=='FIRE ARRIVAL TIME') THEN
-            WHERE(PP>9.E5_FB) IBK=0
-         ENDIF
-
-         DO N=N1-1,N2
-            DO L=L1-1,L2
-               IF (IBK(L,N)==1)     PPN(L,N) = PPN(L,N) + PP(L,N)
-               IF (IBK(L+1,N)==1)   PPN(L,N) = PPN(L,N) + PP(L+1,N)
-               IF (IBK(L,N+1)==1)   PPN(L,N) = PPN(L,N) + PP(L,N+1)
-               IF (IBK(L+1,N+1)==1) PPN(L,N) = PPN(L,N) + PP(L+1,N+1)
-               ISUM = IBK(L,N)+IBK(L,N+1)+IBK(L+1,N)+IBK(L+1,N+1)
-               IF (ISUM>0) THEN
-                  PPN(L,N) = PPN(L,N)/REAL(ISUM,FB)
-               ELSE
-                  PPN(L,N) = REAL(SOLID_PHASE_OUTPUT(IND,T,NM,BF%Y_INDEX,BF%Z_INDEX,BF%PART_INDEX,OPT_WALL_INDEX=0,&
-                                                     OPT_BNDF_INDEX=NF),FB)
-               ENDIF
-            ENDDO
-         ENDDO
-         IF (BF%DEBUG .EQ. 0) THEN
-            WRITE(LU_BNDF(NF,NM)) ((PPN(L,N),L=L1-1,L2),N=N1-1,N2)
-            DO L = L1-1, L2
-            DO N = N1-1, N2
-               BOUND_MIN = MIN(PPN(L,N),BOUND_MIN)
-               BOUND_MAX = MAX(PPN(L,N),BOUND_MAX)
-            ENDDO
-            ENDDO
-         ELSE
-            NBF_DEBUG = (2+L2-L1)*(2+N2-N1)
-            BOUND_MIN =  STIME + REAL(NF, FB)
-            BOUND_MAX =  STIME + REAL(NF, FB)
-            WRITE(LU_BNDF(NF,NM)) (BOUND_MAX,L=0,NBF_DEBUG-1)
-         ENDIF
-
-      ELSE
-         IF (BF%DEBUG .EQ. 0) THEN
-            WRITE(LU_BNDF(NF,NM)) ((PP(L,N),L=L1,L2+1),N=N1,N2+1)
-            DO L = L1, L2+1
-            DO N = N1, N2+1
-               BOUND_MIN = MIN(PP(L,N),BOUND_MIN)
-               BOUND_MAX = MAX(PP(L,N),BOUND_MAX)
-            ENDDO
-            ENDDO
-         ELSE
-            NBF_DEBUG = (2+L2-L1)*(2+N2-N1)
-            BF_FACTOR = 0.0_FB
-            IF ( NBF_DEBUG .GT. 1 ) BF_FACTOR = 2.0_FB*STIME/REAL(NBF_DEBUG-1,FB)
-            BOUND_MIN =  STIME + REAL(NF, FB)
-            BOUND_MAX =  STIME + REAL(NF, FB)
-            WRITE(LU_BNDF(NF,NM)) (BOUND_MAX,L=0,NBF_DEBUG-1)
-         ENDIF
-      ENDIF
-
+      CALL COMPUTE_BNDF_PATCH
+      CALL WRITE_BNDF_PATCH
    ENDDO PATCH_LOOP
 
    IF (OUTPUT_QUANTITY(BF%INDEX)%NAME=='FIRE ARRIVAL TIME') &
@@ -10798,6 +10806,127 @@ ENDIF
 
 FROM_BNDF = .FALSE.
 
+CONTAINS
+
+SUBROUTINE COMPUTE_BNDF_PATCH
+
+PA => PATCH(IP)
+
+PP  = REAL(OUTPUT_QUANTITY(-IND)%AMBIENT_VALUE,FB)
+PPN = 0._FB
+IBK = 0
+
+! Adjust PATCH indices depending on orientation
+
+SELECT CASE(ABS(PA%IOR))
+   CASE(1) ; L1=PA%JG1 ; L2=PA%JG2 ; N1=PA%KG1 ; N2=PA%KG2
+   CASE(2) ; L1=PA%IG1 ; L2=PA%IG2 ; N1=PA%KG1 ; N2=PA%KG2
+   CASE(3) ; L1=PA%IG1 ; L2=PA%IG2 ; N1=PA%JG1 ; N2=PA%JG2
+END SELECT
+
+! Evaluate the given boundary quantity at each cell of the current PATCH
+
+DO K=PA%KG1,PA%KG2
+   DO J=PA%JG1,PA%JG2
+      DO I=PA%IG1,PA%IG2
+         IC = CELL_INDEX(I,J,K)
+         IW = CELL(IC)%WALL_INDEX(-PA%IOR) ; IF (IW==0) CYCLE
+         SELECT CASE(ABS(PA%IOR))
+            CASE(1) ; L=J ; N=K
+            CASE(2) ; L=I ; N=K
+            CASE(3) ; L=I ; N=J
+         END SELECT
+         IF (WALL(IW)%BOUNDARY_TYPE/=NULL_BOUNDARY .AND. &
+             WALL(IW)%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY .AND. .NOT.CELL(IC)%SOLID) THEN
+            IBK(L,N) = 1
+            PP(L,N)  = REAL(SOLID_PHASE_OUTPUT(IND,T,NM,BF%Y_INDEX,BF%Z_INDEX,BF%PART_INDEX,OPT_WALL_INDEX=IW,&
+                                               OPT_BNDF_INDEX=NF),FB)
+         ENDIF
+      ENDDO
+   ENDDO
+ENDDO
+
+! Integrate the boundary quantity in time
+
+IF (BNDF_COUNTER(NM)>0 .AND. BF%TIME_INTEGRAL_INDEX>0) THEN
+   DO N=N1,N2
+      DO L=L1,L2
+         NC = NC + 1
+         BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX) = BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX) + &
+            PP(L,N)*REAL(BNDF_CLOCK(BNDF_COUNTER(NM))-BNDF_CLOCK(BNDF_COUNTER(NM)-1),FB)
+         PP(L,N) = BNDF_TIME_INTEGRAL(NC,BF%TIME_INTEGRAL_INDEX)
+      ENDDO
+   ENDDO
+ENDIF
+
+! Interpolate the boundary quantity PP at cell corners, PPN
+
+IF (.NOT.BF%CELL_CENTERED) THEN
+
+   ! Dont include undetermined values in interpolation for FIRE ARRIVAL TIME
+   IF (OUTPUT_QUANTITY(BF%INDEX)%NAME=='FIRE ARRIVAL TIME') THEN
+      WHERE(PP>9.E5_FB) IBK=0
+   ENDIF
+
+   DO N=N1-1,N2
+      DO L=L1-1,L2
+         IF (IBK(L,N)==1)     PPN(L,N) = PPN(L,N) + PP(L,N)
+         IF (IBK(L+1,N)==1)   PPN(L,N) = PPN(L,N) + PP(L+1,N)
+         IF (IBK(L,N+1)==1)   PPN(L,N) = PPN(L,N) + PP(L,N+1)
+         IF (IBK(L+1,N+1)==1) PPN(L,N) = PPN(L,N) + PP(L+1,N+1)
+         ISUM = IBK(L,N)+IBK(L,N+1)+IBK(L+1,N)+IBK(L+1,N+1)
+         IF (ISUM>0) THEN
+            PPN(L,N) = PPN(L,N)/REAL(ISUM,FB)
+         ELSE
+            PPN(L,N) = REAL(SOLID_PHASE_OUTPUT(IND,T,NM,BF%Y_INDEX,BF%Z_INDEX,BF%PART_INDEX,OPT_WALL_INDEX=0,&
+                                               OPT_BNDF_INDEX=NF),FB)
+         ENDIF
+      ENDDO
+   ENDDO
+
+ENDIF
+
+END SUBROUTINE COMPUTE_BNDF_PATCH
+
+
+SUBROUTINE WRITE_BNDF_PATCH
+
+IF (.NOT.BF%CELL_CENTERED) THEN
+   IF (BF%DEBUG .EQ. 0) THEN
+      WRITE(LU_BNDF(NF,NM)) ((PPN(L,N),L=L1-1,L2),N=N1-1,N2)
+      DO L = L1-1, L2
+      DO N = N1-1, N2
+         BOUND_MIN = MIN(PPN(L,N),BOUND_MIN)
+         BOUND_MAX = MAX(PPN(L,N),BOUND_MAX)
+      ENDDO
+      ENDDO
+   ELSE
+      NBF_DEBUG = (2+L2-L1)*(2+N2-N1)
+      BOUND_MIN =  STIME + REAL(NF, FB)
+      BOUND_MAX =  STIME + REAL(NF, FB)
+      WRITE(LU_BNDF(NF,NM)) (BOUND_MAX,L=0,NBF_DEBUG-1)
+   ENDIF
+ELSE
+   IF (BF%DEBUG .EQ. 0) THEN
+      WRITE(LU_BNDF(NF,NM)) ((PP(L,N),L=L1,L2+1),N=N1,N2+1)
+      DO L = L1, L2+1
+      DO N = N1, N2+1
+         BOUND_MIN = MIN(PP(L,N),BOUND_MIN)
+         BOUND_MAX = MAX(PP(L,N),BOUND_MAX)
+      ENDDO
+      ENDDO
+   ELSE
+      NBF_DEBUG = (2+L2-L1)*(2+N2-N1)
+      BF_FACTOR = 0.0_FB
+      IF ( NBF_DEBUG .GT. 1 ) BF_FACTOR = 2.0_FB*STIME/REAL(NBF_DEBUG-1,FB)
+      BOUND_MIN =  STIME + REAL(NF, FB)
+      BOUND_MAX =  STIME + REAL(NF, FB)
+      WRITE(LU_BNDF(NF,NM)) (BOUND_MAX,L=0,NBF_DEBUG-1)
+   ENDIF
+ENDIF
+
+END SUBROUTINE WRITE_BNDF_PATCH
+
 END SUBROUTINE DUMP_BNDF
 
 
@@ -10822,6 +10951,73 @@ ELSE
 ENDIF
 
 END SUBROUTINE DUMP_GEOM
+
+
+!> \brief Close all persistently-open per-mesh output files
+!> \details Called during finalization to cleanly close files that were opened in INITIALIZE_MESH_DUMPS
+
+SUBROUTINE CLOSE_ALL_MESH_OUTPUT_FILES
+
+USE OUTPUT_DATA, ONLY: N_BNDF,N_ISOF,N_SMOKE3D,N_SLCF_MAX
+INTEGER :: NM,N
+
+DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+
+   ! Close slice files
+   DO N=1,MESHES(NM)%N_SLCF
+      INQUIRE(UNIT=LU_SLCF(N,NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_SLCF(N,NM))
+      INQUIRE(UNIT=LU_SLCF(N+N_SLCF_MAX,NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_SLCF(N+N_SLCF_MAX,NM))
+      INQUIRE(UNIT=LU_SLCF(N+2*N_SLCF_MAX,NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_SLCF(N+2*N_SLCF_MAX,NM))
+   ENDDO
+
+   ! Close boundary files
+   DO N=1,N_BNDF
+      INQUIRE(UNIT=LU_BNDF(N,NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_BNDF(N,NM))
+      INQUIRE(UNIT=LU_BNDF(N+N_BNDF,NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_BNDF(N+N_BNDF,NM))
+      IF (CC_IBM) THEN
+         INQUIRE(UNIT=LU_BNDG(N,NM),OPENED=OPN)
+         IF (OPN) CLOSE(LU_BNDG(N,NM))
+         INQUIRE(UNIT=LU_BNDG(N+N_BNDF,NM),OPENED=OPN)
+         IF (OPN) CLOSE(LU_BNDG(N+N_BNDF,NM))
+      ENDIF
+   ENDDO
+
+   ! Close isosurface files
+   DO N=1,N_ISOF
+      INQUIRE(UNIT=ABS(LU_ISOF(N,NM)),OPENED=OPN)
+      IF (OPN) CLOSE(ABS(LU_ISOF(N,NM)))
+      INQUIRE(UNIT=ABS(LU_ISOF2(N,NM)),OPENED=OPN)
+      IF (OPN) CLOSE(ABS(LU_ISOF2(N,NM)))
+   ENDDO
+
+   ! Close particle files
+   IF (PARTICLE_FILE) THEN
+      INQUIRE(UNIT=LU_PART(NM),OPENED=OPN)
+      IF (OPN) CLOSE(LU_PART(NM))
+      INQUIRE(UNIT=LU_PART(NM+NMESHES),OPENED=OPN)
+      IF (OPN) CLOSE(LU_PART(NM+NMESHES))
+   ENDIF
+
+   ! Close smoke3d files
+   IF (SMOKE3D) THEN
+      DO N=1,N_SMOKE3D
+         INQUIRE(UNIT=LU_SMOKE3D(N,NM),OPENED=OPN)
+         IF (OPN) CLOSE(LU_SMOKE3D(N,NM))
+         INQUIRE(UNIT=LU_SMOKE3D(N+N_SMOKE3D,NM),OPENED=OPN)
+         IF (OPN) CLOSE(LU_SMOKE3D(N+N_SMOKE3D,NM))
+         INQUIRE(UNIT=LU_SMOKE3D(N+2*N_SMOKE3D,NM),OPENED=OPN)
+         IF (OPN) CLOSE(LU_SMOKE3D(N+2*N_SMOKE3D,NM))
+      ENDDO
+   ENDIF
+
+ENDDO
+
+END SUBROUTINE CLOSE_ALL_MESH_OUTPUT_FILES
 
 
 !> \brief Periodically purge output files
