@@ -9,12 +9,14 @@
 
 /// Build the Predictor Fork Branch A sub-graph: VFLUX -> PARTICLE_MOMENTUM.
 /// Only used for non-CC_IBM.
-inline auto buildPredForkVFluxSubgraph(int nmeshes) {
+inline auto buildPredForkVFluxSubgraph(int nmeshes,
+                                       size_t divSetupThreads,
+                                       size_t partMomThreads) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
         "PredFork-BranchA-VFlux+PMom");
 
-    auto kernel = std::make_shared<DivSetupKernelTask>(static_cast<size_t>(nmeshes));
-    auto partMom = std::make_shared<PredPartMomKernelTask>(static_cast<size_t>(nmeshes));
+    auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);
+    auto partMom = std::make_shared<PredPartMomKernelTask>(partMomThreads);
 
     subgraph->inputs(kernel);
     subgraph->edges(kernel, partMom);

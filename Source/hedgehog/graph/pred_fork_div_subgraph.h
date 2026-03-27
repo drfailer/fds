@@ -9,12 +9,14 @@
 
 /// Build the Predictor Fork Branch B sub-graph: WALL_BC -> DIV_P1_early.
 /// Only used for non-CC_IBM.
-inline auto buildPredForkDivSubgraph(int nmeshes) {
+inline auto buildPredForkDivSubgraph(int nmeshes,
+                                      size_t wallBCThreads,
+                                      size_t divP1EarlyThreads) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
         "PredFork-BranchB-WallBC+DivEarly");
 
-    auto wallBC = buildWallBCSubgraph(nmeshes, static_cast<size_t>(nmeshes));
-    auto divEarly = std::make_shared<DivP1EarlyTask>(static_cast<size_t>(nmeshes));
+    auto wallBC = buildWallBCSubgraph(nmeshes, wallBCThreads);
+    auto divEarly = std::make_shared<DivP1EarlyTask>(divP1EarlyThreads);
 
     subgraph->inputs(wallBC);
     subgraph->edges(wallBC, divEarly);

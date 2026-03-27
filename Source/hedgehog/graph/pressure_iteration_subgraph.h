@@ -13,6 +13,7 @@
 #include "../state/pressure_convergence_state.h"
 #include "../state/barrier_state.h"
 #include "../tool/mesh_dependency_graph.h"
+#include "../tool/thread_budget.h"
 #include "mesh_exchange_graph.h"
 
 /// Build the pressure iteration sub-graph.
@@ -33,15 +34,13 @@
 /// barrier BEFORE entering this subgraph.
 ///
 /// @param nmeshes Number of local meshes
-/// @param kernelThreads Number of threads for parallel kernel tasks
-/// @param exchangeThreads Number of threads for the flux exchange task
+/// @param budget Thread budget for task thread allocation
 /// @param predictor True for predictor phase
 /// @param depGraph Pre-built mesh dependency graph
 /// @param commService Pointer to the MPI comm service (unused, kept for API compat)
 /// @param presFlag Pressure solver flag (FFT_FLAG=0, ULMAT_FLAG=3)
 inline auto buildPressureIterationSubgraph(int nmeshes,
-                                            size_t kernelThreads,
-                                            size_t exchangeThreads,
+                                            const ThreadBudget &budget,
                                             bool predictor,
                                             std::shared_ptr<MeshDependencyGraph> depGraph,
                                             [[maybe_unused]] void *commService,
@@ -49,17 +48,17 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
     using SubGraphType = hh::Graph<2, MeshData, TerminationData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PressureIteration");
 
-    // --- Parallel kernel tasks ---
-    auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(kernelThreads);
-    auto solveKernel = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
-    auto velErrorTask = std::make_shared<VelocityErrorTask>(kernelThreads);
+    // --- Parallel kernel tasks (threads from budget) ---
+    auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(budget.baroclinic);
+    auto solveKernel = std::make_shared<PressureSolveKernelTask>(budget.pressureSolve, presFlag);
+    auto velErrorTask = std::make_shared<VelocityErrorTask>(budget.velError);
 
     // --- Dependency-aware parallel exchanges (encapsulated cycles) ---
     auto preSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
-        depGraph, std::make_shared<FluxExchangeTask>(exchangeThreads),
+        depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
         "PreSolveExchange");
     auto postSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
-        depGraph, std::make_shared<FluxExchangeTask>(exchangeThreads),
+        depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
         "PostSolveExchange");
 
     // --- Convergence barrier (convergence check only) ---

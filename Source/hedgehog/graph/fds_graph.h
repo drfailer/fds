@@ -9,6 +9,7 @@
 #include "../data/termination_data.h"
 #include "../state/timestep_state.h"
 #include "../tool/mesh_dependency_graph.h"
+#include "../tool/thread_budget.h"
 #include "predictor_subgraph.h"
 #include "corrector_subgraph.h"
 
@@ -28,12 +29,11 @@
 /// @param t Initial simulation time
 /// @param dt Initial time step
 /// @param tEnd End time
-/// @param kernelThreads Number of threads for parallel kernel tasks (1 for sequential)
-/// @param exchangeThreads Number of threads for parallel flux exchange (default: 1)
+/// @param budget Thread budget computed from hardware capabilities
 /// @return Shared pointer to the constructed graph
-inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t kernelThreads,
-                          hh::comm::CommService *commService = nullptr,
-                          size_t exchangeThreads = 1) {
+inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
+                          const ThreadBudget &budget,
+                          hh::comm::CommService *commService = nullptr) {
 
     using GraphType = hh::Graph<2, MeshData, TerminationData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
@@ -42,8 +42,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd, size_t 
     auto depGraph = std::make_shared<MeshDependencyGraph>(
         fds_get_lower_mesh_index(), fds_get_lower_mesh_index() + nmeshes - 1);
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, kernelThreads, depGraph, commService, exchangeThreads);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, kernelThreads, depGraph, commService, exchangeThreads);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget, depGraph, commService);
+    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget, depGraph, commService);
 
     // --- Create timestep pipeline components ---
 

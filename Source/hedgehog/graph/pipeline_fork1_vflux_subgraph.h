@@ -9,19 +9,20 @@
 #include "../task/div_setup_kernel_task.h"
 
 /// Build the Fork 1 Branch A sub-graph: MeshData -> VFLUX -> MeshData.
-inline auto buildFork1VFluxSubgraph(int nmeshes, bool ccIBM) {
+inline auto buildFork1VFluxSubgraph(int nmeshes, bool ccIBM,
+                                     size_t divSetupThreads) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
         "Fork1-BranchA-VFlux");
 
     if (ccIBM) {
         auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "Fork1VFluxOrch");
-        auto kernel = std::make_shared<DivSetupKernelTask>(static_cast<size_t>(nmeshes));
+        auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);
         subgraph->inputs(orchSM);
         subgraph->edges(orchSM, kernel);
         subgraph->outputs(kernel);
     } else {
-        auto kernel = std::make_shared<DivSetupKernelTask>(static_cast<size_t>(nmeshes));
+        auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);
         subgraph->inputs(kernel);
         subgraph->outputs(kernel);
     }

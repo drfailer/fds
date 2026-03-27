@@ -18,6 +18,7 @@
 #include "../task/pred_wall_div_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
+#include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "wallbc_subgraph.h"
@@ -31,27 +32,24 @@
 ///   - MeshExchange(3) + PredFinalOrch merged into single barrier
 ///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
 ///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
-inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
+inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr,
-                                    size_t exchangeThreads = 1) {
+                                    hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, MeshData>>("Predictor");
 
-    size_t meshThreads = static_cast<size_t>(nmeshes);
-
-    // --- Kernel tasks ---
+    // --- Kernel tasks (threads from budget) ---
 
     auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
-    auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(meshThreads);
-    auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(meshThreads);
-    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(meshThreads);
+    auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
+    auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(budget.predDivPart2);
+    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(budget.velPredictor);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
-    auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, meshThreads);
-    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, meshThreads);
+    auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, budget.predFinalVelBC);
+    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, budget.retryMomDiv);
 
     // --- Common barrier states ---
 
@@ -59,7 +57,6 @@ inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
 
     // Merged: MeshExchange(3) + PredFinalOrch (synthetic turbulence)
-    // Eliminates separate PredFinalOrch state node.
     auto meshExch3SynTurbSM = makeBarrierSM(nmeshes, "MeshExch3+SynTurb",
         "CC_END_STEP\\nMESH_EXCHANGE(3)\\nSYNTHETIC_TURBULENCE",
         [ccIBM](auto& meshes) {
@@ -96,9 +93,11 @@ inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
 
         subgraph->edges(predStep1KernelTask, meshExch1DivPreforkSM);
 
-        // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early)
-        auto predForkVFluxSG = buildPredForkVFluxSubgraph(nmeshes);
-        auto predForkDivSG = buildPredForkDivSubgraph(nmeshes);
+        // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early) — threads from budget
+        auto predForkVFluxSG = buildPredForkVFluxSubgraph(
+            nmeshes, budget.predForkDivSetup, budget.predForkPartMom);
+        auto predForkDivSG = buildPredForkDivSubgraph(
+            nmeshes, budget.predForkWallBC, budget.predForkDivP1Early);
 
         subgraph->edges(meshExch1DivPreforkSM, predForkVFluxSG);
         subgraph->edges(meshExch1DivPreforkSM, predForkDivSG);
@@ -112,10 +111,6 @@ inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
                 }
                 fds_exchange_divergence_info();
                 fds_global_matrix_reassign(0);
-                // Pressure iteration init + first increment (moved from
-                // PressurePreCollector so the subgraph has no entry barrier).
-                // Only needed for the parallel pressure subgraph; the monolithic
-                // fds_pressure_iteration() does its own init internally.
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
                     fds_pressure_iteration_increment();
@@ -150,12 +145,12 @@ inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
 
         auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
             std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
-        auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(meshThreads);
+        auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(budget.standalone(4));
         subgraph->edges(meshExchange1SM, predDivSetupOrchSM);
         subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
-        auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, meshThreads);
+        auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, budget.standalone(2));
         subgraph->edges(hvacInitDivSM, predWallBCSubgraph);
 
         // Merged barrier: PredWallDivKernel + PredDivExchange + PressureInit
@@ -184,7 +179,7 @@ inline auto buildPredictorSubgraph(int nmeshes, size_t kernelThreads,
 
     if (useParallelPressure) {
         auto predPressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, meshThreads, exchangeThreads, true,
+            nmeshes, budget, true,
             depGraph, commService, fds_get_pres_flag());
         subgraph->input<TerminationData>(predPressureSubgraph);
         subgraph->edges(predDivP2KernelTask, predPressureSubgraph);

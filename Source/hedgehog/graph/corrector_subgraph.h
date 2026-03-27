@@ -25,6 +25,7 @@
 #include "corr_radiation_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 #include "../task/pipeline_fork2_tasks.h"
+#include "../tool/thread_budget.h"
 
 /// Build the Corrector sub-graph.
 ///
@@ -33,27 +34,24 @@
 ///            RemoveMove + PartMom + MeshExch(7) merged into single barrier
 ///   - Opt 3: MeshExchange(2) + CorrDivExchange merged (non-CC_IBM)
 ///   - Opt 4: MeshExchange(6b) removed — absorbed into CorrFinalOrchestrator
-inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
+inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr,
-                                    size_t exchangeThreads = 1) {
+                                    hh::comm::CommService *commService = nullptr) {
     auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, BarrierData>>("Corrector");
 
-    size_t meshThreads = static_cast<size_t>(nmeshes);
+    // --- Kernel tasks (threads from budget) ---
 
-    // --- Kernel tasks ---
-
-    auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(meshThreads);
-    auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(meshThreads);
-    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(meshThreads);
+    auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(budget.corrStep1);
+    auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(budget.corrDivPart2);
+    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(budget.velCorrector);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
 
     // --- Sub-graphs ---
 
-    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, meshThreads);
-    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, meshThreads);
-    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, meshThreads);
+    auto wallBCSubgraph = buildWallBCSubgraph(nmeshes, budget.corrWallBC);
+    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, budget.corrFork2Radiation);
+    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, budget.corrFinalVelBC);
 
     // --- Barrier states ---
 
@@ -100,8 +98,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
 
     // --- Fork 1: VFLUX || COMBUSTION → merged Join+Soot+HVAC+Condens barrier ---
 
-    auto fork1VFluxSubgraph = buildFork1VFluxSubgraph(nmeshes, ccIBM);
-    auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(meshThreads);
+    auto fork1VFluxSubgraph = buildFork1VFluxSubgraph(nmeshes, ccIBM, budget.corrFork1DivSetup);
+    auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(budget.corrFork1Comb);
 
     subgraph->edges(meshExchange4SM, fork1VFluxSubgraph);
     subgraph->edges(meshExchange4SM, fork1CombTask);
@@ -121,7 +119,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
             [](auto& meshes) { fds_mesh_exchange(6); });
 
         auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, false, false, true);
-        auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(meshThreads);
+        auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
         auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
             "EXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
@@ -151,7 +149,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
             });
         subgraph->edges(wallBCSubgraph, meshExch6aInitDivSM);
 
-        auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(meshThreads);
+        auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
         auto fork2DivP1CollSM = std::make_shared<hh::StateManager<
             1, MeshData, BarrierData>>(
             std::make_shared<Fork2DivP1CollectorState>(nmeshes),
@@ -179,7 +177,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, size_t kernelThreads,
 
     if (useParallelPressure) {
         auto corrPressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, meshThreads, exchangeThreads, false,
+            nmeshes, budget, false,
             depGraph, commService, fds_get_pres_flag());
         subgraph->input<TerminationData>(corrPressureSubgraph);
         subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);

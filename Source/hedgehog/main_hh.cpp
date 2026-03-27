@@ -20,6 +20,7 @@
 #include "data/mesh_dim.h"
 #include "data/termination_data.h"
 #include "service/fds_comm_service.h"
+#include "tool/thread_budget.h"
 #include "graph/fds_graph.h"
 
 int main(int argc, char *argv[]) {
@@ -81,32 +82,18 @@ int main(int argc, char *argv[]) {
               << std::endl;
 
     // Step 2: Build the Hedgehog dataflow graph.
-    // Parse --kernel-threads and --exchange-threads options
-    int cliKernelThreads = 0;
-    int cliExchangeThreads = 0;
-    for (int i = 1; i < argc; ++i) {
-        std::string karg(argv[i]);
-        if (karg == "--kernel-threads" && i + 1 < argc) {
-            cliKernelThreads = std::atoi(argv[++i]);
-        } else if (karg == "--exchange-threads" && i + 1 < argc) {
-            cliExchangeThreads = std::atoi(argv[++i]);
-        }
-    }
-    size_t kernelThreads = (cliKernelThreads > 0)
-        ? static_cast<size_t>(cliKernelThreads)
-        : static_cast<size_t>(local_nmeshes);
-    size_t exchangeThreads = (cliExchangeThreads > 0)
-        ? static_cast<size_t>(cliExchangeThreads)
-        : static_cast<size_t>(local_nmeshes);
-    std::cout << "[FDS-HH] Kernel threads=" << kernelThreads
-              << " Exchange threads=" << exchangeThreads << std::endl;
+    // Compute thread budget from hardware capabilities
+    int hwThreads = static_cast<int>(std::thread::hardware_concurrency());
+    if (hwThreads <= 0) hwThreads = local_nmeshes;  // fallback
+    auto budget = ThreadBudget::compute(hwThreads, local_nmeshes);
+    budget.print(std::cout);
 
     // Initialize communicator service (reuses FDS's already-initialized MPI)
     FDSMPIService commService;
     std::cout << "[FDS-HH] CommService: rank=" << commService.rank()
               << " nbProcesses=" << commService.nbProcesses() << std::endl;
 
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, kernelThreads, &commService, exchangeThreads);
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, budget, &commService);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
