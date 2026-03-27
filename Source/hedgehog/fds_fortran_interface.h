@@ -14,6 +14,9 @@ void fds_set_input_file(const char *fname, int flen);
 // these many cells per dimension. Set all to 0 to disable (default).
 void fds_set_target_mesh_dims(int ibar, int jbar, int kbar);
 
+// Pressure subgraph override: -1=auto, 0=off, 1=on
+void fds_set_pressure_subgraph(int mode);
+
 // Initialization and finalization
 void fds_initialize_all(double *t, double *dt, int *nmeshes);
 void fds_finalize_all(double t, double dt);

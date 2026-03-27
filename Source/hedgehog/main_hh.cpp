@@ -31,6 +31,7 @@ int main(int argc, char *argv[]) {
     // Usage: fds_hh [options] <input_file>
     std::string inputFile;
     MeshDim meshDim;
+    int pressureSubgraphOverride = -1;  // -1=auto, 0=off, 1=on
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
@@ -38,6 +39,16 @@ int main(int argc, char *argv[]) {
             meshDim.i = std::atoi(argv[++i]);
             meshDim.j = std::atoi(argv[++i]);
             meshDim.k = std::atoi(argv[++i]);
+        } else if (arg == "--pressure-subgraph" && i + 1 < argc) {
+            std::string val(argv[++i]);
+            if (val == "on")        pressureSubgraphOverride = 1;
+            else if (val == "off")  pressureSubgraphOverride = 0;
+            else if (val == "auto") pressureSubgraphOverride = -1;
+            else {
+                std::cerr << "[FDS-HH] Invalid --pressure-subgraph value: " << val
+                          << " (expected on|off|auto)" << std::endl;
+                return 1;
+            }
         } else if (arg[0] != '-') {
             inputFile = arg;
         }
@@ -56,6 +67,14 @@ int main(int argc, char *argv[]) {
         fds_set_target_mesh_dims(meshDim.i, meshDim.j, meshDim.k);
         std::cout << "[FDS-HH] Mesh re-decomposition: target dims="
                   << meshDim.i << "x" << meshDim.j << "x" << meshDim.k << std::endl;
+    }
+
+    // Step 0c: Set pressure subgraph override (before initialization so it's
+    // available when the graph is built after fds_initialize_all).
+    if (pressureSubgraphOverride != -1) {
+        fds_set_pressure_subgraph(pressureSubgraphOverride);
+        std::cout << "[FDS-HH] Pressure subgraph: "
+                  << (pressureSubgraphOverride ? "on (forced)" : "off (forced)") << std::endl;
     }
 
     // Step 1: Run the entire Fortran initialization sequence.

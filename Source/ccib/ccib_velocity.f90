@@ -145,11 +145,9 @@ END SUBROUTINE GET_OPENBC_TANGENTIAL_CUTFACE_VEL
 
 ! --------------------------- CHECK_CFLVN_LINKED_CELLS --------------------------------
 
-SUBROUTINE CHECK_CFLVN_LINKED_CELLS(NM,DT,UVWMAX,R_DX2,MUTRM)
+SUBROUTINE CHECK_CFLVN_LINKED_CELLS(M,NM,DT,UVWMAX,R_DX2,MUTRM)
 
-! This routine assumes POINT_TO_MESH(NM) has been already called, and CFL,ICFL,JCFL,KCFL,VN,I_VN,J_VN,K_VN
-! are aveilable.
-
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM
 REAL(EB),INTENT(IN) :: DT
 REAL(EB),INTENT(INOUT) :: UVWMAX,R_DX2,MUTRM
@@ -180,132 +178,132 @@ DIVG(:)       = 0._EB
 TWOD_FCT = 1._EB; IF(TWO_D) TWOD_FCT = 0._EB
 MU_TMP   = 0._EB
 ! First Regular cells that have an UNKZ index:
-DO K=1,KBAR
-   DO J=1,JBAR
-      DO I=1,IBAR
-         IF(CCVAR(I,J,K,CC_UNKZ) <= 0) CYCLE
-         IROW = CCVAR(I,J,K,CC_UNKZ) - UNKZ_IND(NM_START) ! All row indexes must refer to ind_loc.
-         IF (CHECK_VN) MU_TMP = MAX(D_Z_MAX(I,J,K),MU(I,J,K)/RHOS(I,J,K))
+DO K=1,M%KBAR
+   DO J=1,M%JBAR
+      DO I=1,M%IBAR
+         IF(M%CCVAR(I,J,K,CC_UNKZ) <= 0) CYCLE
+         IROW = M%CCVAR(I,J,K,CC_UNKZ) - UNKZ_IND(NM_START) ! All row indexes must refer to ind_loc.
+         IF (CHECK_VN) MU_TMP = MAX(M%D_Z_MAX(I,J,K),M%MU(I,J,K)/M%RHOS(I,J,K))
          ! X axis:
          X1AXIS = IAXIS
          DO ILH=-1,0
-            IRC  = FCVAR(I+ILH,J,K,CC_IDRC,X1AXIS)
-            MURDN = MU_TMP/DX(I)
+            IRC  = M%FCVAR(I+ILH,J,K,CC_IDRC,X1AXIS)
+            MURDN = MU_TMP/M%DX(I)
             IF (IRC>0) THEN
-               IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-               MURDN = MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+               IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+               MURDN = MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
             ENDIF
-            AF   = DY(J)*DZ(K); VELN = US(I+ILH,J,K)
+            AF   = M%DY(J)*M%DZ(K); VELN = M%US(I+ILH,J,K)
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,REAL(2*ILH+1,EB)*VELN*AF) ! MAX(u.n A, 0), only positive values.
             MURA(IROW) = MURA(IROW) + MURDN * AF
          ENDDO
          ! Y axis:
          X1AXIS = JAXIS
          DO ILH=-1,0
-            IRC  = FCVAR(I,J+ILH,K,CC_IDRC,X1AXIS)
-            MURDN = TWOD_FCT * MU_TMP/DY(J)
+            IRC  = M%FCVAR(I,J+ILH,K,CC_IDRC,X1AXIS)
+            MURDN = TWOD_FCT * MU_TMP/M%DY(J)
             IF (IRC>0) THEN
-               IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-               MURDN = TWOD_FCT*MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+               IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+               MURDN = TWOD_FCT*MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
             ENDIF
-            AF   = DX(I)*DZ(K); VELN = VS(I,J+ILH,K)
+            AF   = M%DX(I)*M%DZ(K); VELN = M%VS(I,J+ILH,K)
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,REAL(2*ILH+1,EB)*VELN*AF)
             MURA(IROW) = MURA(IROW) + MURDN * AF
          ENDDO
          ! Z axis:
          X1AXIS = KAXIS
          DO ILH=-1,0
-            IRC  = FCVAR(I,J,K+ILH,CC_IDRC,X1AXIS)
-            MURDN = MU_TMP/DZ(K)
+            IRC  = M%FCVAR(I,J,K+ILH,CC_IDRC,X1AXIS)
+            MURDN = MU_TMP/M%DZ(K)
             IF (IRC>0) THEN
-               IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-               MURDN = MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+               IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+               MURDN = MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
             ENDIF
-            AF   = DX(I)*DY(J); VELN = WS(I,J,K+ILH)
+            AF   = M%DX(I)*M%DY(J); VELN = M%WS(I,J,K+ILH)
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,REAL(2*ILH+1,EB)*VELN*AF)
             MURA(IROW) = MURA(IROW) + MURDN * AF
          ENDDO
          ! Divergence:
-         MUV(IROW)  = MUV(IROW)  + MU_TMP * (DX(I)*DY(J)*DZ(K))
-         DIVG(IROW) = DIVG(IROW) + ABS(DS(I,J,K)) * (DX(I)*DY(J)*DZ(K))
-         VOL(IROW)  = VOL(IROW)  + (DX(I)*DY(J)*DZ(K))
+         MUV(IROW)  = MUV(IROW)  + MU_TMP * (M%DX(I)*M%DY(J)*M%DZ(K))
+         DIVG(IROW) = DIVG(IROW) + ABS(M%DS(I,J,K)) * (M%DX(I)*M%DY(J)*M%DZ(K))
+         VOL(IROW)  = VOL(IROW)  + (M%DX(I)*M%DY(J)*M%DZ(K))
          IJKT(IAXIS:KAXIS,IROW) = (/ I, J, K /)
       ENDDO
    ENDDO
 ENDDO
 ! Then add Cut-cell contributions:
-CUTCELL_DO : DO ICC=1,MESHES(NM)%N_CUTCELL_MESH
-   I = CUT_CELL(ICC)%IJK(IAXIS)
-   J = CUT_CELL(ICC)%IJK(JAXIS)
-   K = CUT_CELL(ICC)%IJK(KAXIS)
-   IF (CELL(CELL_INDEX(I,J,K))%SOLID) CYCLE
-   IF (CHECK_VN) MU_TMP = MAX(D_Z_MAX(I,J,K),MU(I,J,K)/RHOS(I,J,K))
-   DO JCC=1,CUT_CELL(ICC)%NCELL
-      IROW = CUT_CELL(ICC)%UNKZ(JCC) - UNKZ_IND(NM_START)
-      IFC_LOOP : DO IFC=1,CUT_CELL(ICC)%CCELEM(1,JCC)
-         IFACE = CUT_CELL(ICC)%CCELEM(IFC+1,JCC)
-         SELECT CASE(CUT_CELL(ICC)%FACE_LIST(1,IFACE))
+CUTCELL_DO : DO ICC=1,M%N_CUTCELL_MESH
+   I = M%CUT_CELL(ICC)%IJK(IAXIS)
+   J = M%CUT_CELL(ICC)%IJK(JAXIS)
+   K = M%CUT_CELL(ICC)%IJK(KAXIS)
+   IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+   IF (CHECK_VN) MU_TMP = MAX(M%D_Z_MAX(I,J,K),M%MU(I,J,K)/M%RHOS(I,J,K))
+   DO JCC=1,M%CUT_CELL(ICC)%NCELL
+      IROW = M%CUT_CELL(ICC)%UNKZ(JCC) - UNKZ_IND(NM_START)
+      IFC_LOOP : DO IFC=1,M%CUT_CELL(ICC)%CCELEM(1,JCC)
+         IFACE = M%CUT_CELL(ICC)%CCELEM(IFC+1,JCC)
+         SELECT CASE(M%CUT_CELL(ICC)%FACE_LIST(1,IFACE))
          CASE(CC_FTYPE_RCGAS) ! REGULAR GASPHASE
-            LOWHIGH = CUT_CELL(ICC)%FACE_LIST(2,IFACE)
-            X1AXIS  = CUT_CELL(ICC)%FACE_LIST(3,IFACE)
+            LOWHIGH = M%CUT_CELL(ICC)%FACE_LIST(2,IFACE)
+            X1AXIS  = M%CUT_CELL(ICC)%FACE_LIST(3,IFACE)
             ILH     = LOWHIGH - 1
             SELECT CASE(X1AXIS)
             CASE(IAXIS)
-               IRC  = FCVAR(I-1+ILH,J,K,CC_IDRC,X1AXIS)
-               MURDN = MU_TMP/DX(I)
+               IRC  = M%FCVAR(I-1+ILH,J,K,CC_IDRC,X1AXIS)
+               MURDN = MU_TMP/M%DX(I)
                IF (IRC>0) THEN
-                  IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-                  MURDN = MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+                  IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+                  MURDN = MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
                ENDIF
-               AF   = DY(J)*DZ(K); VELN = US(I-1+ILH,J,K)
+               AF   = M%DY(J)*M%DZ(K); VELN = M%US(I-1+ILH,J,K)
             CASE(JAXIS)
-               IRC  = FCVAR(I,J-1+ILH,K,CC_IDRC,X1AXIS)
-               MURDN = TWOD_FCT * MU_TMP/DY(J)
+               IRC  = M%FCVAR(I,J-1+ILH,K,CC_IDRC,X1AXIS)
+               MURDN = TWOD_FCT * MU_TMP/M%DY(J)
                IF (IRC>0) THEN
-                  IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-                  MURDN=TWOD_FCT*MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+                  IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+                  MURDN=TWOD_FCT*MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
                ENDIF
-               AF   = DX(I)*DZ(K); VELN = VS(I,J-1+ILH,K)
+               AF   = M%DX(I)*M%DZ(K); VELN = M%VS(I,J-1+ILH,K)
             CASE(KAXIS)
-               IRC  = FCVAR(I,J,K-1+ILH,CC_IDRC,X1AXIS)
-               MURDN = MU_TMP/DZ(K)
+               IRC  = M%FCVAR(I,J,K-1+ILH,CC_IDRC,X1AXIS)
+               MURDN = MU_TMP/M%DZ(K)
                IF (IRC>0) THEN
-                  IF(RC_FACE(IRC)%SHAREDZ) CYCLE
-                  MURDN = MU_TMP/(RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
+                  IF(M%RC_FACE(IRC)%SHAREDZ) CYCLE
+                  MURDN = MU_TMP/(M%RC_FACE(IRC)%XCEN(X1AXIS,HIGH_IND)-M%RC_FACE(IRC)%XCEN(X1AXIS,LOW_IND))
                ENDIF
-               AF   = DX(I)*DY(J); VELN = WS(I,J,K-1+ILH)
+               AF   = M%DX(I)*M%DY(J); VELN = M%WS(I,J,K-1+ILH)
             END SELECT
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,REAL(2*ILH-1,EB)*VELN*AF)
             MURA(IROW) = MURA(IROW) + MURDN * AF
          CASE(CC_FTYPE_CFGAS) ! GASPHASE CUT FACE:
-            LOWHIGH = CUT_CELL(ICC)%FACE_LIST(2,IFACE)
+            LOWHIGH = M%CUT_CELL(ICC)%FACE_LIST(2,IFACE)
             ILH     = LOWHIGH - 1
-            IFC2    = CUT_CELL(ICC)%FACE_LIST(4,IFACE)
-            IFACE2  = CUT_CELL(ICC)%FACE_LIST(5,IFACE)
-            IF(CUT_FACE(IFC2)%SHARED(IFACE2)) CYCLE ! If face shared by linked cells CYCLE.
-            X1AXIS  = CUT_FACE(IFC2)%IJK(KAXIS+1)
-            MURDN   = MU_TMP/(CUT_FACE(IFC2)%XCENHIGH(X1AXIS,IFACE2)-CUT_FACE(IFC2)%XCENLOW(X1AXIS,IFACE2))
-            AF      = CUT_FACE(IFC2)%AREA(IFACE2)
-            VELN    = CUT_FACE(IFC2)%VELS(IFACE2)
+            IFC2    = M%CUT_CELL(ICC)%FACE_LIST(4,IFACE)
+            IFACE2  = M%CUT_CELL(ICC)%FACE_LIST(5,IFACE)
+            IF(M%CUT_FACE(IFC2)%SHARED(IFACE2)) CYCLE ! If face shared by linked cells CYCLE.
+            X1AXIS  = M%CUT_FACE(IFC2)%IJK(KAXIS+1)
+            MURDN   = MU_TMP/(M%CUT_FACE(IFC2)%XCENHIGH(X1AXIS,IFACE2)-M%CUT_FACE(IFC2)%XCENLOW(X1AXIS,IFACE2))
+            AF      = M%CUT_FACE(IFC2)%AREA(IFACE2)
+            VELN    = M%CUT_FACE(IFC2)%VELS(IFACE2)
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,REAL(2*ILH-1,EB)*VELN*AF)
             IF(.NOT.(TWO_D .AND. X1AXIS==JAXIS)) MURA(IROW) = MURA(IROW) + MURDN * AF
          CASE(CC_FTYPE_CFINB) ! INBOUNDARY CUT FACE: Note here we add U_NORMAL with Transpiration velocity due to
                                ! Poisson solver velocity error.
-            IFC2    = CUT_CELL(ICC)%FACE_LIST(4,IFACE)
-            IFACE2  = CUT_CELL(ICC)%FACE_LIST(5,IFACE)
-            ICFA    = CUT_FACE(IFC2)%CFACE_INDEX(IFACE2)
-            AF      = CUT_FACE(IFC2)%AREA(IFACE2)
-            VELN    = CUT_FACE(IFC2)%VELS(IFACE2)
-            MURDN   = MU_TMP * BOUNDARY_PROP1(CFACE(ICFA)%B1_INDEX)%RDN
+            IFC2    = M%CUT_CELL(ICC)%FACE_LIST(4,IFACE)
+            IFACE2  = M%CUT_CELL(ICC)%FACE_LIST(5,IFACE)
+            ICFA    = M%CUT_FACE(IFC2)%CFACE_INDEX(IFACE2)
+            AF      = M%CUT_FACE(IFC2)%AREA(IFACE2)
+            VELN    = M%CUT_FACE(IFC2)%VELS(IFACE2)
+            MURDN   = MU_TMP * M%BOUNDARY_PROP1(M%CFACE(ICFA)%B1_INDEX)%RDN
             ! - to use velocity into gasphase, projected area.
             UVWA(IROW) = UVWA(IROW) + MAX(0._EB,-VELN*AF)
             MURA(IROW) = MURA(IROW) + MURDN * AF
          END SELECT
       ENDDO IFC_LOOP
       ! Divergence:
-      MUV(IROW)  = MUV(IROW)  + MU_TMP * CUT_CELL(ICC)%VOLUME(JCC)
-      DIVG(IROW) = DIVG(IROW) + ABS(CUT_CELL(ICC)%DS(JCC)) * CUT_CELL(ICC)%VOLUME(JCC)
-      VOL(IROW)  = VOL(IROW)  + CUT_CELL(ICC)%VOLUME(JCC)
+      MUV(IROW)  = MUV(IROW)  + MU_TMP * M%CUT_CELL(ICC)%VOLUME(JCC)
+      DIVG(IROW) = DIVG(IROW) + ABS(M%CUT_CELL(ICC)%DS(JCC)) * M%CUT_CELL(ICC)%VOLUME(JCC)
+      VOL(IROW)  = VOL(IROW)  + M%CUT_CELL(ICC)%VOLUME(JCC)
       IJKT(IAXIS:KAXIS,IROW) = (/ I, J, K /) ! These might rewrite the I,J,K of some IROWs.
    ENDDO
 ENDDO CUTCELL_DO
@@ -319,28 +317,28 @@ DO IROW=UNKZ_ILC(NM)+1,UNKZ_ILC(NM)+NUNKZ_LOC(NM)
 ENDDO
 IMAX = UNKZ_ILC(NM)+MAXLOC(UVWA,DIM=1)
 CFLMAX_TMP = DT * UVWA(IMAX)
-IF(CFLMAX_TMP > CFL) THEN
+IF(CFLMAX_TMP > M%CFL) THEN
    UVWMAX = UVWA(IMAX)
-   CFL = CFLMAX_TMP
-   ICFL=IJKT(IAXIS,IMAX)
-   JCFL=IJKT(JAXIS,IMAX)
-   KCFL=IJKT(KAXIS,IMAX)
+   M%CFL = CFLMAX_TMP
+   M%ICFL=IJKT(IAXIS,IMAX)
+   M%JCFL=IJKT(JAXIS,IMAX)
+   M%KCFL=IJKT(KAXIS,IMAX)
 ENDIF
 
 IF (CHECK_HT) THEN
-   DO IFACE=1,N_EXTERNAL_CFACE_CELLS+N_INTWALL_CFACE_CELLS+N_INTERNAL_CFACE_CELLS
-      CFA=>CFACE(IFACE)
+   DO IFACE=1,M%N_EXTERNAL_CFACE_CELLS+M%N_INTWALL_CFACE_CELLS+M%N_INTERNAL_CFACE_CELLS
+      CFA=>M%CFACE(IFACE)
       IF (CFA%BOUNDARY_TYPE/=SOLID_BOUNDARY) CYCLE
-      BC=>BOUNDARY_COORD(CFA%BC_INDEX)
-      B1=>BOUNDARY_PROP1(CFA%B1_INDEX)
+      BC=>M%BOUNDARY_COORD(CFA%BC_INDEX)
+      B1=>M%BOUNDARY_PROP1(CFA%B1_INDEX)
       VELN = (ABS(B1%Q_CON_F)/B1%RHO_F)**ONTH * 2._EB*B1%RDN
       CFLMAX_TMP = DT * VELN
-      IF (CFLMAX_TMP > CFL) THEN
+      IF (CFLMAX_TMP > M%CFL) THEN
          UVWMAX = VELN
-         CFL = CFLMAX_TMP
-         ICFL=BC%IIG
-         JCFL=BC%JJG
-         KCFL=BC%KKG
+         M%CFL = CFLMAX_TMP
+         M%ICFL=BC%IIG
+         M%JCFL=BC%JJG
+         M%KCFL=BC%KKG
       ENDIF
    ENDDO
 ENDIF
@@ -349,12 +347,12 @@ IF (CHECK_VN) THEN
    IF (VN_DXN_METHOD==2) THEN
       DO IROW=UNKZ_ILC(NM)+1,UNKZ_ILC(NM)+NUNKZ_LOC(NM)
          I = IJKT(IAXIS,IROW); J = IJKT(JAXIS,IROW); K = IJKT(KAXIS,IROW)
-         IF (VOL(IROW) >= DEFAULT_VOLFRAC_LINK*DX(I)*DY(J)*DZ(K)) THEN ! For large linked CVs relax VN criterion.
+         IF (VOL(IROW) >= DEFAULT_VOLFRAC_LINK*M%DX(I)*M%DY(J)*M%DZ(K)) THEN ! For large linked CVs relax VN criterion.
             MU_AVG = MUV(IROW)/VOL(IROW)
             IF (TWO_D) THEN
-               MURA(IROW) = 2._EB*MU_AVG*(1._EB/DX(I)**2 + 1._EB/DZ(K)**2)
+               MURA(IROW) = 2._EB*MU_AVG*(1._EB/M%DX(I)**2 + 1._EB/M%DZ(K)**2)
             ELSE
-               MURA(IROW) = 2._EB*MU_AVG*(1._EB/DX(I)**2 + 1._EB/DY(J)**2 + 1._EB/DZ(K)**2)
+               MURA(IROW) = 2._EB*MU_AVG*(1._EB/M%DX(I)**2 + 1._EB/M%DY(J)**2 + 1._EB/M%DZ(K)**2)
             ENDIF
          ELSE
             MURA(IROW) = MURA(IROW)/VOL(IROW)
@@ -367,13 +365,13 @@ IF (CHECK_VN) THEN
    ENDIF
    IMAX = UNKZ_ILC(NM)+MAXLOC(MURA,DIM=1)
    VNMAX_TMP = DT * MURA(IMAX)
-   IF(VNMAX_TMP > VN) THEN
+   IF(VNMAX_TMP > M%VN) THEN
       R_DX2 = MURA(IMAX)*VOL(IMAX)/(2._EB*MUV(IMAX))
       MUTRM = MUV(IMAX)/VOL(IMAX)
-      VN    = VNMAX_TMP
-      I_VN=IJKT(IAXIS,IMAX)
-      J_VN=IJKT(JAXIS,IMAX)
-      K_VN=IJKT(KAXIS,IMAX)
+      M%VN    = VNMAX_TMP
+      M%I_VN=IJKT(IAXIS,IMAX)
+      M%J_VN=IJKT(JAXIS,IMAX)
+      M%K_VN=IJKT(KAXIS,IMAX)
    ENDIF
 ENDIF
 
@@ -1006,10 +1004,9 @@ END SUBROUTINE CC_PROJECT_VELOCITY
 
 ! ------------------------------------ GET_LINKED_VELOCITIES ---------------------------------------
 
-SUBROUTINE GET_LINKED_VELOCITIES(NM,APPLY_TO_ESTIMATED_VARIABLES,CMP_FLG)
+SUBROUTINE GET_LINKED_VELOCITIES(M,NM,APPLY_TO_ESTIMATED_VARIABLES,CMP_FLG)
 
-! Assumes POINT_TO_MESH(NM) has been called:
-
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM
 LOGICAL, INTENT(IN) :: APPLY_TO_ESTIMATED_VARIABLES, CMP_FLG
 
@@ -1025,51 +1022,51 @@ T_NOW = CURRENT_TIME()
 ! Compute linked velocity and populate UN_LNK for MESH(NM):
 CMP_FLG_IF : IF (CMP_FLG) THEN
    ! Set linked velocity array to zero:
-   UN_LNK = 0._EB
+   M%UN_LNK = 0._EB
    ALLOCATE(AREA_LNK(0:MESHES(NM)%NUNK_F)); AREA_LNK = 0._EB
    PRED_1 : IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
       ! Regular faces:
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN ! X face
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) + US(I,J,K)*DY(J)*DZ(K)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) + DY(J)*DZ(K)
+      DO K=0,M%KBAR
+         DO J=0,M%JBAR
+            DO I=0,M%IBAR
+               IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN ! X face
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) + M%US(I,J,K)*M%DY(J)*M%DZ(K)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) + M%DY(J)*M%DZ(K)
                ENDIF
-               IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0) THEN ! Y face
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) + VS(I,J,K)*DX(I)*DZ(K)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) + DX(I)*DZ(K)
+               IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0) THEN ! Y face
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) + M%VS(I,J,K)*M%DX(I)*M%DZ(K)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) + M%DX(I)*M%DZ(K)
                ENDIF
-               IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN ! Z face
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) + WS(I,J,K)*DX(I)*DY(J)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) + DX(I)*DY(J)
+               IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN ! Z face
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) + M%WS(I,J,K)*M%DX(I)*M%DY(J)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) + M%DX(I)*M%DY(J)
                ENDIF
             ENDDO
          ENDDO
       ENDDO
       ! RC faces:
       DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-         IF(RC_FACE(ICF)%UNKF<1) CYCLE
-         I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-         X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+         IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+         I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+         X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
          SELECT CASE(X1AXIS)
          CASE(IAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + US(I,J,K)*DY(J)*DZ(K)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DY(J)*DZ(K)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%US(I,J,K)*M%DY(J)*M%DZ(K)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DY(J)*M%DZ(K)
          CASE(JAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + VS(I,J,K)*DX(I)*DZ(K)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DX(I)*DZ(K)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%VS(I,J,K)*M%DX(I)*M%DZ(K)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DX(I)*M%DZ(K)
          CASE(KAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + WS(I,J,K)*DX(I)*DY(J)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DX(I)*DY(J)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%WS(I,J,K)*M%DX(I)*M%DY(J)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DX(I)*M%DY(J)
          END SELECT
       ENDDO
       ! Cut-faces:
       DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-         CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+         CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
          IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
          DO JCF=1,CF%NFACE
-            UN_LNK(CF%UNKF(JCF)) = UN_LNK(CF%UNKF(JCF)) + CF%VELS(JCF)*CF%AREA(JCF)
+            M%UN_LNK(CF%UNKF(JCF)) = M%UN_LNK(CF%UNKF(JCF)) + CF%VELS(JCF)*CF%AREA(JCF)
             AREA_LNK(CF%UNKF(JCF)) = AREA_LNK(CF%UNKF(JCF)) + CF%AREA(JCF)
          ENDDO
       ENDDO
@@ -1077,47 +1074,47 @@ CMP_FLG_IF : IF (CMP_FLG) THEN
    ELSE PRED_1
 
       ! Regular faces:
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) + U(I,J,K)*DY(J)*DZ(K)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS)) + DY(J)*DZ(K)
+      DO K=0,M%KBAR
+         DO J=0,M%JBAR
+            DO I=0,M%IBAR
+               IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) + M%U(I,J,K)*M%DY(J)*M%DZ(K)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS)) + M%DY(J)*M%DZ(K)
                ENDIF
-               IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0) THEN
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) + V(I,J,K)*DX(I)*DZ(K)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS)) + DX(I)*DZ(K)
+               IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0) THEN
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) + M%V(I,J,K)*M%DX(I)*M%DZ(K)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS)) + M%DX(I)*M%DZ(K)
                ENDIF
-               IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
-                  UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) = UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) + W(I,J,K)*DX(I)*DY(J)
-                  AREA_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) = AREA_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS)) + DX(I)*DY(J)
+               IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
+                  M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) + M%W(I,J,K)*M%DX(I)*M%DY(J)
+                  AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) = AREA_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS)) + M%DX(I)*M%DY(J)
                ENDIF
             ENDDO
          ENDDO
       ENDDO
       ! RC faces:
       DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-         IF(RC_FACE(ICF)%UNKF<1) CYCLE
-         I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-         X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+         IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+         I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+         X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
          SELECT CASE(X1AXIS)
          CASE(IAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + U(I,J,K)*DY(J)*DZ(K)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DY(J)*DZ(K)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%U(I,J,K)*M%DY(J)*M%DZ(K)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DY(J)*M%DZ(K)
          CASE(JAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + V(I,J,K)*DX(I)*DZ(K)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DX(I)*DZ(K)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%V(I,J,K)*M%DX(I)*M%DZ(K)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DX(I)*M%DZ(K)
          CASE(KAXIS)
-            UN_LNK(RC_FACE(ICF)%UNKF) = UN_LNK(RC_FACE(ICF)%UNKF) + W(I,J,K)*DX(I)*DY(J)
-            AREA_LNK(RC_FACE(ICF)%UNKF) = AREA_LNK(RC_FACE(ICF)%UNKF) + DX(I)*DY(J)
+            M%UN_LNK(M%RC_FACE(ICF)%UNKF) = M%UN_LNK(M%RC_FACE(ICF)%UNKF) + M%W(I,J,K)*M%DX(I)*M%DY(J)
+            AREA_LNK(M%RC_FACE(ICF)%UNKF) = AREA_LNK(M%RC_FACE(ICF)%UNKF) + M%DX(I)*M%DY(J)
          END SELECT
       ENDDO
       ! Cut-faces:
       DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-         CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+         CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
          IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
          DO JCF=1,CF%NFACE
-            UN_LNK(CF%UNKF(JCF)) = UN_LNK(CF%UNKF(JCF)) + CF%VEL(JCF)*CF%AREA(JCF)
+            M%UN_LNK(CF%UNKF(JCF)) = M%UN_LNK(CF%UNKF(JCF)) + CF%VEL(JCF)*CF%AREA(JCF)
             AREA_LNK(CF%UNKF(JCF)) = AREA_LNK(CF%UNKF(JCF)) + CF%AREA(JCF)
          ENDDO
       ENDDO
@@ -1125,15 +1122,15 @@ CMP_FLG_IF : IF (CMP_FLG) THEN
    ENDIF PRED_1
 
    ! Area Average F:
-   UN_LNK(1:MESHES(NM)%NUNK_F) = UN_LNK(1:MESHES(NM)%NUNK_F) / AREA_LNK(1:MESHES(NM)%NUNK_F)
+   M%UN_LNK(1:MESHES(NM)%NUNK_F) = M%UN_LNK(1:MESHES(NM)%NUNK_F) / AREA_LNK(1:MESHES(NM)%NUNK_F)
 
-   ! Dump in EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces of type
+   ! Dump in M%EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces of type
    ! interpolated boundary:
    EXTERNAL_WALL_LOOP: DO IW=1,MESHES(NM)%N_EXTERNAL_WALL_CELLS
-      WC=>WALL(IW)
+      WC=>M%WALL(IW)
       IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP
-      EWC=>EXTERNAL_WALL(IW)
-      BC =>BOUNDARY_COORD(WC%BC_INDEX)
+      EWC=>M%EXTERNAL_WALL(IW)
+      BC =>M%BOUNDARY_COORD(WC%BC_INDEX)
       I  = BC%II; J = BC%JJ; K = BC%KK
       IOR= BC%IOR; X1AXIS = ABS(IOR)
       SELECT CASE(IOR)
@@ -1145,28 +1142,28 @@ CMP_FLG_IF : IF (CMP_FLG) THEN
       ! Default reg faces, unlinked.
       IF(APPLY_TO_ESTIMATED_VARIABLES) THEN
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); EWC_UN_LNK(IW) = US(I,J,K)
-         CASE(JAXIS); EWC_UN_LNK(IW) = VS(I,J,K)
-         CASE(KAXIS); EWC_UN_LNK(IW) = WS(I,J,K)
+         CASE(IAXIS); M%EWC_UN_LNK(IW) = M%US(I,J,K)
+         CASE(JAXIS); M%EWC_UN_LNK(IW) = M%VS(I,J,K)
+         CASE(KAXIS); M%EWC_UN_LNK(IW) = M%WS(I,J,K)
          END SELECT
       ELSE
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); EWC_UN_LNK(IW) = U(I,J,K)
-         CASE(JAXIS); EWC_UN_LNK(IW) = V(I,J,K)
-         CASE(KAXIS); EWC_UN_LNK(IW) = W(I,J,K)
+         CASE(IAXIS); M%EWC_UN_LNK(IW) = M%U(I,J,K)
+         CASE(JAXIS); M%EWC_UN_LNK(IW) = M%V(I,J,K)
+         CASE(KAXIS); M%EWC_UN_LNK(IW) = M%W(I,J,K)
          END SELECT
       ENDIF
-      IF (FCVAR(I,J,K,CC_UNKF,X1AXIS)>0) THEN ! Regular Face, linked.
-         EWC_UN_LNK(IW) = UN_LNK(FCVAR(I,J,K,CC_UNKF,X1AXIS))
-      ELSEIF(FCVAR(I,J,K,CC_IDRC,X1AXIS)>0) THEN ! RC Face.
-         ICF=FCVAR(I,J,K,CC_IDRC,X1AXIS); IF(RC_FACE(ICF)%UNKF<1) CYCLE EXTERNAL_WALL_LOOP
-         EWC_UN_LNK(IW) = UN_LNK(RC_FACE(ICF)%UNKF)
-      ELSEIF(FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
-         ICF=FCVAR(I,J,K,CC_IDCF,X1AXIS)
-         CF=>CUT_FACE(ICF)
+      IF (M%FCVAR(I,J,K,CC_UNKF,X1AXIS)>0) THEN ! Regular Face, linked.
+         M%EWC_UN_LNK(IW) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,X1AXIS))
+      ELSEIF(M%FCVAR(I,J,K,CC_IDRC,X1AXIS)>0) THEN ! RC Face.
+         ICF=M%FCVAR(I,J,K,CC_IDRC,X1AXIS); IF(M%RC_FACE(ICF)%UNKF<1) CYCLE EXTERNAL_WALL_LOOP
+         M%EWC_UN_LNK(IW) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
+      ELSEIF(M%FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
+         ICF=M%FCVAR(I,J,K,CC_IDCF,X1AXIS)
+         CF=>M%CUT_FACE(ICF)
          DO JCF=1,CF%NFACE
             IF (CF%UNKF(JCF)>0) THEN
-               CF%VEL_LNK(JCF) = UN_LNK(CF%UNKF(JCF))
+               CF%VEL_LNK(JCF) = M%UN_LNK(CF%UNKF(JCF))
             ELSEIF(APPLY_TO_ESTIMATED_VARIABLES) THEN
                CF%VEL_LNK(JCF) = CF%VELS(JCF)
             ELSE
@@ -1184,82 +1181,82 @@ ELSE CMP_FLG_IF
    ! Restore Linked Velocity values:
    PRED_2 : IF (APPLY_TO_ESTIMATED_VARIABLES) THEN
 
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0)                  US(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS))
-               IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) VS(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS))
-               IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0)                  WS(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS))
+      DO K=0,M%KBAR
+         DO J=0,M%JBAR
+            DO I=0,M%IBAR
+               IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0)                  M%US(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS))
+               IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) M%VS(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS))
+               IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0)                  M%WS(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS))
             ENDDO
          ENDDO
       ENDDO
       DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-         IF(RC_FACE(ICF)%UNKF<1) CYCLE
-         I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-         X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+         IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+         I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+         X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); US(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
-         CASE(JAXIS); IF(.NOT.TWO_D) VS(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
-         CASE(KAXIS); WS(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
+         CASE(IAXIS); M%US(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
+         CASE(JAXIS); IF(.NOT.TWO_D) M%VS(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
+         CASE(KAXIS); M%WS(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
          END SELECT
       ENDDO
       DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-         CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+         CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
          IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
          I = CF%IJK(IAXIS); J = CF%IJK(JAXIS); K = CF%IJK(KAXIS); X1AXIS = CF%IJK(KAXIS+1)
          DO JCF=1,CF%NFACE
             IF (CF%UNKF(JCF)<1) CYCLE
-            CF%VELS(JCF) = UN_LNK(CF%UNKF(JCF))
+            CF%VELS(JCF) = M%UN_LNK(CF%UNKF(JCF))
          ENDDO
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); US(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DZ(K))
-         CASE(JAXIS); VS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DX(I)*DZ(K))
-         CASE(KAXIS); WS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DX(I))
+         CASE(IAXIS); M%US(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DZ(K))
+         CASE(JAXIS); M%VS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DX(I)*M%DZ(K))
+         CASE(KAXIS); M%WS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DX(I))
          END SELECT
       ENDDO
-      ! Dump flux matched EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces into
-      ! corresponding US,VS,WS,CF%VELS:
+      ! Dump flux matched M%EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces into
+      ! corresponding M%US,M%VS,M%WS,CF%VELS:
       EXTERNAL_WALL_LOOP_2: DO IW=1,MESHES(NM)%N_EXTERNAL_WALL_CELLS
-         WC=>WALL(IW)
+         WC=>M%WALL(IW)
          IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP_2
-         EWC=>EXTERNAL_WALL(IW)
-         BC =>BOUNDARY_COORD(WC%BC_INDEX)
+         EWC=>M%EXTERNAL_WALL(IW)
+         BC =>M%BOUNDARY_COORD(WC%BC_INDEX)
          I  = BC%II; J = BC%JJ; K = BC%KK
          IOR= BC%IOR; X1AXIS = ABS(IOR)
          NOM = EWC%NOM
-         OM  => OMESH(NOM)
+         OM  => M%OMESH(NOM)
          M2  => MESHES(NOM)
          SELECT CASE(IOR)
          CASE(-IAXIS); I=I-1
          CASE(-JAXIS); J=J-1
          CASE(-KAXIS); K=K-1
          END SELECT
-         IF(FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
-            ICF=FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>CUT_FACE(ICF)
+         IF(M%FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
+            ICF=M%FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>M%CUT_FACE(ICF)
             DO JCF=1,CF%NFACE
                CF%VELS(JCF) = CF%VEL_LNK(JCF)
             ENDDO
             SELECT CASE(X1AXIS)
-            CASE(IAXIS); US(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DZ(K))
-            CASE(JAXIS); VS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DX(I)*DZ(K))
-            CASE(KAXIS); WS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DX(I))
+            CASE(IAXIS); M%US(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DZ(K))
+            CASE(JAXIS); M%VS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DX(I)*M%DZ(K))
+            CASE(KAXIS); M%WS(I,J,K) = DOT_PRODUCT(CF%VELS(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DX(I))
             END SELECT
-         ELSE ! All other reg faces, unlinked, yet can be matched to linked velocities in OMESH.
+         ELSE ! All other reg faces, unlinked, yet can be matched to linked velocities in M%OMESH.
             SELECT CASE(X1AXIS)
-            CASE(IAXIS); US(I,J,K) = EWC_UN_LNK(IW)
-            CASE(JAXIS); VS(I,J,K) = EWC_UN_LNK(IW)
-            CASE(KAXIS); WS(I,J,K) = EWC_UN_LNK(IW)
+            CASE(IAXIS); M%US(I,J,K) = M%EWC_UN_LNK(IW)
+            CASE(JAXIS); M%VS(I,J,K) = M%EWC_UN_LNK(IW)
+            CASE(KAXIS); M%WS(I,J,K) = M%EWC_UN_LNK(IW)
             END SELECT
          ENDIF
 
-         ! Dump Matched OM%U_LNK,V_LNK,W_LNK into OM%US, VS, WS, for use in COMPUTE_VELOCITY_ERROR.
+         ! Dump Matched OM%U_LNK,V_LNK,W_LNK into OM%US, M%VS, M%WS, for use in COMPUTE_VELOCITY_ERROR.
          ! Dump Matched CFO%VEL_LNK_OMESH(JCFO) into CFO%VELS_OMESH(JCFO) for use in COMPUTE_VELOCITY_ERROR.
          SELECT CASE(IOR)
          CASE( 1)
             DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
                DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
                   DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
-                     IF (M2%CELL(M2%CELL_INDEX(IIO,JJO,KKO))%SOLID) CYCLE ! Drop if OMESH cell is solid.
+                     IF (M2%CELL(M2%CELL_INDEX(IIO,JJO,KKO))%SOLID) CYCLE ! Drop if M%OMESH cell is solid.
                      IF (M2%FCVAR(IIO,JJO,KKO,CC_FGSC,ABS(IOR))==CC_SOLID) CYCLE  ! Drop if solid cart face.
                      ICFO = M2%FCVAR(IIO,JJO,KKO,CC_IDCF,ABS(IOR))
                      IF(ICFO>0) THEN
@@ -1356,79 +1353,79 @@ ELSE CMP_FLG_IF
 
    ELSE PRED_2
 
-      ! Save original U,V,W and CF%VEL to restore in Predictor call to CC_RESTORE_UVW_UNLINKED(NM):
-      IF (FIRST_PASS) CALL CC_RESTORE_UVW_UNLINKED(NM,ASSIGN_UNLINKED_VEL=.FALSE.)
+      ! Save original M%U,M%V,M%W and CF%VEL to restore in Predictor call to CC_RESTORE_UVW_UNLINKED(NM):
+      IF (FIRST_PASS) CALL CC_RESTORE_UVW_UNLINKED(M,NM,ASSIGN_UNLINKED_VEL=.FALSE.)
 
-      ! Assign linked velocities to U,V,W:
-      DO K=0,KBAR
-         DO J=0,JBAR
-            DO I=0,IBAR
-               IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0)                  U(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,IAXIS))
-               IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) V(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,JAXIS))
-               IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0)                  W(I,J,K) = UN_LNK(FCVAR(I,J,K,CC_UNKF,KAXIS))
+      ! Assign linked velocities to M%U,M%V,M%W:
+      DO K=0,M%KBAR
+         DO J=0,M%JBAR
+            DO I=0,M%IBAR
+               IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0)                  M%U(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,IAXIS))
+               IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) M%V(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,JAXIS))
+               IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0)                  M%W(I,J,K) = M%UN_LNK(M%FCVAR(I,J,K,CC_UNKF,KAXIS))
             ENDDO
          ENDDO
       ENDDO
       DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-         IF(RC_FACE(ICF)%UNKF<1) CYCLE
-         I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-         X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+         IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+         I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+         X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); U(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
-         CASE(JAXIS); IF(.NOT.TWO_D) V(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
-         CASE(KAXIS); W(I,J,K) = UN_LNK(RC_FACE(ICF)%UNKF)
+         CASE(IAXIS); M%U(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
+         CASE(JAXIS); IF(.NOT.TWO_D) M%V(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
+         CASE(KAXIS); M%W(I,J,K) = M%UN_LNK(M%RC_FACE(ICF)%UNKF)
          END SELECT
       ENDDO
       DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-         CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+         CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
          IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
          I = CF%IJK(IAXIS); J = CF%IJK(JAXIS); K = CF%IJK(KAXIS); X1AXIS = CF%IJK(KAXIS+1)
          DO JCF=1,CF%NFACE;
             IF (CF%UNKF(JCF)<1) CYCLE
-            CF%VEL(JCF) = UN_LNK(CF%UNKF(JCF))
+            CF%VEL(JCF) = M%UN_LNK(CF%UNKF(JCF))
          ENDDO
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DZ(K))
-         CASE(JAXIS); V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DX(I)*DZ(K))
-         CASE(KAXIS); W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DX(I))
+         CASE(IAXIS); M%U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DZ(K))
+         CASE(JAXIS); M%V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DX(I)*M%DZ(K))
+         CASE(KAXIS); M%W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DX(I))
          END SELECT
       ENDDO
-      ! Dump flux matched EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces into
-      ! corresponding U,V,W,CF%VEL:
+      ! Dump flux matched M%EWC_UN_LNK(IW) and CF%VEL_LNK(JCF) of external boundary regular and cut-faces into
+      ! corresponding M%U,M%V,M%W,CF%VEL:
       EXTERNAL_WALL_LOOP_3: DO IW=1,MESHES(NM)%N_EXTERNAL_WALL_CELLS
-         WC=>WALL(IW)
+         WC=>M%WALL(IW)
          IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP_3
-         EWC =>EXTERNAL_WALL(IW)
-         BC  =>BOUNDARY_COORD(WC%BC_INDEX)
+         EWC =>M%EXTERNAL_WALL(IW)
+         BC  =>M%BOUNDARY_COORD(WC%BC_INDEX)
          I   = BC%II; J = BC%JJ; K = BC%KK
          IOR = BC%IOR; X1AXIS = ABS(IOR)
          NOM = EWC%NOM
-         OM  => OMESH(NOM)
+         OM  => M%OMESH(NOM)
          M2  => MESHES(NOM)
          SELECT CASE(IOR)
          CASE(-IAXIS); I=I-1
          CASE(-JAXIS); J=J-1
          CASE(-KAXIS); K=K-1
          END SELECT
-         IF(FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
-            ICF=FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>CUT_FACE(ICF)
+         IF(M%FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
+            ICF=M%FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>M%CUT_FACE(ICF)
             DO JCF=1,CF%NFACE
                CF%VEL(JCF) = CF%VEL_LNK(JCF)
             ENDDO
             SELECT CASE(X1AXIS)
-            CASE(IAXIS); U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DZ(K))
-            CASE(JAXIS); V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DX(I)*DZ(K))
-            CASE(KAXIS); W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DX(I))
+            CASE(IAXIS); M%U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DZ(K))
+            CASE(JAXIS); M%V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DX(I)*M%DZ(K))
+            CASE(KAXIS); M%W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DX(I))
             END SELECT
-         ELSE ! All other reg faces, unlinked, yet can be matched to linked velocities in OMESH.
+         ELSE ! All other reg faces, unlinked, yet can be matched to linked velocities in M%OMESH.
             SELECT CASE(X1AXIS)
-            CASE(IAXIS); U(I,J,K) = EWC_UN_LNK(IW)
-            CASE(JAXIS); V(I,J,K) = EWC_UN_LNK(IW)
-            CASE(KAXIS); W(I,J,K) = EWC_UN_LNK(IW)
+            CASE(IAXIS); M%U(I,J,K) = M%EWC_UN_LNK(IW)
+            CASE(JAXIS); M%V(I,J,K) = M%EWC_UN_LNK(IW)
+            CASE(KAXIS); M%W(I,J,K) = M%EWC_UN_LNK(IW)
             END SELECT
          ENDIF
 
-         ! Dump Matched OM%U_LNK,V_LNK,W_LNK into OM%U, V, W, for use in COMPUTE_VELOCITY_ERROR.
+         ! Dump Matched OM%U_LNK,V_LNK,W_LNK into OM%U, M%V, M%W, for use in COMPUTE_VELOCITY_ERROR.
          ! Dump Matched CFO%VEL_LNK_OMESH(JCFO) into CFO%VEL_OMESH(JCFO) for use in COMPUTE_VELOCITY_ERROR.
          IF(FIRST_PASS) THEN
             SELECT CASE(IOR)
@@ -1436,7 +1433,7 @@ ELSE CMP_FLG_IF
                DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
                   DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
                      DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
-                        IF (M2%CELL(M2%CELL_INDEX(IIO,JJO,KKO))%SOLID) CYCLE ! Drop if OMESH cell is solid.
+                        IF (M2%CELL(M2%CELL_INDEX(IIO,JJO,KKO))%SOLID) CYCLE ! Drop if M%OMESH cell is solid.
                         IF (M2%FCVAR(IIO,JJO,KKO,CC_FGSC,ABS(IOR))==CC_SOLID) CYCLE  ! Drop if solid cart face.
                         ICFO = M2%FCVAR(IIO,JJO,KKO,CC_IDCF,ABS(IOR))
                         IF(ICFO>0) THEN
@@ -1541,10 +1538,9 @@ END SUBROUTINE GET_LINKED_VELOCITIES
 
 ! --------------------------- CC_RESTORE_UVW_UNLINKED -------------------------
 
-SUBROUTINE CC_RESTORE_UVW_UNLINKED(NM,ASSIGN_UNLINKED_VEL)
+SUBROUTINE CC_RESTORE_UVW_UNLINKED(M,NM,ASSIGN_UNLINKED_VEL)
 
-! NOTE : If ASSIGN_UNLINKED_VEL=.FALSE. assumes point to mesh has been called.
-
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM
 LOGICAL, INTENT(IN) :: ASSIGN_UNLINKED_VEL
 
@@ -1556,131 +1552,129 @@ T_NOW = CURRENT_TIME()
 COUNT = 0
 ASSIGN_UNLINKED_IF : IF (ASSIGN_UNLINKED_VEL) THEN
 
-   CALL POINT_TO_MESH(NM)
-
-   DO K=0,KBAR
-      DO J=0,JBAR
-         DO I=0,IBAR
-            IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
-               COUNT = COUNT+1; U(I,J,K) = UN_ULNK(COUNT)
+   DO K=0,M%KBAR
+      DO J=0,M%JBAR
+         DO I=0,M%IBAR
+            IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
+               COUNT = COUNT+1; M%U(I,J,K) = M%UN_ULNK(COUNT)
             ENDIF
-            IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) THEN
-               COUNT = COUNT+1; V(I,J,K) = UN_ULNK(COUNT)
+            IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) THEN
+               COUNT = COUNT+1; M%V(I,J,K) = M%UN_ULNK(COUNT)
             ENDIF
-            IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
-               COUNT = COUNT+1; W(I,J,K) = UN_ULNK(COUNT)
+            IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
+               COUNT = COUNT+1; M%W(I,J,K) = M%UN_ULNK(COUNT)
             ENDIF
          ENDDO
       ENDDO
    ENDDO
    DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-      IF(RC_FACE(ICF)%UNKF<1) CYCLE
-      I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-      X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+      IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+      I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+      X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
       SELECT CASE(X1AXIS)
-      CASE(IAXIS); COUNT = COUNT+1; U(I,J,K) = UN_ULNK(COUNT)
-      CASE(JAXIS); IF(.NOT.TWO_D) COUNT = COUNT+1; V(I,J,K) = UN_ULNK(COUNT)
-      CASE(KAXIS); COUNT = COUNT+1; W(I,J,K) = UN_ULNK(COUNT)
+      CASE(IAXIS); COUNT = COUNT+1; M%U(I,J,K) = M%UN_ULNK(COUNT)
+      CASE(JAXIS); IF(.NOT.TWO_D) COUNT = COUNT+1; M%V(I,J,K) = M%UN_ULNK(COUNT)
+      CASE(KAXIS); COUNT = COUNT+1; M%W(I,J,K) = M%UN_ULNK(COUNT)
       END SELECT
    ENDDO
    DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-      CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+      CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
       IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
       I = CF%IJK(IAXIS); J = CF%IJK(JAXIS); K = CF%IJK(KAXIS); X1AXIS = CF%IJK(KAXIS+1)
       DO JCF=1,CF%NFACE
          IF (CF%UNKF(JCF)<1) CYCLE
-         COUNT = COUNT+1; CF%VEL(JCF) = UN_ULNK(COUNT)
+         COUNT = COUNT+1; CF%VEL(JCF) = M%UN_ULNK(COUNT)
       ENDDO
    ENDDO
    EXTERNAL_WALL_LOOP_1: DO IW=1,MESHES(NM)%N_EXTERNAL_WALL_CELLS
-      WC=>WALL(IW)
+      WC=>M%WALL(IW)
       IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP_1
-      EWC=>EXTERNAL_WALL(IW)
-      BC =>BOUNDARY_COORD(WC%BC_INDEX)
+      EWC=>M%EXTERNAL_WALL(IW)
+      BC =>M%BOUNDARY_COORD(WC%BC_INDEX)
       I  = BC%II; J = BC%JJ; K = BC%KK; X1AXIS = ABS(BC%IOR)
       SELECT CASE(BC%IOR)
       CASE(-IAXIS); I=I-1
       CASE(-JAXIS); J=J-1
       CASE(-KAXIS); K=K-1
       END SELECT
-      IF(FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
-         ICF=FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>CUT_FACE(ICF)
+      IF(M%FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
+         ICF=M%FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>M%CUT_FACE(ICF)
          DO JCF=1,CF%NFACE
-            COUNT=COUNT+1; CF%VEL(JCF) = UN_ULNK(COUNT)
+            COUNT=COUNT+1; CF%VEL(JCF) = M%UN_ULNK(COUNT)
          ENDDO
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DZ(K))
-         CASE(JAXIS); V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DX(I)*DZ(K))
-         CASE(KAXIS); W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (DY(J)*DX(I))
+         CASE(IAXIS); M%U(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DZ(K))
+         CASE(JAXIS); M%V(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DX(I)*M%DZ(K))
+         CASE(KAXIS); M%W(I,J,K) = DOT_PRODUCT(CF%VEL(1:CF%NFACE),CF%AREA(1:CF%NFACE)) / (M%DY(J)*M%DX(I))
          END SELECT
       ELSE ! All other reg faces.
          COUNT = COUNT + 1
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); U(I,J,K) = UN_ULNK(COUNT)
-         CASE(JAXIS); V(I,J,K) = UN_ULNK(COUNT)
-         CASE(KAXIS); W(I,J,K) = UN_ULNK(COUNT)
+         CASE(IAXIS); M%U(I,J,K) = M%UN_ULNK(COUNT)
+         CASE(JAXIS); M%V(I,J,K) = M%UN_ULNK(COUNT)
+         CASE(KAXIS); M%W(I,J,K) = M%UN_ULNK(COUNT)
          END SELECT
       ENDIF
    ENDDO EXTERNAL_WALL_LOOP_1
 
 ELSE ASSIGN_UNLINKED_IF
 
-   DO K=0,KBAR
-      DO J=0,JBAR
-         DO I=0,IBAR
-            IF (FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
-               COUNT = COUNT+1; UN_ULNK(COUNT) = U(I,J,K)
+   DO K=0,M%KBAR
+      DO J=0,M%JBAR
+         DO I=0,M%IBAR
+            IF (M%FCVAR(I,J,K,CC_UNKF,IAXIS)>0) THEN
+               COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%U(I,J,K)
             ENDIF
-            IF (FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) THEN
-               COUNT = COUNT+1; UN_ULNK(COUNT) = V(I,J,K)
+            IF (M%FCVAR(I,J,K,CC_UNKF,JAXIS)>0 .AND. .NOT.TWO_D) THEN
+               COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%V(I,J,K)
             ENDIF
-            IF (FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
-               COUNT = COUNT+1; UN_ULNK(COUNT) = W(I,J,K)
+            IF (M%FCVAR(I,J,K,CC_UNKF,KAXIS)>0) THEN
+               COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%W(I,J,K)
             ENDIF
          ENDDO
       ENDDO
    ENDDO
    DO ICF=1,MESHES(NM)%CC_NRCFACE_Z
-      IF(RC_FACE(ICF)%UNKF<1) CYCLE
-      I = RC_FACE(ICF)%IJK(IAXIS); J = RC_FACE(ICF)%IJK(JAXIS); K = RC_FACE(ICF)%IJK(KAXIS)
-      X1AXIS = RC_FACE(ICF)%IJK(KAXIS+1)
+      IF(M%RC_FACE(ICF)%UNKF<1) CYCLE
+      I = M%RC_FACE(ICF)%IJK(IAXIS); J = M%RC_FACE(ICF)%IJK(JAXIS); K = M%RC_FACE(ICF)%IJK(KAXIS)
+      X1AXIS = M%RC_FACE(ICF)%IJK(KAXIS+1)
       SELECT CASE(X1AXIS)
-      CASE(IAXIS); COUNT = COUNT+1; UN_ULNK(COUNT) = U(I,J,K)
-      CASE(JAXIS); IF(.NOT.TWO_D) COUNT = COUNT+1; UN_ULNK(COUNT) = V(I,J,K)
-      CASE(KAXIS); COUNT = COUNT+1; UN_ULNK(COUNT) = W(I,J,K)
+      CASE(IAXIS); COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%U(I,J,K)
+      CASE(JAXIS); IF(.NOT.TWO_D) COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%V(I,J,K)
+      CASE(KAXIS); COUNT = COUNT+1; M%UN_ULNK(COUNT) = M%W(I,J,K)
       END SELECT
    ENDDO
    DO ICF=1,MESHES(NM)%N_CUTFACE_MESH
-      CF => CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
+      CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_GASPHASE) CYCLE
       IF(TWO_D .AND. CF%IJK(KAXIS+1)==JAXIS) CYCLE
       I = CF%IJK(IAXIS); J = CF%IJK(JAXIS); K = CF%IJK(KAXIS); X1AXIS = CF%IJK(KAXIS+1)
       DO JCF=1,CF%NFACE
          IF (CF%UNKF(JCF)<1) CYCLE
-         COUNT = COUNT+1; UN_ULNK(COUNT) = CF%VEL(JCF)
+         COUNT = COUNT+1; M%UN_ULNK(COUNT) = CF%VEL(JCF)
       ENDDO
    ENDDO
    EXTERNAL_WALL_LOOP_2: DO IW=1,MESHES(NM)%N_EXTERNAL_WALL_CELLS
-      WC=>WALL(IW)
+      WC=>M%WALL(IW)
       IF (WC%BOUNDARY_TYPE/=INTERPOLATED_BOUNDARY) CYCLE EXTERNAL_WALL_LOOP_2
-      EWC=>EXTERNAL_WALL(IW)
-      BC =>BOUNDARY_COORD(WC%BC_INDEX)
+      EWC=>M%EXTERNAL_WALL(IW)
+      BC =>M%BOUNDARY_COORD(WC%BC_INDEX)
       I  = BC%II; J = BC%JJ; K = BC%KK; X1AXIS = ABS(BC%IOR)
       SELECT CASE(BC%IOR)
       CASE(-IAXIS); I=I-1
       CASE(-JAXIS); J=J-1
       CASE(-KAXIS); K=K-1
       END SELECT
-      IF(FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
-         ICF=FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>CUT_FACE(ICF)
+      IF(M%FCVAR(I,J,K,CC_IDCF,X1AXIS)>0) THEN ! Cut-face.
+         ICF=M%FCVAR(I,J,K,CC_IDCF,X1AXIS); CF=>M%CUT_FACE(ICF)
          DO JCF=1,CF%NFACE
-            COUNT=COUNT+1; UN_ULNK(COUNT) = CF%VEL(JCF)
+            COUNT=COUNT+1; M%UN_ULNK(COUNT) = CF%VEL(JCF)
          ENDDO
       ELSE ! All other reg faces.
          COUNT = COUNT + 1
          SELECT CASE(X1AXIS)
-         CASE(IAXIS); UN_ULNK(COUNT) = U(I,J,K)
-         CASE(JAXIS); UN_ULNK(COUNT) = V(I,J,K)
-         CASE(KAXIS); UN_ULNK(COUNT) = W(I,J,K)
+         CASE(IAXIS); M%UN_ULNK(COUNT) = M%U(I,J,K)
+         CASE(JAXIS); M%UN_ULNK(COUNT) = M%V(I,J,K)
+         CASE(KAXIS); M%UN_ULNK(COUNT) = M%W(I,J,K)
          END SELECT
       ENDIF
    ENDDO EXTERNAL_WALL_LOOP_2
@@ -2408,11 +2402,12 @@ END SUBROUTINE CC_MATCH_VELOCITY
 
 ! -------------------------- CFACE_PREDICT_NORMAL_VELOCITY -------------------------
 
-SUBROUTINE CFACE_PREDICT_NORMAL_VELOCITY(T,DT)
+SUBROUTINE CFACE_PREDICT_NORMAL_VELOCITY(M,T,DT)
 
 
 USE MATH_FUNCTIONS, ONLY : EVALUATE_RAMP
 
+TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 REAL(EB), INTENT(IN) :: T, DT
 
 ! Local variables:
@@ -2425,18 +2420,18 @@ RDT = 1._EB/DT
 
 SELECT CASE(PREDICTOR)
    CASE(.TRUE.)
-      PBAR_P => PBAR_S
+      PBAR_P => M%PBAR_S
    CASE(.FALSE.)
-      PBAR_P => PBAR
+      PBAR_P => M%PBAR
 END SELECT
 
 PREDICT_NORMALS: IF (PREDICTOR) THEN
 
    ! Run computation for External and Internal CFACE cells:
-   CFACE_LOOP: DO ICF=1,N_EXTERNAL_CFACE_CELLS+N_INTWALL_CFACE_CELLS+N_INTERNAL_CFACE_CELLS
+   CFACE_LOOP: DO ICF=1,M%N_EXTERNAL_CFACE_CELLS+M%N_INTWALL_CFACE_CELLS+M%N_INTERNAL_CFACE_CELLS
 
-      CFA => CFACE(ICF)
-      B1  => BOUNDARY_PROP1(CFA%B1_INDEX)
+      CFA => M%CFACE(ICF)
+      B1  => M%BOUNDARY_PROP1(CFA%B1_INDEX)
 
       WALL_CELL_TYPE: SELECT CASE (CFA%BOUNDARY_TYPE)
 
@@ -2479,9 +2474,9 @@ PREDICT_NORMALS: IF (PREDICTOR) THEN
 
    ENDDO CFACE_LOOP
 
-   DO ICF=1,N_EXTERNAL_CFACE_CELLS+N_INTWALL_CFACE_CELLS+N_INTERNAL_CFACE_CELLS
-      CFA => CFACE(ICF)
-      B1  => BOUNDARY_PROP1(CFA%B1_INDEX)
+   DO ICF=1,M%N_EXTERNAL_CFACE_CELLS+M%N_INTWALL_CFACE_CELLS+M%N_INTERNAL_CFACE_CELLS
+      CFA => M%CFACE(ICF)
+      B1  => M%BOUNDARY_PROP1(CFA%B1_INDEX)
       CFA%DUNDT = RDT*(B1%U_NORMAL_S-B1%U_NORMAL)
    ENDDO
 
@@ -2490,9 +2485,9 @@ ELSE PREDICT_NORMALS
    ! In the CORRECTOR step, the normal component of velocity, U_NORMAL, is the same as the predicted value, U_NORMAL_S.
    ! However, for species mass fluxes and HVAC, U_NORMAL is computed elsewhere (wall.f90).
 
-   CFACE_LOOPC: DO ICF=1,N_EXTERNAL_CFACE_CELLS+N_INTWALL_CFACE_CELLS+N_INTERNAL_CFACE_CELLS
-      CFA => CFACE(ICF)
-      B1  => BOUNDARY_PROP1(CFA%B1_INDEX)
+   CFACE_LOOPC: DO ICF=1,M%N_EXTERNAL_CFACE_CELLS+M%N_INTWALL_CFACE_CELLS+M%N_INTERNAL_CFACE_CELLS
+      CFA => M%CFACE(ICF)
+      B1  => M%BOUNDARY_PROP1(CFA%B1_INDEX)
       IF (CFA%BOUNDARY_TYPE==SOLID_BOUNDARY) THEN
          SF => SURFACE(CFA%SURF_INDEX)
          IF (SF%SPECIES_BC_INDEX==SPECIFIED_MASS_FLUX .OR. &
@@ -2502,9 +2497,9 @@ ELSE PREDICT_NORMALS
       B1%U_NORMAL = B1%U_NORMAL_S
    ENDDO CFACE_LOOPC
 
-   DO ICF=1,N_EXTERNAL_CFACE_CELLS+N_INTWALL_CFACE_CELLS+N_INTERNAL_CFACE_CELLS
-      CFA => CFACE(ICF)
-      B1 => BOUNDARY_PROP1(CFA%B1_INDEX)
+   DO ICF=1,M%N_EXTERNAL_CFACE_CELLS+M%N_INTWALL_CFACE_CELLS+M%N_INTERNAL_CFACE_CELLS
+      CFA => M%CFACE(ICF)
+      B1 => M%BOUNDARY_PROP1(CFA%B1_INDEX)
       CFA%DUNDT = CFA%DUNDT + 2._EB*RDT*(B1%U_NORMAL-B1%U_NORMAL_S)
    ENDDO
 
@@ -2583,7 +2578,7 @@ TNOW2= TNOW
 ! Populate Linked velocity arrays:
 DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
    CALL POINT_TO_MESH(NM)
-   CALL GET_LINKED_VELOCITIES(NM,PREDICTOR,CMP_FLG=.TRUE.)
+   CALL GET_LINKED_VELOCITIES(MESHES(NM),NM,PREDICTOR,CMP_FLG=.TRUE.)
 ENDDO
 
 ! Flux match Cartesian face velocity back to cut-faces:
