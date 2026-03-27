@@ -57,7 +57,8 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
 
     // Merged: MeshExchange(3) + PredFinalOrch (synthetic turbulence)
-    auto meshExch3SynTurbSM = makeBarrierSM(nmeshes, "MeshExch3+SynTurb",
+    // Uses BarrierTask (BarrierData→MeshData) since upstream subgraph emits BarrierData
+    auto meshExch3SynTurbTask = makeBarrierTask("MeshExch3+SynTurb",
         "CC_END_STEP\\nMESH_EXCHANGE(3)\\nSYNTHETIC_TURBULENCE",
         [ccIBM](auto& meshes) {
             if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
@@ -204,8 +205,8 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
 
     // Merged MeshExch(3) + SyntheticTurbulence -> PredFinal -> output
-    subgraph->edges(changeTimeStepSubgraph, meshExch3SynTurbSM);
-    subgraph->edges(meshExch3SynTurbSM, predFinalSubgraph);
+    subgraph->edges(changeTimeStepSubgraph, meshExch3SynTurbTask);
+    subgraph->edges(meshExch3SynTurbTask, predFinalSubgraph);
 
     subgraph->outputs(predFinalSubgraph);
 

@@ -3,6 +3,7 @@
 
 #include <hedgehog/hedgehog.h>
 #include <memory>
+#include "../data/barrier_data.h"
 #include "../data/change_timestep_data.h"
 #include "../data/mesh_data.h"
 #include "../data/termination_data.h"
@@ -11,48 +12,50 @@
 
 /// Build the time step retry sub-graph.
 ///
-/// Architecture with 2 tasks + loop state:
-///   RetryPreKernel → RetryMomDivKernel → RetryMomDivCollector → RetryLoopSM
-///                  ↘ (bypass when done=true) ──────────────────↗
+/// Architecture with 2 tasks + merged collector/loop state:
+///   RetryPreKernel → RetryMomDivKernel → RetryLoopSM (collects N + post-kernel)
+///                  ↘ (bypass when done=true) ↗
 ///
-/// RetryLoopSM includes the post-kernel work (divergence exchange, div_p2,
-/// pressure iteration, velocity predictor) and the retry check.
+/// RetryLoopSM collects N MeshData from the kernel, runs post-kernel work
+/// (divergence exchange, div_p2, pressure iteration, velocity predictor),
+/// and checks for retry.
 ///
-/// RetryLoopSM uses type-based routing:
+/// Type-specific edges avoid routing MeshData from RetryPreKernel to
+/// RetryLoopSM (only RetrySequenceData should take that path).
+///
+/// Output types (type-based routing):
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
-///   - MeshData → exits the sub-graph (retry complete or no retry needed)
+///   - BarrierData → exits the sub-graph (retry complete or no retry needed)
 inline auto buildChangeTimeStepSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<2, BarrierData, TerminationData, MeshData>;
+    using SubGraphType = hh::Graph<2, BarrierData, TerminationData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("ChangeTimeStepSubgraph");
 
     auto retryPreKernel = std::make_shared<RetryPreKernelTask>();
     auto retryMomDivKernel = std::make_shared<RetryMomentumDivKernelTask>(
         static_cast<size_t>(nmeshes));
-    auto retryMomDivCollSM = std::make_shared<hh::StateManager<
-        1, MeshData, RetrySequenceData>>(
-        std::make_shared<RetryMomentumDivCollector>(nmeshes), "RetryMomDivCollector");
 
     auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
-        std::make_shared<RetryLoopState>(), "RetryLoop");
+        std::make_shared<RetryLoopState>(nmeshes), "RetryLoop");
 
     // Entry point
     subgraph->input<BarrierData>(retryPreKernel);
     subgraph->input<TerminationData>(retryLoopSM);
 
-    // RetryPreKernel outputs:
-    //   MeshData → parallel kernel (retry path)
-    //   RetrySequenceData → bypass to loop state (no-retry path)
-    subgraph->edges(retryPreKernel, retryMomDivKernel);      // MeshData (scatter)
-    subgraph->edges(retryPreKernel, retryLoopSM);             // RetrySequenceData (bypass)
+    // RetryPreKernel → kernel: MeshData (all matching types, kernel only accepts MeshData)
+    subgraph->edges(retryPreKernel, retryMomDivKernel);
 
-    // Kernel → collector → loop state
-    subgraph->edges(retryMomDivKernel, retryMomDivCollSM);    // MeshData
-    subgraph->edges(retryMomDivCollSM, retryLoopSM);           // RetrySequenceData
+    // RetryPreKernel → loop: RetrySequenceData ONLY (bypass path)
+    // Must use edge<T> to avoid routing MeshData to the loop state
+    subgraph->template edge<RetrySequenceData>(retryPreKernel, retryLoopSM);
 
-    // Cycle: RetryLoopState emits RetrySequenceData → back to RetryPreKernel
-    subgraph->edges(retryLoopSM, retryPreKernel);
+    // Kernel → loop: MeshData (collected internally by merged state)
+    subgraph->edges(retryMomDivKernel, retryLoopSM);
 
-    // Exit: RetryLoopState emits MeshData → subgraph output
+    // Cycle: loop → pre-kernel: RetrySequenceData ONLY
+    // Must use edge<T> to avoid routing BarrierData back to pre-kernel
+    subgraph->template edge<RetrySequenceData>(retryLoopSM, retryPreKernel);
+
+    // Exit: RetryLoopState emits BarrierData → subgraph output
     subgraph->outputs(retryLoopSM);
 
     return subgraph;

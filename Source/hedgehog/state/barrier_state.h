@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include "../data/mesh_data.h"
+#include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Generic barrier state that collects N MeshData tokens, runs a barrier
@@ -98,6 +99,47 @@ inline auto makeBarrierSM(int nmeshes, std::string name,
         std::make_shared<BarrierState>(nmeshes, std::move(routines), std::move(fn),
                                        totalExpected),
         std::move(name));
+}
+
+/// Task variant: accepts pre-collected BarrierData, runs barrier function,
+/// scatters N MeshData tokens downstream. Used when upstream already holds
+/// collected meshes (e.g. retry loop output).
+class BarrierTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+public:
+    BarrierTask(std::string name, std::string routines, BarrierFn fn)
+        : hh::AbstractTask<1, BarrierData, MeshData>(std::move(name), 1),
+          routines_(std::move(routines)), fn_(std::move(fn)) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        auto t0 = std::chrono::steady_clock::now();
+        fn_(data->meshes);
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+        for (auto &md : data->meshes) { this->addResult(md); }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    std::string routines_;
+    BarrierFn fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+};
+
+/// Helper to create a BarrierTask (BarrierData → MeshData).
+inline auto makeBarrierTask(std::string name, std::string routines, BarrierFn fn) {
+    return std::make_shared<BarrierTask>(std::move(name), std::move(routines), std::move(fn));
 }
 
 #endif // BARRIER_STATE_H
