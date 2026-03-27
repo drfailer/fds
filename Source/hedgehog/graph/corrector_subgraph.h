@@ -9,7 +9,6 @@
 #include "../data/termination_data.h"
 #include "../state/barrier_state.h"
 #include "../state/div_setup_state.h"
-#include "../state/fork_join_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -27,86 +26,12 @@
 #include "../task/pipeline_fork2_tasks.h"
 #include "../tool/thread_budget.h"
 
-/// State that merges Fork2 Join + MeshExch(2) + DivExchange into a single node.
-/// Collects 2 BarrierData tokens (from radiation and DivP1 branches), runs
-/// exchange logic, then emits N MeshData tokens downstream.
-class Fork2JoinExchangeState : public hh::AbstractState<1, BarrierData, MeshData> {
-public:
-    Fork2JoinExchangeState(bool pressureInit)
-        : pressureInit_(pressureInit) {}
-
-    void execute(std::shared_ptr<BarrierData> data) override {
-        ++count_;
-        if (!meshes_) meshes_ = data;
-        if (count_ == 2) {
-            auto t0 = std::chrono::steady_clock::now();
-            if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
-            for (auto &md : meshes_->meshes) {
-                fds_divergence_part_1_add_qr_b(md->nm);
-            }
-            fds_exchange_divergence_info();
-            fds_rte_source_correction();
-            fds_global_matrix_reassign(0);
-            if (pressureInit_) {
-                fds_pressure_iteration_init();
-                fds_pressure_iteration_increment();
-            }
-            auto t1 = std::chrono::steady_clock::now();
-            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
-            ++invocations_;
-            for (auto &md : meshes_->meshes) {
-                this->addResult(md);
-            }
-            count_ = 0;
-            meshes_ = nullptr;
-        }
-    }
-
-    [[nodiscard]] std::string info() const {
-        std::ostringstream oss;
-        oss << "MESH_EXCHANGE(2)\\n"
-            << "QR_ADD\\n"
-            << "EXCH_DIV_INFO\\n"
-            << "RTE_SOURCE_CORR\\n"
-            << "GLOBAL_MATRIX_REASSIGN\\n"
-            << std::fixed << std::setprecision(3) << totalTime_ << "s"
-            << " / " << invocations_ << " calls";
-        if (invocations_ > 0)
-            oss << " / avg " << std::setprecision(3)
-                << (totalTime_ * 1000.0 / invocations_) << "ms";
-        return oss.str();
-    }
-
-private:
-    bool pressureInit_;
-    int count_ = 0;
-    std::shared_ptr<BarrierData> meshes_;
-    double totalTime_ = 0.0;
-    int invocations_ = 0;
-};
-
-class Fork2JoinExchangeStateManager
-    : public hh::StateManager<1, BarrierData, MeshData> {
-public:
-    Fork2JoinExchangeStateManager(std::shared_ptr<Fork2JoinExchangeState> const &state,
-                                   std::string const &name)
-        : hh::StateManager<1, BarrierData, MeshData>(state, name) {}
-
-    [[nodiscard]] std::string extraPrintingInformation() const override {
-        this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<Fork2JoinExchangeState>(
-            this->state())->info();
-        this->state()->unlock();
-        return ret;
-    }
-};
-
 /// Build the Corrector sub-graph.
 ///
 /// WallBC subgraph inlined: orchestrator+collector merged into adjacent barriers.
 ///   - Group A: Join1+Soot+Hvac+Condens+RemoveMove+PartMom+MeshExch7+WallBCOrch (2N→N)
 ///   - Group B: WallBCFinalize+ResetWallCounter+MeshExch6a+InitDiv (N→N)
-///   - Group C: Join2+MeshExch2+DivExch (non-CC_IBM, 2 BarrierData→N MeshData)
+///   - Group C: Join2+MeshExch2+DivExch (non-CC_IBM, 2N→N via makeBarrierSM)
 inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
@@ -203,7 +128,14 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
                 fds_mesh_exchange(6);
             });
 
-        auto meshExchange2 = std::make_shared<MeshExchangeTask>(2, false, false, true);
+        // MeshExch(2) + InitDiv barrier (radiation subgraph now emits MeshData)
+        auto meshExch2SM = makeBarrierSM(nmeshes, "MeshExchange(2)",
+            "MESH_EXCHANGE(2)\\nINIT_DIV_INTEGRALS",
+            [](auto& meshes) {
+                if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
+                fds_initialize_divergence_integrals();
+            });
+
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
         auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
@@ -220,8 +152,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
 
         subgraph->edges(wallBCKernelTask, groupBSM);
         subgraph->edges(groupBSM, corrRadiationSubgraph);
-        subgraph->edges(corrRadiationSubgraph, meshExchange2);
-        subgraph->edges(meshExchange2, corrDivP1KernelTask);
+        subgraph->edges(corrRadiationSubgraph, meshExch2SM);
+        subgraph->edges(meshExch2SM, corrDivP1KernelTask);
         subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
         subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
     } else {
@@ -240,22 +172,30 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(wallBCKernelTask, groupBSM);
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
-        auto fork2DivP1CollSM = std::make_shared<hh::StateManager<
-            1, MeshData, BarrierData>>(
-            std::make_shared<Fork2DivP1CollectorState>(nmeshes),
-            "Fork2DivP1Collector");
 
-        // Group C: Join2 + MeshExch(2) + DivExchange merged
-        auto groupCSM = std::make_shared<Fork2JoinExchangeStateManager>(
-            std::make_shared<Fork2JoinExchangeState>(useParallelPressure),
-            "Join2+MeshExch2+DivExch");
+        // Group C: Join2 + MeshExch(2) + QR + DivExchange (2N→N barrier)
+        auto groupCSM = makeBarrierSM(nmeshes, "Join2+MeshExch2+DivExch",
+            "MESH_EXCHANGE(2)\\nQR_ADD\\nEXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN",
+            [useParallelPressure](auto& meshes) {
+                if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
+                for (auto &md : meshes) {
+                    fds_divergence_part_1_add_qr_b(md->nm);
+                }
+                fds_exchange_divergence_info();
+                fds_rte_source_correction();
+                fds_global_matrix_reassign(0);
+                if (useParallelPressure) {
+                    fds_pressure_iteration_init();
+                    fds_pressure_iteration_increment();
+                }
+            },
+            2 * nmeshes);
 
         // Multicast to both branches (Hedgehog routes by type)
         subgraph->edges(groupBSM, corrRadiationSubgraph);
         subgraph->edges(groupBSM, fork2DivP1Task);
         subgraph->edges(corrRadiationSubgraph, groupCSM);
-        subgraph->edges(fork2DivP1Task, fork2DivP1CollSM);
-        subgraph->edges(fork2DivP1CollSM, groupCSM);
+        subgraph->edges(fork2DivP1Task, groupCSM);
         // Group C emits MeshData directly to DivP2
         subgraph->edges(groupCSM, corrDivP2KernelTask);
     }

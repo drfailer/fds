@@ -3,7 +3,6 @@
 
 #include <hedgehog/hedgehog.h>
 #include "../data/mesh_data.h"
-#include "../data/barrier_data.h"
 #include "../data/corr_radiation_data.h"
 #include "../fds_fortran_interface.h"
 
@@ -35,11 +34,11 @@ private:
 };
 
 // Collector: gathers N CorrRadiationWork results, accumulates global
-// RAD_Q_SUM/KFST4_SUM, sorts by nm, emits single BarrierData.
+// RAD_Q_SUM/KFST4_SUM, emits N MeshData tokens downstream.
 //
 // Uses direct indexed placement (nm - offset) to avoid sorting.
 class CorrRadiationCollector
-    : public hh::AbstractState<1, CorrRadiationWork, BarrierData> {
+    : public hh::AbstractState<1, CorrRadiationWork, MeshData> {
 public:
     explicit CorrRadiationCollector(int nmeshes)
         : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
@@ -55,12 +54,9 @@ public:
                 fds_accumulate_rad_sums(
                     w->radQSumPartial, w->kfst4SumPartial);
             }
-            auto bd = std::make_shared<BarrierData>();
-            bd->meshes.reserve(nmeshes_);
             for (auto &w : collected_) {
-                bd->meshes.push_back(w->originalMeshData);
+                this->addResult(w->originalMeshData);
             }
-            this->addResult(bd);
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;
         }
