@@ -95,8 +95,14 @@ TEST_CASES = {
         'compare_files': ['_devc.csv'],
         'timeout': 300
     },
-    # NOTE: sphere_helium_3meshes (3-mesh CC_IBM) segfaults in DIVERGENCE_PART_2_KERNEL ->
-    # GET_LINKED_VELOCITIES -> CC_RESTORE_UVW_UNLINKED. Needs investigation before adding.
+    'sphere_helium_3meshes_cc': {
+        'input': 'sphere_helium_3meshes.fds',
+        'chid': 'sphere_helium_3meshes',
+        'meshes': 3,
+        'description': '3-mesh Sphere Helium CC_IBM (UGLMAT)',
+        'compare_files': ['_devc.csv'],
+        'timeout': 120
+    },
 
     # --- Phase 3 coverage: particle, combustion, pressure solver ---
     'bucket_test_1_short': {
