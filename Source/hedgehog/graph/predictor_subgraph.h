@@ -21,7 +21,7 @@
 #include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
-#include "wallbc_subgraph.h"
+#include "../task/wallbc_kernel_task.h"
 #include "pressure_iteration_subgraph.h"
 #include "pred_fork_vflux_subgraph.h"
 #include "pred_fork_div_subgraph.h"
@@ -150,13 +150,16 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
-        auto predWallBCSubgraph = buildWallBCSubgraph(nmeshes, budget.standalone(2));
-        subgraph->edges(hvacInitDivSM, predWallBCSubgraph);
+        // WallBC inlined: no orchestrator needed in predictor (dt_bc=0, call_ht_1d=0 defaults)
+        auto predWallBCKernel = std::make_shared<WallBCKernelTask>(budget.standalone(2));
 
-        // Merged barrier: PredWallDivKernel + PredDivExchange + PressureInit
-        auto predDivExchangeSM = makeBarrierSM(nmeshes, "PredWallDiv+DivExch",
-            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // Merged barrier: WallBCFinalize + PredWallDivKernel + PredDivExchange + PressureInit
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallBCFin+WallDiv+DivExch",
+            "WALLBC_FINALIZE\\nPART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
+                for (auto &md : meshes) {
+                    fds_wall_bc_finalize(md->nm, md->t, md->dt_bc, md->call_ht_1d);
+                }
                 for (auto &md : meshes) {
                     fds_particle_momentum_kernel(md->nm, md->dt);
                     fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
@@ -169,7 +172,8 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        subgraph->edges(predWallBCSubgraph, predDivExchangeSM);
+        subgraph->edges(hvacInitDivSM, predWallBCKernel);
+        subgraph->edges(predWallBCKernel, predDivExchangeSM);
 
         // DivP2 -> Pressure -> VelPred
         subgraph->edges(predDivExchangeSM, predDivP2KernelTask);

@@ -11,10 +11,12 @@ struct MeshData {
     double dt;         ///< Current time step
     int phase;         ///< 0 = predictor, 1 = corrector
     bool firstPass;    ///< True on first pass through CHANGE_TIME_STEP_LOOP, false on CFL retry
+    double dt_bc;      ///< Boundary condition time step (set by WallBC orchestrator barrier)
+    int call_ht_1d;    ///< Flag for 1-D heat transfer (0=false, 1=true)
 
-    MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true) {}
+    MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true), dt_bc(0.0), call_ht_1d(0) {}
     MeshData(int nm_, double t_, double dt_, int phase_)
-        : nm(nm_), t(t_), dt(dt_), phase(phase_), firstPass(true) {}
+        : nm(nm_), t(t_), dt(dt_), phase(phase_), firstPass(true), dt_bc(0.0), call_ht_1d(0) {}
 
     friend std::ostream &operator<<(std::ostream &os, const MeshData &md) {
         os << "MeshData{nm=" << md.nm << ", t=" << md.t
