@@ -24,134 +24,169 @@ The goal is to replace the global barrier with per-mesh dependency tracking so
 that a mesh can proceed as soon as its specific dependencies are met, without
 waiting for unrelated meshes.
 
-## Architecture: Push-Then-Gate
+## Architecture: Pull-Only Exchange with Dependency Manager
 
-The global `MESH_EXCHANGE(CODE)` barrier is decomposed into two nodes:
+The global `MESH_EXCHANGE(CODE)` barrier is decomposed into a reusable
+sub-graph (`MeshExchangeGraph`) containing a cycle between a state machine
+and a parallel exchange task:
 
 ```
-[ExchangePushTask]    parallel task, copies source data to targets' OMESHes
+MeshDepsManager (state) <---> FluxExchangeTask (task, parallel)
+        |                             ^
+  input T tokens                MeshExchangeData (cycle)
         |
-[ExchangeGateState]   single-threaded state, pure dependency tracker
+  output T tokens (Done meshes)
 ```
 
-### ExchangePushTask (parallel, numThreads = kernelThreads)
+### MeshDependenciesManagerState (single-threaded state, dependency tracker)
 
-When mesh NM arrives, the push task copies NM's boundary data to all same-rank
-target meshes.  For CODE 5 (momentum fluxes):
+Manages a 4-state machine per mesh:
+
+```
+NotArrived -> Wait -> Processing -> Processed -> Done
+```
+
+**NotArrived -> Wait**: When a mesh token arrives from the upstream kernel,
+the mesh enters Wait and decrements `unarrivedNeighborCount` for all its
+same-rank neighbors (notifying them that one more dependency has arrived).
+
+**Wait -> Processing**: When `unarrivedNeighborCount[nm] == 0` (all neighbors
+have arrived and are therefore safe to read from), the state emits a
+`MeshExchangeData` token containing the mesh and its full neighbor list.
+This dispatches the mesh to the exchange task.
+
+**Processing -> Processed**: When the exchange task returns the
+`MeshExchangeData` (cycle edge), the mesh enters Processed and decrements
+`unprocessedNeighborCount` for all its neighbors.
+
+**Processed -> Done**: When `unprocessedNeighborCount[nm] == 0` (all neighbors
+have finished their exchange and are therefore not reading from this mesh
+anymore), the original `MeshData` token is emitted downstream.
+
+The Done gate is critical: it prevents a mesh from entering the solve (which
+modifies source arrays like FVX/FVY/FVZ/H) while a neighbor is still pulling
+data from it in the exchange task.
+
+Counter-based dependency tracking avoids full-mesh scans:
+- `unarrivedNeighborCount[nm]`: initialized to neighbor count, decremented on
+  each neighbor's arrival.  Guards Wait -> Processing.
+- `unprocessedNeighborCount[nm]`: initialized to neighbor count, decremented on
+  each neighbor's exchange return.  Guards Processed -> Done.
+
+### FluxExchangeTask (parallel task, numThreads from budget)
+
+Performs pull-only copies: each mesh pulls data **from** all its same-rank
+neighbors **into** its own OMESH buffers.  For CODE 5 (momentum fluxes):
 
 ```cpp
-void execute(std::shared_ptr<MeshData> md) override {
-    for (int target : depGraph_->sendTargets(md->nm)) {
-        if (fds_mesh_process(target) == myRank_) {
-            fds_flux_copy_neighbor_ts(md->nm, target);
-        }
+void execute(std::shared_ptr<MeshExchangeData> data) override {
+    int nm = data->mesh->nm;
+    for (int nom : data->neighbors) {
+        fds_flux_copy_neighbor_ts(nom, nm);  // pull NOM's data into NM's OMESH
     }
-    this->addResult(md);   // signal "push done"
+    this->addResult(data);
 }
 ```
 
-`fds_flux_copy_neighbor_ts(NM, NOM)` reads from `MESHES(NM)` and writes to
-`MESHES(NOM)%OMESH(NM)`.  This is a **push** operation: NM pushes its data
-out to NOM's ghost buffer.
+`fds_flux_copy_neighbor_ts(NOM, NM)` reads from `MESHES(NOM)` and writes to
+`MESHES(NM)%OMESH(NOM)`.
 
-Thread safety of parallel pushes:
-- Different source meshes write to different OMESH entries of the target
-  (`OMESH(A)` vs `OMESH(C)`), so there are no write conflicts.
-- Reads from source meshes are concurrent-safe (read-only before any solve).
+### MeshExchangeGraph (reusable sub-graph)
 
-### ExchangeGateState (single-threaded, pure dependency tracker)
-
-Receives "push done" signals from the upstream push task.  Each signal means
-mesh NM has finished copying its data to all targets.  The gate tracks which
-meshes have pushed and emits a mesh downstream only when **all of its
-receive-dependencies** have also pushed:
+Encapsulates the dependency manager + exchange task cycle as a typed sub-graph
+that can be instantiated multiple times in a pipeline:
 
 ```cpp
-void execute(std::shared_ptr<MeshData> data) override {
-    int nm = data->nm;
-    pendingMeshes_[nm] = data;
-    satisfied_.set(nm - 1);
-
-    // Check all local meshes for newly-satisfied dependencies
-    for (int destNM = lower_; destNM <= upper_; ++destNM) {
-        if (emitted_[destNM]) continue;
-        if (!pendingMeshes_[destNM]) continue;
-        if (noDeps_[destNM] ||
-            satisfied_.containsAll(depGraph_->sameRankRecvDeps(destNM))) {
-            emitted_[destNM] = true;
-            this->addResult(std::move(pendingMeshes_[destNM]));
-        }
+template <typename T>
+class MeshExchangeGraph : public hh::Graph<2, T, TerminationData, T> {
+    MeshExchangeGraph(depGraph, exchangeTask, name) {
+        // Entry: T -> depManager, TerminationData -> depManager
+        // Cycle: depManager -> exchangeTask -> depManager
+        // Exit: depManager emits T (Done meshes)
     }
-    if (allEmitted()) resetRound();
-}
-```
-
-A mesh can proceed when:
-1. It has been pushed (its data is saved in all targets' OMESHes).
-2. All of its receive-dependencies have been pushed (its own OMESH has
-   fresh data from all sources).
-
-The gate contains **no I/O** -- all copies and communication happen in the
-upstream push task.  This makes the gate reusable across different exchange
-codes (5, 3, 1, etc.) by pairing it with different push tasks.
-
-## Why Push-Then-Gate Avoids Data Races
-
-A naive pull model -- where each mesh pulls neighbor data into itself on
-arrival -- creates a race condition:
-
-```
-1. Pull model processes A: copies B's data into A's OMESH(B).  Emits A.
-2. A goes to solve, which modifies A's FVX/FVY/FVZ/H.
-3. Pull model processes B: copies A's data into B's OMESH(A).
-   But step 2 is modifying A concurrently!  DATA RACE.
-```
-
-The push model avoids this because the copy direction is reversed:
-
-```
-1. Push processes A: copies A's data TO targets' OMESHes.  Reads A (safe:
-   A hasn't entered the solve yet).  Emits A as "push done."
-2. Push processes B: copies B's data TO targets' OMESHes (including A's
-   OMESH(B)).  Reads B (safe: B hasn't entered the solve yet).  Emits B.
-3. Gate receives A and B.  Both have pushed.  Gate releases both.
-4. A and B enter the solve.  All OMESH entries are already populated.
-   No concurrent reads/writes on source mesh data.
-```
-
-Key invariant: **each mesh's push reads from itself before it is released to
-the solve**.  No other push task reads from the same mesh, so no solve can
-race with a push read.
-
-The gate provides the ordering guarantee: it holds a mesh until all its
-sources have pushed (and therefore finished writing to its OMESH entries).
-Hedgehog's queue synchronization ensures memory visibility between the push
-thread and the solve thread.
-
-## Supporting Infrastructure
-
-### DynBitset (`tool/dyn_bitset.h`)
-
-Dynamic bitset for tracking which meshes have pushed.  O(1) `set()`,
-`contains()`, and `containsAll()` (subset check via word-level AND):
-
-```cpp
-class DynBitset {
-    size_t nbits_;
-    std::vector<uint64_t> words_;
-public:
-    explicit DynBitset(size_t nbits);
-    void set(size_t pos);
-    bool contains(size_t pos) const;
-    bool containsAll(const DynBitset &other) const;  // is other a subset?
-    size_t count() const;
-    void reset();
 };
 ```
 
-`containsAll()` is the critical operation: it checks whether all bits set in
-`other` are also set in `this`.  For N meshes with W = ceil(N/64) words, the
-check is O(W) -- typically 1 word for up to 64 meshes.
+## Why Pull-Only Avoids Data Races
+
+Each mesh writes only to its **own** OMESH entries.  Different meshes writing
+concurrently never conflict because they target different OMESH arrays:
+
+```
+Mesh A pulls from B: writes to MESHES(A)%OMESH(B)
+Mesh B pulls from A: writes to MESHES(B)%OMESH(A)
+```
+
+These are entirely separate memory locations.  No synchronization is needed
+between concurrent pull operations.
+
+The dependency manager provides two ordering guarantees:
+
+1. **Wait -> Processing gate**: A mesh only starts pulling from neighbors
+   after all neighbors have arrived (are at least in Wait state).  This
+   ensures the exchange reads consistent source data — no neighbor is still
+   being modified by a previous-phase kernel.
+
+2. **Processed -> Done gate**: A mesh only proceeds to the next kernel after
+   all its neighbors have finished pulling.  This ensures no neighbor is
+   still reading the mesh's source data while the next kernel modifies it.
+
+```
+Timeline for meshes A (fast) and B (slow):
+
+1. A arrives, enters Wait.  B has not arrived yet.
+   unarrivedNeighborCount[A] = 1 (waiting for B).
+
+2. B arrives, enters Wait.  Decrements A's counter to 0.
+   Both A and B transition Wait -> Processing.
+
+3. A's exchange task pulls from B.  B's exchange task pulls from A.
+   (Concurrent: write to different OMESHs.)
+
+4. A returns, enters Processed.  Decrements B's unprocessedNeighborCount.
+   A cannot enter Done yet: B is still in Processing (reading from A).
+
+5. B returns, enters Processed.  Decrements A's unprocessedNeighborCount.
+   Both counters reach 0 -> both transition to Done.
+
+6. A and B are emitted downstream.  Safe to start the solve.
+```
+
+## Thread Budget
+
+Exchange task threads are allocated from the global `ThreadBudget`:
+
+```cpp
+auto preSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
+    depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
+    "PreSolveExchange");
+```
+
+The budget distributes threads proportionally by weight across pipeline stages.
+Exchange tasks are LIGHT weight (short per-element copy) relative to kernel
+tasks, so they typically receive fewer threads than the pressure solve.
+
+Within the pressure iteration pipeline, threads are distributed:
+
+```
+Baroclinic(1) -> Exchange(1) -> Solve(4) -> Exchange(1) -> VelError(2)
+```
+
+Weights sum to 8.  On a machine with 40 hardware threads and 16 meshes
+(cap=16), this yields: baroclinic=2, exchange=2, solve=8, velError=4.
+
+## Supporting Infrastructure
+
+### MeshExchangeData (`data/mesh_exchange_data.h`)
+
+Token flowing through the exchange cycle:
+
+```cpp
+struct MeshExchangeData {
+    std::shared_ptr<MeshData> mesh;   // The mesh to exchange
+    std::vector<int> neighbors;       // Same-rank neighbors to pull from (1-based)
+};
+```
 
 ### MeshDependencyGraph (`tool/mesh_dependency_graph.h`)
 
@@ -160,16 +195,21 @@ NIC_R/NIC_S topology queries:
 
 ```cpp
 class MeshDependencyGraph {
-    std::vector<DynBitset> recvDeps_;         // who sends TO mesh nm
-    std::vector<DynBitset> sameRankRecvDeps_; // same-rank subset
-    std::vector<std::vector<int>> sendTargets_; // who nm sends TO
+    std::vector<DynBitset> recvDeps_;               // who sends TO mesh nm
+    std::vector<DynBitset> sameRankRecvDeps_;       // same-rank subset
+    std::vector<std::vector<int>> sendTargets_;     // who nm sends TO
+    std::vector<DynBitset> sameRankNeighbors_;      // union(recv, send) same-rank
+    std::vector<std::vector<int>> sameRankNeighborsList_;  // sorted list form
 public:
     MeshDependencyGraph(int lowerMesh, int upperMesh);
-    const DynBitset &sameRankRecvDeps(int nm) const;
-    const std::vector<int> &sendTargets(int nm) const;
-    int totalMeshes() const;
+    const std::vector<int> &sameRankNeighborsList(int nm) const;
 };
 ```
+
+The `sameRankNeighborsList` is the union of receive dependencies and send
+targets, filtered to the same MPI rank.  This is what the dependency manager
+uses: a mesh must wait for ALL its neighbors (both those it reads from and
+those that read from it) because the Done gate needs the symmetry.
 
 Construction queries:
 - `fds_exchange_recv_dep_count(nm)` / `fds_exchange_recv_dep_mesh(nm, idx)`:
@@ -179,26 +219,41 @@ Construction queries:
 - `fds_mesh_process(nm)`: MPI rank owning mesh nm.
 
 The graph is shared (read-only after construction) between predictor and
-corrector subgraphs.
+corrector pressure iteration subgraphs.
+
+### DynBitset (`tool/dyn_bitset.h`)
+
+Dynamic bitset for tracking which meshes have arrived/processed.  O(1) `set()`,
+`contains()`, and `containsAll()` (subset check via word-level AND):
+
+```cpp
+class DynBitset {
+    std::vector<uint64_t> words_;
+public:
+    explicit DynBitset(size_t nbits);
+    void set(size_t pos);
+    bool contains(size_t pos) const;
+    bool containsAll(const DynBitset &other) const;
+    void reset();
+};
+```
 
 ### Mesh Topology Examples
 
 **Abutting meshes** (A shares a face with B):
-- `sendTargets(A)` includes B; `sendTargets(B)` includes A (symmetric).
-- `recvDeps(A)` includes B; `recvDeps(B)` includes A (symmetric).
-- Gate holds both until the other has pushed.
+- `sameRankNeighborsList(A)` includes B; `sameRankNeighborsList(B)` includes A.
+- Both must arrive before either starts exchanging.
+- Both must finish exchanging before either proceeds to solve.
 
-**Embedded meshes** (M3 is coarse, M5 is fine, nested inside M3):
-- `sendTargets(M3)` includes M5; `sendTargets(M5)` does NOT include M3.
-- `recvDeps(M5)` includes M3; `recvDeps(M3)` does NOT include M5.
-- Gate holds M5 until M3 pushes.  M3 can proceed independently.
-- This correctly reflects the unidirectional data flow: coarse mesh
-  boundary data flows to the fine mesh, not the other way around (for CODE 5).
+**Embedded meshes** (M3 coarse, M5 fine, nested inside M3):
+- `sameRankNeighborsList(M3)` includes M5; `sameRankNeighborsList(M5)` includes M3.
+- Both wait for each other (symmetric neighbors), ensuring the Done gate
+  works correctly in both directions.
 
 **Non-neighboring meshes**:
-- `sendTargets(A)` does not include C; `recvDeps(A)` does not include C.
-- Gate releases A without waiting for C.  This is the key advantage over
-  the global barrier.
+- `sameRankNeighborsList(A)` does not include C.
+- The dependency manager releases A without waiting for C.  This is the key
+  advantage over the global barrier.
 
 ### Thread-Safe Fortran Routine (`fds_driver.f90`)
 
@@ -206,16 +261,16 @@ The per-neighbor copy routine uses local pointer aliases instead of
 module-level M/M2/M3 to enable concurrent calls from different threads:
 
 ```fortran
-RECURSIVE SUBROUTINE MESH_EXCHANGE_FLUX_NEIGHBOR_TS(NM, NOM)
-INTEGER, INTENT(IN) :: NM, NOM
+RECURSIVE SUBROUTINE MESH_EXCHANGE_FLUX_NEIGHBOR_TS(NOM, NM)
+INTEGER, INTENT(IN) :: NOM, NM
 TYPE(MESH_TYPE), POINTER :: ML
 TYPE(OMESH_TYPE), POINTER :: OM_SEND, OM_RECV
 
-ML => MESHES(NM)
-OM_SEND => ML%OMESH(NOM)
+ML => MESHES(NOM)
+OM_SEND => ML%OMESH(NM)
 IF (OM_SEND%NIC_S == 0) RETURN
 
-OM_RECV => MESHES(NOM)%OMESH(NM)
+OM_RECV => MESHES(NM)%OMESH(NOM)
 
 OM_RECV%FVX(IMIN:IMAX,...) = ML%FVX(IMIN:IMAX,...)
 OM_RECV%FVY(IMIN:IMAX,...) = ML%FVY(IMIN:IMAX,...)
@@ -224,52 +279,56 @@ OM_RECV%H(IMIN:IMAX,...)   = ML%H(IMIN:IMAX,...)   ! or HS
 END SUBROUTINE
 ```
 
-Thread safety: two concurrent calls `(A, B)` and `(C, D)` write to
+Thread safety: calls `(A pulling from B)` and `(C pulling from D)` write to
 different OMESH entries of different meshes.  Reads from source meshes are
-concurrent-safe.
+concurrent-safe (source data is immutable until the Done gate releases the mesh).
 
 ## Integration: Pressure Iteration Subgraph
 
-The push-then-gate replaces the global `fds_mesh_exchange(5)` barrier in the
-first pressure iteration.  The pressure iteration subgraph pipeline:
+The pull-only exchange replaces the global `fds_mesh_exchange(5)` in the
+pressure iteration.  Two exchange instances are used — one before and one
+after the pressure solve:
 
 ```
-BaroclinicKernel (parallel, N threads)
+BaroclinicKernel (parallel)
     |
-ExchangePush (parallel, N threads: copy to targets' OMESHes)
+PreSolveExchange (MeshExchangeGraph: pull-only parallel exchange)
     |
-ExchangeGate (state: pure dependency tracker)
+PressureSolve (parallel: FFT or ULMAT)
     |
-PressureSolve (parallel, N threads: FFT or ULMAT)
+PostSolveExchange (MeshExchangeGraph: pull-only parallel exchange)
     |
-PressureConvergence (barrier: exchange(5) + velocity error + check)
+VelocityErrorTask (parallel)
+    |
+PressureConvergence (barrier: convergence check only)
     |--- not converged ---> PressureIterMeshData ---> BaroclinicKernel (cycle)
     |--- converged -------> MeshData ---> subgraph output
 ```
-
-The BaroclinicKernel computes the baroclinic correction per mesh, then each
-mesh's flux data is pushed to its targets.  The gate releases each mesh to
-the pressure solve as soon as its dependencies are met.  For non-neighboring
-meshes, this can happen before all meshes finish the baroclinic kernel --
-overlapping the slow mesh's kernel with the fast mesh's solve.
 
 ### Wiring
 
 ```cpp
 auto depGraph = std::make_shared<MeshDependencyGraph>(lower, upper);
 
-auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(kernelThreads);
-auto exchangePushTask = std::make_shared<ExchangePushTask>(kernelThreads, depGraph);
-auto exchangeGateSM   = std::make_shared<ExchangeGateManager>(
-    std::make_shared<ExchangeGateState>(depGraph), "ExchangeGate");
-auto solveKernel      = std::make_shared<PressureSolveKernelTask>(kernelThreads, presFlag);
-auto convergenceSM    = std::make_shared<PressureConvergenceManager>(...);
+auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(budget.baroclinic);
+auto solveKernel = std::make_shared<PressureSolveKernelTask>(budget.pressureSolve, presFlag);
+auto velErrorTask = std::make_shared<VelocityErrorTask>(budget.velError);
 
-subgraph->inputs(baroclinicKernel);
-subgraph->edges(baroclinicKernel, exchangePushTask);
-subgraph->edges(exchangePushTask, exchangeGateSM);
-subgraph->edges(exchangeGateSM, solveKernel);
-subgraph->edges(solveKernel, convergenceSM);
+auto preSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
+    depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
+    "PreSolveExchange");
+auto postSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
+    depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
+    "PostSolveExchange");
+
+auto convergenceSM = std::make_shared<PressureConvergenceManager>(...);
+
+subgraph->input<MeshData>(baroclinicKernel);
+subgraph->edges(baroclinicKernel, preSolveExchange);
+subgraph->edges(preSolveExchange, solveKernel);
+subgraph->edges(solveKernel, postSolveExchange);
+subgraph->edges(postSolveExchange, velErrorTask);
+subgraph->edges(velErrorTask, convergenceSM);
 subgraph->edge<PressureIterMeshData>(convergenceSM, baroclinicKernel);
 subgraph->outputs(convergenceSM);
 ```
@@ -277,51 +336,72 @@ subgraph->outputs(convergenceSM);
 The MeshDependencyGraph is built once in `fds_graph.h` and shared by both
 predictor and corrector pressure iteration subgraphs.
 
+### Termination
+
+Each `MeshExchangeGraph` instance contains an internal cycle (state <-> task).
+To terminate cleanly when the simulation ends, `TerminationData` is routed
+from the parent graph input to each exchange sub-graph:
+
+```cpp
+MeshExchangeGraph<MeshData>::wireTermination(subgraph, preSolveExchange);
+MeshExchangeGraph<MeshData>::wireTermination(subgraph, postSolveExchange);
+```
+
+When `TerminationData` arrives, the dependency manager sets `done_=true` and
+its `canTerminate()` override returns `true`, allowing the cycle to shut down.
+
 ## Extending to Other Exchange Codes
 
-The ExchangeGateState is code-agnostic -- it tracks dependencies using
-bitsets without knowing what data is being exchanged.  To replace a different
-`MESH_EXCHANGE(CODE)` barrier:
+The `MeshExchangeGraph` is exchange-code-agnostic.  The dependency manager
+tracks arrival/completion states without knowing what data is copied.  To
+replace a different `MESH_EXCHANGE(CODE)` barrier:
 
 1. **Create a thread-safe copy routine** for the specific CODE, following the
    `MESH_EXCHANGE_FLUX_NEIGHBOR_TS` pattern (RECURSIVE, local pointers,
    no module-level state).
 
-2. **Create a new push task** that calls the code-specific copy routine:
+2. **Create a new exchange task** that calls the code-specific copy routine:
    ```cpp
-   class ExchangePushCodeXTask
-       : public hh::AbstractTask<1, MeshData, MeshData> {
-       void execute(std::shared_ptr<MeshData> md) override {
-           for (int target : depGraph_->sendTargets(md->nm)) {
-               if (fds_mesh_process(target) == myRank_) {
-                   fds_code_x_copy_neighbor_ts(md->nm, target);
-               }
+   class CodeXExchangeTask
+       : public hh::AbstractTask<1, MeshExchangeData, MeshExchangeData> {
+       void execute(std::shared_ptr<MeshExchangeData> data) override {
+           int nm = data->mesh->nm;
+           for (int nom : data->neighbors) {
+               fds_code_x_copy_neighbor_ts(nom, nm);
            }
-           this->addResult(md);
+           this->addResult(data);
        }
    };
    ```
 
-3. **Reuse the same ExchangeGateState** with the same MeshDependencyGraph
-   (or a code-specific one if the dependency topology differs by CODE).
+3. **Instantiate a MeshExchangeGraph** with the new task:
+   ```cpp
+   auto exchange = std::make_shared<MeshExchangeGraph<MeshData>>(
+       depGraph, std::make_shared<CodeXExchangeTask>(budget.someField),
+       "CodeXExchange");
+   ```
 
-4. **Wire**: `upstream → PushTask → GateState → downstream`.
+4. **Wire** in the parent graph and route `TerminationData`.
 
-For cross-rank exchange (MPI), the push task would additionally pack data
-into a send buffer and post `MPI_Isend`.  The gate state would wait for
-both same-rank pushes AND `MPI_Irecv` completions before releasing a mesh.
+For cross-rank exchange (MPI), the exchange task would additionally pack data
+into a send buffer and post `MPI_Isend`.  The dependency manager would need
+additional state to track `MPI_Irecv` completions before transitioning to Done.
 
 ## Files
 
 ```
 Source/hedgehog/
-  tool/dyn_bitset.h                  Dynamic bitset for dependency tracking
-  tool/mesh_dependency_graph.h       Pre-computed mesh exchange topology
-  task/exchange_push_task.h          Parallel push task (CODE 5 flux copy)
-  state/exchange_orchestrator_state.h ExchangeGateState + ExchangeGateManager
-  graph/pressure_iteration_subgraph.h Wiring (push + gate in pipeline)
-  graph/fds_graph.h                  MeshDependencyGraph construction
-  fds_driver.f90                     MESH_EXCHANGE_FLUX_NEIGHBOR_TS
-  fds_c_interface.f90                C bindings for dependency queries + copy
-  fds_fortran_interface.h            C declarations
+  data/mesh_exchange_data.h               Token: mesh + neighbor list
+  tool/dyn_bitset.h                       Dynamic bitset for dependency tracking
+  tool/mesh_dependency_graph.h            Pre-computed mesh exchange topology
+  tool/thread_budget.h                    Hardware-aware thread allocation
+  task/mesh_exchange_task.h               FluxExchangeTask (parallel pull-only)
+  task/velocity_error_task.h              VelocityErrorTask (parallel)
+  state/mesh_dependencies_manager_state.h MeshDepsManager state + StateManager
+  graph/mesh_exchange_graph.h             Reusable exchange sub-graph template
+  graph/pressure_iteration_subgraph.h     Pipeline wiring (2 exchange instances)
+  graph/fds_graph.h                       MeshDependencyGraph construction
+  fds_driver.f90                          MESH_EXCHANGE_FLUX_NEIGHBOR_TS
+  fds_c_interface.f90                     C bindings for dependency queries + copy
+  fds_fortran_interface.h                 C declarations
 ```
