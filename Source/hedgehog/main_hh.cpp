@@ -131,7 +131,7 @@ int main(int argc, char *argv[]) {
 
     // Step 5: Wait for graph output (simulation complete).
     // getBlockingResult() blocks until the graph produces BarrierData output,
-    // which happens when TimestepLoopState receives done=true from TimestepDump.
+    // which happens when TimestepState emits done=true BarrierData.
     std::cout << "[FDS-HH] Waiting for graph termination..." << std::endl;
 
     graph->getBlockingResult();

@@ -11,101 +11,46 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Pure data-flow state for the time-stepping cycle.
+/// Merged dump-join + timestep-loop state.
 ///
-/// Receives a BarrierData from PostDumpState (which has already
-/// performed all dump I/O, diagnostics, stop check, and DT adjustment).
-/// Checks the done flag: if true, the simulation is finished - emits
-/// BarrierData to graph output for termination.  If false, re-emits the
-/// individual MeshData tokens with updated phase/DT for the next predictor
-/// step.
-class TimestepLoopState : public hh::AbstractState<1, BarrierData, MeshData, BarrierData> {
-public:
-    TimestepLoopState()
-        : hh::AbstractState<1, BarrierData, MeshData, BarrierData>() {}
-
-    void execute(std::shared_ptr<BarrierData> data) override {
-        if (data->done) {
-            done_ = true;
-            // Emit BarrierData to graph output (different type than MeshData cycle)
-            this->addResult(data);
-            return;
-        }
-
-        // Re-emit MeshData tokens for next predictor step with updated DT (cycles back)
-        for (auto &md : data->meshes) {
-            md->phase = 0;          // predictor
-            md->dt = data->newDt;   // CFL-adjusted DT
-            md->firstPass = true;   // new CHANGE_TIME_STEP_LOOP
-            md->dt_bc = 0.0;        // reset WallBC state (only set in corrector)
-            md->call_ht_1d = 0;     // reset WallBC state (only set in corrector)
-            this->addResult(md);
-        }
-    }
-
-    [[nodiscard]] bool isDone() const { return done_; }
-
-private:
-    bool done_ = false;
-};
-
-/// Custom state manager for the time-stepping cycle.
-/// Overrides canTerminate() to break the cycle when the simulation is done.
-/// Without this, Hedgehog cannot terminate nodes in the cycle because they
-/// wait on each other indefinitely.
-class TimestepLoopStateManager
-    : public hh::StateManager<1, BarrierData, MeshData, BarrierData> {
-public:
-    TimestepLoopStateManager(
-        std::shared_ptr<TimestepLoopState> const &state,
-        std::string const &name)
-        : hh::StateManager<1, BarrierData, MeshData, BarrierData>(
-              state, name) {}
-
-    [[nodiscard]] bool canTerminate() const override {
-        this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<TimestepLoopState>(
-            this->state())->isDone();
-        this->state()->unlock();
-        return ret;
-    }
-};
-
-/// Fork-join state for the dump phase: joins N MeshData tokens from
-/// DumpMeshOutputsTask with 1 BarrierData from DumpGlobalTask.
+/// Joins the two dump fork branches:
+///   - N MeshData tokens from DumpMeshOutputsTask (per-mesh I/O)
+///   - 1 BarrierData from DumpGlobalTask (global computation + global I/O)
 ///
-/// When both branches complete:
-///   1. STOP_CHECK — check for termination conditions
-///   2. Termination decision (t >= tEnd or STOP_STATUS)
-///   3. DT adjustment for next timestep
-/// Emits BarrierData with done/newDt/newIcyc for TimestepLoopState.
-class PostDumpState : public hh::AbstractState<2, MeshData, BarrierData, BarrierData> {
+/// When skipMeshDump is set on the BarrierData, no MeshData tokens are
+/// expected and the state proceeds immediately (skip-dump optimization).
+///
+/// After joining, performs STOP_CHECK and the termination decision:
+///   - If done: emits BarrierData → graph output for clean shutdown
+///   - If not done: adjusts DT, emits MeshData tokens → Predictor (cycle)
+class TimestepState : public hh::AbstractState<2, MeshData, BarrierData, MeshData, BarrierData> {
 public:
-    PostDumpState(int nmeshes, double tEnd, std::shared_ptr<int> icyc)
-        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)),
-          nmOffset_(fds_get_lower_mesh_index()) {
-        collected_.resize(nmeshes, nullptr);
-    }
+    TimestepState(int nmeshes, double tEnd, std::shared_ptr<int> icyc)
+        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
-        collected_[data->nm - nmOffset_] = data;
+    void execute(std::shared_ptr<MeshData> /*data*/) override {
         ++meshCount_;
         tryFinalize();
     }
 
     void execute(std::shared_ptr<BarrierData> data) override {
         globalBarrier_ = data;
+        if (data->skipMeshDump) meshCount_ = nmeshes_;
         tryFinalize();
     }
 
+    [[nodiscard]] bool isDone() const { return done_; }
+
     [[nodiscard]] std::string info() const {
         std::ostringstream oss;
-        oss << "STOP_CHECK\\n"
+        oss << "STOP_CHECK + cycle\\n"
             << std::fixed << std::setprecision(3) << totalTime_ << "s"
             << " / " << invocations_ << " calls";
         if (invocations_ > 0)
             oss << " / avg " << std::setprecision(3)
                 << (totalTime_ * 1000.0 / invocations_) << "ms";
+        if (skipped_ > 0)
+            oss << "\\n" << skipped_ << " skip-dump";
         return oss.str();
     }
 
@@ -115,79 +60,79 @@ private:
 
         auto t0 = std::chrono::steady_clock::now();
 
-        double t = collected_[0]->t;
-        double dt = collected_[0]->dt;
+        double t = globalBarrier_->meshes[0]->t;
+        double dt = globalBarrier_->meshes[0]->dt;
 
-        // Only STOP_CHECK remains here — global I/O moved to DumpGlobalTask
+        if (globalBarrier_->skipMeshDump) ++skipped_;
+
         fds_stop_check(1, t, dt);
 
-        // Build output with termination decision
-        auto bd = std::make_shared<BarrierData>();
         int stopStatus = fds_get_stop_status();
-
         if (t >= tEnd_ || stopStatus != 0) {
+            done_ = true;
+            auto bd = std::make_shared<BarrierData>();
             bd->done = true;
+            this->addResult(bd);
         } else {
-            bd->done = false;
             fds_set_predictor(1);
             fds_set_first_pass(1);
-            bd->newDt = fds_adjust_dt(t, dt);
+            double newDt = fds_adjust_dt(t, dt);
             ++(*icyc_);
             fds_set_icyc(*icyc_);
-            bd->newIcyc = *icyc_;
+
+            for (auto &md : globalBarrier_->meshes) {
+                md->phase = 0;
+                md->dt = newDt;
+                md->firstPass = true;
+                md->dt_bc = 0.0;
+                md->call_ht_1d = 0;
+                this->addResult(md);
+            }
         }
 
-        bd->meshes = std::move(collected_);
-        collected_.resize(nmeshes_, nullptr);
         meshCount_ = 0;
         globalBarrier_ = nullptr;
 
         auto t1 = std::chrono::steady_clock::now();
         totalTime_ += std::chrono::duration<double>(t1 - t0).count();
         ++invocations_;
-
-        this->addResult(bd);
     }
 
     int nmeshes_;
     double tEnd_;
     std::shared_ptr<int> icyc_;
-    int nmOffset_;
+    bool done_ = false;
     int meshCount_ = 0;
     std::shared_ptr<BarrierData> globalBarrier_ = nullptr;
-    std::vector<std::shared_ptr<MeshData>> collected_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
+    int skipped_ = 0;
 };
 
-/// StateManager wrapping PostDumpState, with extraPrintingInformation().
-class PostDumpStateManager
-    : public hh::StateManager<2, MeshData, BarrierData, BarrierData> {
+/// StateManager for TimestepState.
+/// Overrides canTerminate() to break the cycle when the simulation is done.
+class TimestepStateManager
+    : public hh::StateManager<2, MeshData, BarrierData, MeshData, BarrierData> {
 public:
-    PostDumpStateManager(std::shared_ptr<PostDumpState> const &state,
+    TimestepStateManager(std::shared_ptr<TimestepState> const &state,
                          std::string const &name)
-        : hh::StateManager<2, MeshData, BarrierData, BarrierData>(state, name) {}
+        : hh::StateManager<2, MeshData, BarrierData, MeshData, BarrierData>(
+              state, name) {}
 
-    [[nodiscard]] std::string extraPrintingInformation() const override {
+    [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<PostDumpState>(
-            this->state())->info();
+        auto ret = std::dynamic_pointer_cast<TimestepState>(
+            this->state())->isDone();
         this->state()->unlock();
         return ret;
     }
-};
 
-/// Simple sink state for graph termination.
-/// Receives the final BarrierData (with done=true) and passes it to graph output.
-/// This allows the graph to have a dedicated termination output that doesn't
-/// interfere with the MeshData cycle.
-class TerminationSinkState : public hh::AbstractState<1, BarrierData, BarrierData> {
-public:
-    TerminationSinkState()
-        : hh::AbstractState<1, BarrierData, BarrierData>() {}
-
-    void execute(std::shared_ptr<BarrierData> data) override {
-        this->addResult(data);
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        this->state()->lock();
+        auto ret = std::dynamic_pointer_cast<TimestepState>(
+            this->state())->info();
+        this->state()->unlock();
+        return ret;
     }
 };
 

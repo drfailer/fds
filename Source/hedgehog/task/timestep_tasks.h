@@ -14,18 +14,34 @@
 ///   - Emits individual MeshData tokens → DumpMeshOutputsTask (per-mesh I/O)
 ///   - Forwards BarrierData → DumpGlobalTask (global computation + global I/O)
 ///
-/// No computation — pure data routing.
+/// Skip-dump optimization: checks dump schedules for all meshes. When no mesh
+/// needs output, sets skipMeshDump=true and skips emitting MeshData entirely.
+/// TimestepState sees the flag and proceeds without waiting for per-mesh tokens.
 class PreDumpScatterTask : public hh::AbstractTask<1, BarrierData, MeshData, BarrierData> {
 public:
     PreDumpScatterTask()
         : hh::AbstractTask<1, BarrierData, MeshData, BarrierData>("PreDumpScatter", 1) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
-        // Fork branch 1: individual MeshData tokens for per-mesh dump
+        // Check if any mesh needs dumping this timestep
+        bool anyDump = false;
         for (auto &md : data->meshes) {
-            this->addResult(md);
+            bool dump = false;
+            fds_check_dump_schedule(md->t, md->nm, &dump);
+            if (dump) { anyDump = true; break; }
         }
-        // Fork branch 2: BarrierData for global computation + global I/O
+
+        if (anyDump) {
+            // Fork branch 1: individual MeshData tokens for per-mesh dump
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
+            data->skipMeshDump = false;
+        } else {
+            data->skipMeshDump = true;
+        }
+
+        // Fork branch 2 (always): BarrierData for global computation + global I/O
         this->addResult(data);
     }
 };
@@ -51,12 +67,12 @@ public:
         double t = data->t();
         double dt = data->dt();
 
-        // Global computation (was in PreDump)
+        // Global computation
         fds_set_diagnostics(*icyc_, t, dt);
         fds_exchange_global_outputs(t, dt);
         fds_update_controls(t, dt);
 
-        // Global file I/O (was in PostDump)
+        // Global file I/O
         fds_dump_global_outputs(t, dt);
         fds_write_strings(t, dt);
         fds_write_diagnostics(t, dt);
@@ -75,6 +91,7 @@ private:
 /// internally — no POINT_TO_MESH, fully thread-safe.
 ///
 /// Runs in parallel with DumpGlobalTask (different files).
+/// Receives no data when skipMeshDump=true (idle on non-dump timesteps).
 class DumpMeshOutputsTask : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit DumpMeshOutputsTask(size_t numThreads)

@@ -12,10 +12,10 @@
 struct BarrierData {
     std::vector<std::shared_ptr<MeshData>> meshes;
 
-    // Fields used by TimestepDumpCollector to communicate results to TimestepLoopState
     bool done = false;           ///< True when simulation should terminate
     double newDt = 0.0;          ///< CFL-adjusted DT for next time step
     int newIcyc = 0;             ///< ICYC value for the next time step
+    bool skipMeshDump = false;   ///< True when no mesh needs dump I/O this timestep
 
     double t() const { return meshes.empty() ? 0.0 : meshes[0]->t; }
     double dt() const { return meshes.empty() ? 0.0 : meshes[0]->dt; }
