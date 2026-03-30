@@ -8,6 +8,7 @@
 #include "../data/barrier_data.h"
 #include "../data/termination_data.h"
 #include "../state/timestep_state.h"
+#include "../task/timestep_tasks.h"
 #include "../tool/mesh_dependency_graph.h"
 #include "../tool/thread_budget.h"
 #include "predictor_subgraph.h"
@@ -47,8 +48,20 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     // --- Create timestep pipeline components ---
 
-    auto timestepDumpSM = std::make_shared<TimestepDumpStateManager>(
-        std::make_shared<TimestepDumpState>(nmeshes, tEnd), "TimestepDump");
+    // Shared icyc counter between pre-dump (SET_DIAGNOSTICS) and post-dump (SET_ICYC)
+    auto icyc = std::make_shared<int>(1);
+
+    // Pre-dump: global ops (SET_DIAGNOSTICS, EXCHANGE_GLOBAL_OUTPUTS, UPDATE_CONTROLS)
+    // then scatter MeshData tokens for parallel dump
+    auto preDumpTask = std::make_shared<TimestepGlobalTask>(icyc);
+
+    // Parallel per-mesh dump I/O (thread-safe, N threads)
+    auto dumpTask = std::make_shared<DumpMeshOutputsTask>(
+        static_cast<size_t>(nmeshes));
+
+    // Post-dump: collect results, global finalization, termination decision
+    auto postDumpSM = std::make_shared<PostDumpStateManager>(
+        std::make_shared<PostDumpState>(nmeshes, tEnd, icyc), "PostDump");
 
     auto timestepLoopSM = std::make_shared<TimestepLoopStateManager>(
         std::make_shared<TimestepLoopState>(), "TimestepLoop");
@@ -64,9 +77,11 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Predictor -> Corrector
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Corrector -> TimestepDump -> TimestepLoop
-    graph->edges(correctorSubgraph, timestepDumpSM);
-    graph->edges(timestepDumpSM, timestepLoopSM);
+    // Corrector -> PreDump -> DumpTask (parallel) -> PostDump -> TimestepLoop
+    graph->edges(correctorSubgraph, preDumpTask);
+    graph->edges(preDumpTask, dumpTask);
+    graph->edges(dumpTask, postDumpSM);
+    graph->edges(postDumpSM, timestepLoopSM);
 
     // Cycle: TimestepLoop -> back to Predictor (MeshData)
     graph->edges(timestepLoopSM, predictorSubgraph);

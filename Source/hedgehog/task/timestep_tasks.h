@@ -37,23 +37,24 @@ private:
     std::shared_ptr<int> icyc_;
 };
 
-/// Per-mesh dump I/O task.
+/// Per-mesh dump I/O task (thread-safe, multi-threaded).
 ///
-/// Calls DUMP_MESH_OUTPUTS for a single mesh. Each mesh writes to its own
-/// independent files (SLCF, BNDF, PRT5, etc.).
-///
-/// Uses 1 thread because DUMP_MESH_OUTPUTS internally calls POINT_TO_MESH
-/// which sets global module-level pointers (not thread-safe). Future work:
-/// create a kernel version that uses M => MESHES(NM) directly to enable
-/// multi-threaded dump I/O.
+/// Calls fds_dump_mesh_outputs_ts for a single mesh. Each mesh writes to its
+/// own independent files (SLCF, BNDF, PRT5, etc.). Uses M => MESHES(NM)
+/// internally — no POINT_TO_MESH, fully thread-safe.
 class DumpMeshOutputsTask : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    DumpMeshOutputsTask()
-        : hh::AbstractTask<1, MeshData, MeshData>("DumpMeshOutputs", 1) {}
+    explicit DumpMeshOutputsTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData, MeshData>("DumpMeshOutputs", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
         fds_dump_mesh_outputs_ts(data->t, data->dt, data->nm);
         this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    copy() override {
+        return std::make_shared<DumpMeshOutputsTask>(this->numberThreads());
     }
 };
 
