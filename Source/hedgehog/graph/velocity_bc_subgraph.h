@@ -44,7 +44,8 @@ inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     bool ccIBM = fds_is_cc_ibm() != 0;
     auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<CorrFinalOrchestrator>(nmeshes, ccIBM), "CorrFinalOrch");
-    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/0);
+    auto kernelTask = std::make_shared<VelocityBCEdgesTask>(
+        kernelThreads, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*runDevices=*/true);
     auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CorrFinalCollector>(nmeshes), "CorrFinalCollector");
 

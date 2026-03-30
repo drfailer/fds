@@ -140,6 +140,8 @@ void fds_check_divergence(int nm);
 
 // Output subroutines (per-mesh)
 void fds_update_global_outputs(double t, double dt, int nm);
+void fds_update_devices_1_ts(double t, double dt, int nm);
+void fds_update_hrr_mass(double t, double dt, int nm);
 void fds_dump_mesh_outputs(double t, double dt, int nm);
 void fds_dump_mesh_outputs_ts(double t, double dt, int nm);
 

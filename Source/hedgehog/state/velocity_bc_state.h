@@ -51,8 +51,8 @@ private:
 /// Collector for CorrFinal sub-graph.
 ///
 /// Gathers N kernel results, runs sequential finalization:
-///   - UPDATE_GLOBAL_OUTPUTS (per-mesh output accumulation — always needed)
-/// CC_VELOCITY_BC moved to parallel VelocityBCEdgesTask (thread-safe).
+///   - UPDATE_HRR + UPDATE_MASS + FIRE_SPREAD (cross-mesh accumulators, must be sequential)
+/// CC_VELOCITY_BC and UPDATE_DEVICES_1 moved to parallel VelocityBCEdgesTask.
 /// Then emits single BarrierData downstream (avoids re-collection at graph boundary).
 class CorrFinalCollector
     : public hh::AbstractState<1, MeshData, BarrierData> {
@@ -68,7 +68,7 @@ public:
 
         if (count_ == nmeshes_) {
             for (auto &md : collected_) {
-                fds_update_global_outputs(md->t, md->dt, md->nm);
+                fds_update_hrr_mass(md->t, md->dt, md->nm);
             }
 
             auto bd = std::make_shared<BarrierData>();

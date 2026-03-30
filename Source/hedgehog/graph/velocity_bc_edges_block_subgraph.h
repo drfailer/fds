@@ -143,7 +143,8 @@ public:
                     fds_set_drag_uvwmax(e.meshData->nm, e.dragUvwMax);
                     fds_cc_velocity_bc_ts(e.meshData->t, e.meshData->nm, applyToEstimated_, 1);
                     if (isCorrFinal_) {
-                        fds_update_global_outputs(e.meshData->t, e.meshData->dt, e.meshData->nm);
+                        fds_update_devices_1_ts(e.meshData->t, e.meshData->dt, e.meshData->nm);
+                        fds_update_hrr_mass(e.meshData->t, e.meshData->dt, e.meshData->nm);
                     }
                 }
 
