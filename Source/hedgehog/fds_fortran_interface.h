@@ -140,6 +140,7 @@ void fds_check_divergence(int nm);
 // Output subroutines (per-mesh)
 void fds_update_global_outputs(double t, double dt, int nm);
 void fds_dump_mesh_outputs(double t, double dt, int nm);
+void fds_dump_mesh_outputs_ts(double t, double dt, int nm);
 
 // Global output subroutines (called once after all meshes complete corrector)
 void fds_exchange_global_outputs(double t, double dt);

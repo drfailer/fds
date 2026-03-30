@@ -52,7 +52,7 @@ public:
         : hh::AbstractTask<1, MeshData, MeshData>("DumpMeshOutputs", 1) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        fds_dump_mesh_outputs(data->t, data->dt, data->nm);
+        fds_dump_mesh_outputs_ts(data->t, data->dt, data->nm);
         this->addResult(data);
     }
 };

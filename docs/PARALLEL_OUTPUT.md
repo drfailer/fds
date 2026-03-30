@@ -356,7 +356,7 @@ This ensures data reaches disk periodically for crash recovery.
 
 ---
 
-### Phase 3: Thread-Safe Dump Routines
+### Phase 3: Thread-Safe Dump Routines — COMPLETE
 
 **Goal**: Remove POINT_TO_MESH dependency so dump routines can run in parallel.
 

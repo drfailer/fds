@@ -98,7 +98,7 @@ public:
 
         // Phase 2: Per-mesh dump I/O
         for (auto &md : data->meshes) {
-            fds_dump_mesh_outputs(md->t, md->dt, md->nm);
+            fds_dump_mesh_outputs_ts(md->t, md->dt, md->nm);
         }
 
         // Phase 3: Global post-dump finalization
