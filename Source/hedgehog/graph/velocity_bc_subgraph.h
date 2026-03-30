@@ -22,20 +22,12 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
+    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+        std::make_shared<PredFinalCollector>(nmeshes), "PredFinalCollector");
 
     subgraph->inputs(kernelTask);
-
-    if (fds_is_cc_ibm()) {
-        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<PredFinalCCCollector>(nmeshes), "PredFinalCollector");
-        subgraph->edges(kernelTask, collectorSM);
-        subgraph->outputs(collectorSM);
-    } else {
-        auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<PredFinalCollector>(nmeshes), "PredFinalCollector");
-        subgraph->edges(kernelTask, collectorSM);
-        subgraph->outputs(collectorSM);
-    }
+    subgraph->edges(kernelTask, collectorSM);
+    subgraph->outputs(collectorSM);
 
     return subgraph;
 }

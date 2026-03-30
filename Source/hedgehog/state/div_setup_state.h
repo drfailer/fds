@@ -7,8 +7,8 @@
 #include "../fds_fortran_interface.h"
 
 /// Orchestrator state for predictor div setup sub-graph.
-/// Sequential pre-processing: CC_VELOCITY_BC (if CC_IBM).
-/// SET_BAROCLINIC_FALSE, VISCOSITY_BC, AGGLOMERATION moved to parallel kernel task.
+/// CC_VELOCITY_BC moved to parallel DivSetupKernelTask (thread-safe).
+/// This orchestrator is now a pass-through barrier (kept for graph topology).
 class PredDivSetupOrchestrator
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
@@ -22,16 +22,9 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential pre-processing (only CC_IBM remains)
-            for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 0, 0);  // CC_IBM: DO_IBEDGES=FALSE (velocity flux context)
-            }
-
-            // Dispatch for parallel kernel execution
             for (auto &md : collected_) {
                 this->addResult(md);
             }
-
             collected_.clear();
             collected_.reserve(nmeshes_);
         }
@@ -43,8 +36,8 @@ private:
 };
 
 /// Orchestrator state for corrector div setup sub-graph.
-/// Sequential pre-processing: CC_VELOCITY_BC (if CC_IBM).
-/// SET_BAROCLINIC_FALSE, VISCOSITY_BC, AGGLOMERATION moved to parallel kernel task.
+/// CC_VELOCITY_BC moved to parallel DivSetupKernelTask (thread-safe).
+/// This orchestrator is now a pass-through barrier (kept for graph topology).
 class CorrDivSetupOrchestrator
     : public hh::AbstractState<1, MeshData, MeshData> {
 public:
@@ -58,16 +51,9 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential pre-processing (only CC_IBM remains)
-            for (auto &md : collected_) {
-                fds_cc_velocity_bc(md->t, md->nm, 1, 0);  // CC_IBM: DO_IBEDGES=FALSE (velocity flux context)
-            }
-
-            // Dispatch for parallel kernel execution
             for (auto &md : collected_) {
                 this->addResult(md);
             }
-
             collected_.clear();
             collected_.reserve(nmeshes_);
         }
