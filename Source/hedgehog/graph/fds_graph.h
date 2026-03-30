@@ -17,14 +17,17 @@
 /// Build the FDS Hedgehog dataflow graph.
 ///
 /// The graph implements the FDS time-stepping loop as a dataflow pipeline:
-///   Predictor sub-graph -> Corrector sub-graph -> Timestep loop -> cycle back
+///   Predictor -> Corrector -> Dump fork -> Timestep loop -> cycle back
 ///
-/// The Corrector sub-graph outputs BarrierData directly (CorrFinal collector
-/// already gathers all meshes), so no external TimestepCollector is needed.
+/// The dump phase uses a fork-join pattern:
+///   PreDumpScatter forks into two parallel branches:
+///     - DumpGlobalTask: global computation (SET_DIAGNOSTICS, EXCHANGE_GLOBAL_OUTPUTS,
+///       UPDATE_CONTROLS) + global file I/O (HRR.csv, mass.csv, devc.csv, .smv)
+///     - DumpMeshOutputsTask: per-mesh file I/O (SLCF .sf, BNDF .bf, PRT5 .prt5, etc.)
+///   PostDump joins both branches, then runs STOP_CHECK + termination decision.
 ///
-/// TerminationData is accepted as a second input type and routed to the
-/// predictor and corrector sub-graphs, which forward it to their pressure
-/// iteration sub-graphs for cycle termination.
+/// Global files and per-mesh files are completely independent, so the two
+/// branches run in parallel with no contention.
 ///
 /// @param nmeshes Number of meshes
 /// @param t Initial simulation time
@@ -46,20 +49,22 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget, depGraph, commService);
     auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget, depGraph, commService);
 
-    // --- Create timestep pipeline components ---
+    // --- Create dump fork-join components ---
 
-    // Shared icyc counter between pre-dump (SET_DIAGNOSTICS) and post-dump (SET_ICYC)
+    // Shared icyc counter between DumpGlobal (SET_DIAGNOSTICS) and PostDump (SET_ICYC)
     auto icyc = std::make_shared<int>(1);
 
-    // Pre-dump: global ops (SET_DIAGNOSTICS, EXCHANGE_GLOBAL_OUTPUTS, UPDATE_CONTROLS)
-    // then scatter MeshData tokens for parallel dump
-    auto preDumpTask = std::make_shared<TimestepGlobalTask>(icyc);
+    // Scatter: BarrierData -> fork into MeshData (per-mesh) + BarrierData (global)
+    auto preDumpScatter = std::make_shared<PreDumpScatterTask>();
 
-    // Parallel per-mesh dump I/O (thread-safe, N threads)
-    auto dumpTask = std::make_shared<DumpMeshOutputsTask>(
+    // Fork branch 1: global computation + global file I/O (1 thread)
+    auto dumpGlobalTask = std::make_shared<DumpGlobalTask>(icyc);
+
+    // Fork branch 2: parallel per-mesh dump I/O (N threads)
+    auto dumpMeshTask = std::make_shared<DumpMeshOutputsTask>(
         static_cast<size_t>(nmeshes));
 
-    // Post-dump: collect results, global finalization, termination decision
+    // Join: collect N MeshData + 1 BarrierData, then STOP_CHECK + termination
     auto postDumpSM = std::make_shared<PostDumpStateManager>(
         std::make_shared<PostDumpState>(nmeshes, tEnd, icyc), "PostDump");
 
@@ -77,10 +82,18 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Predictor -> Corrector
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Corrector -> PreDump -> DumpTask (parallel) -> PostDump -> TimestepLoop
-    graph->edges(correctorSubgraph, preDumpTask);
-    graph->edges(preDumpTask, dumpTask);
-    graph->edges(dumpTask, postDumpSM);
+    // Corrector -> Scatter (BarrierData)
+    graph->edges(correctorSubgraph, preDumpScatter);
+
+    // Fork: Scatter -> DumpGlobal (BarrierData) + DumpMesh (MeshData)
+    graph->edges(preDumpScatter, dumpGlobalTask);
+    graph->edges(preDumpScatter, dumpMeshTask);
+
+    // Join: DumpGlobal (BarrierData) + DumpMesh (MeshData) -> PostDump
+    graph->edges(dumpGlobalTask, postDumpSM);
+    graph->edges(dumpMeshTask, postDumpSM);
+
+    // PostDump -> TimestepLoop (BarrierData)
     graph->edges(postDumpSM, timestepLoopSM);
 
     // Cycle: TimestepLoop -> back to Predictor (MeshData)

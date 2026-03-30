@@ -459,7 +459,7 @@ mitigates this by documenting all aliases upfront.
 
 ---
 
-### Phase 4: Parallel Dump via Hedgehog
+### Phase 4: Parallel Dump via Hedgehog — COMPLETE (4a-4d)
 
 **Goal**: Run per-mesh dump I/O in parallel using Hedgehog task threads.
 

@@ -13,7 +13,7 @@
 
 /// Pure data-flow state for the time-stepping cycle.
 ///
-/// Receives a BarrierData from TimestepDumpCollector (which has already
+/// Receives a BarrierData from PostDumpState (which has already
 /// performed all dump I/O, diagnostics, stop check, and DT adjustment).
 /// Checks the done flag: if true, the simulation is finished - emits
 /// BarrierData to graph output for termination.  If false, re-emits the
@@ -71,16 +71,15 @@ public:
     }
 };
 
-/// Post-dump collector state: collects N MeshData tokens from parallel
-/// DumpMeshOutputsTask, then runs global post-dump operations and termination
-/// decision.
+/// Fork-join state for the dump phase: joins N MeshData tokens from
+/// DumpMeshOutputsTask with 1 BarrierData from DumpGlobalTask.
 ///
-/// Performs:
-///   1. Global post-dump ops (DUMP_GLOBAL_OUTPUTS, WRITE_STRINGS, WRITE_DIAGNOSTICS, STOP_CHECK)
+/// When both branches complete:
+///   1. STOP_CHECK — check for termination conditions
 ///   2. Termination decision (t >= tEnd or STOP_STATUS)
 ///   3. DT adjustment for next timestep
 /// Emits BarrierData with done/newDt/newIcyc for TimestepLoopState.
-class PostDumpState : public hh::AbstractState<1, MeshData, BarrierData> {
+class PostDumpState : public hh::AbstractState<2, MeshData, BarrierData, BarrierData> {
 public:
     PostDumpState(int nmeshes, double tEnd, std::shared_ptr<int> icyc)
         : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)),
@@ -90,17 +89,36 @@ public:
 
     void execute(std::shared_ptr<MeshData> data) override {
         collected_[data->nm - nmOffset_] = data;
-        if (++count_ < nmeshes_) return;
+        ++meshCount_;
+        tryFinalize();
+    }
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        globalBarrier_ = data;
+        tryFinalize();
+    }
+
+    [[nodiscard]] std::string info() const {
+        std::ostringstream oss;
+        oss << "STOP_CHECK\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    void tryFinalize() {
+        if (meshCount_ < nmeshes_ || !globalBarrier_) return;
 
         auto t0 = std::chrono::steady_clock::now();
 
         double t = collected_[0]->t;
         double dt = collected_[0]->dt;
 
-        // Global post-dump finalization
-        fds_dump_global_outputs(t, dt);
-        fds_write_strings(t, dt);
-        fds_write_diagnostics(t, dt);
+        // Only STOP_CHECK remains here — global I/O moved to DumpGlobalTask
         fds_stop_check(1, t, dt);
 
         // Build output with termination decision
@@ -121,7 +139,8 @@ public:
 
         bd->meshes = std::move(collected_);
         collected_.resize(nmeshes_, nullptr);
-        count_ = 0;
+        meshCount_ = 0;
+        globalBarrier_ = nullptr;
 
         auto t1 = std::chrono::steady_clock::now();
         totalTime_ += std::chrono::duration<double>(t1 - t0).count();
@@ -130,26 +149,12 @@ public:
         this->addResult(bd);
     }
 
-    [[nodiscard]] std::string info() const {
-        std::ostringstream oss;
-        oss << "DUMP_GLOBAL_OUTPUTS\\n"
-            << "WRITE_STRINGS\\n"
-            << "WRITE_DIAGNOSTICS\\n"
-            << "STOP_CHECK\\n"
-            << std::fixed << std::setprecision(3) << totalTime_ << "s"
-            << " / " << invocations_ << " calls";
-        if (invocations_ > 0)
-            oss << " / avg " << std::setprecision(3)
-                << (totalTime_ * 1000.0 / invocations_) << "ms";
-        return oss.str();
-    }
-
-private:
     int nmeshes_;
     double tEnd_;
     std::shared_ptr<int> icyc_;
     int nmOffset_;
-    int count_ = 0;
+    int meshCount_ = 0;
+    std::shared_ptr<BarrierData> globalBarrier_ = nullptr;
     std::vector<std::shared_ptr<MeshData>> collected_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
@@ -157,11 +162,11 @@ private:
 
 /// StateManager wrapping PostDumpState, with extraPrintingInformation().
 class PostDumpStateManager
-    : public hh::StateManager<1, MeshData, BarrierData> {
+    : public hh::StateManager<2, MeshData, BarrierData, BarrierData> {
 public:
     PostDumpStateManager(std::shared_ptr<PostDumpState> const &state,
                          std::string const &name)
-        : hh::StateManager<1, MeshData, BarrierData>(state, name) {}
+        : hh::StateManager<2, MeshData, BarrierData, BarrierData>(state, name) {}
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         this->state()->lock();
