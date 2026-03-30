@@ -37,6 +37,8 @@ public:
             md->phase = 0;          // predictor
             md->dt = data->newDt;   // CFL-adjusted DT
             md->firstPass = true;   // new CHANGE_TIME_STEP_LOOP
+            md->dt_bc = 0.0;        // reset WallBC state (only set in corrector)
+            md->call_ht_1d = 0;     // reset WallBC state (only set in corrector)
             this->addResult(md);
         }
     }
