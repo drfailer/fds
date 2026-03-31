@@ -35,18 +35,20 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
 /// Build the CorrFinal sub-graph.
 ///
 /// MeshExchange(6b) merged into the orchestrator.
+/// PreDumpScatter merged into the collector: emits MeshData (per-mesh dump) +
+/// BarrierData (global dump + timestep loop).
 ///
 ///   CorrFinalOrch(MeshExch6+CC_END_STEP) -> VelocityBCEdgesTask -> CorrFinalCollector
 inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<1, MeshData, BarrierData>;
+    using SubGraphType = hh::Graph<1, MeshData, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 
     bool ccIBM = fds_is_cc_ibm() != 0;
     auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
         std::make_shared<CorrFinalOrchestrator>(nmeshes, ccIBM), "CorrFinalOrch");
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(
-        kernelThreads, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*runDevices=*/true);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        kernelThreads, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*isCorrFinal=*/true);
+    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData, BarrierData>>(
         std::make_shared<CorrFinalCollector>(nmeshes), "CorrFinalCollector");
 
     subgraph->inputs(orchSM);

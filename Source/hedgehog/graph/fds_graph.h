@@ -20,9 +20,9 @@
 ///   Predictor -> Corrector -> Dump fork -> TimestepState -> cycle back
 ///
 /// The dump phase uses a fork-join pattern:
-///   PreDumpScatter forks into two parallel branches:
-///     - DumpGlobalTask: global computation + global file I/O
-///     - DumpMeshOutputsTask: per-mesh file I/O (skipped on non-dump timesteps)
+///   CorrFinalCollector forks into two parallel branches:
+///     - DumpGlobalTask (BarrierData): global computation + global file I/O
+///     - DumpMeshOutputsTask (MeshData): per-mesh file I/O (skipped on non-dump timesteps)
 ///   TimestepState joins both branches, runs STOP_CHECK, then either cycles
 ///   MeshData back to the predictor or emits BarrierData for termination.
 ///
@@ -51,10 +51,6 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Shared icyc counter between DumpGlobal (SET_DIAGNOSTICS) and TimestepState (SET_ICYC)
     auto icyc = std::make_shared<int>(1);
 
-    // Scatter: BarrierData -> fork into MeshData (per-mesh) + BarrierData (global)
-    // Checks dump schedule; skips MeshData emission on non-dump timesteps.
-    auto preDumpScatter = std::make_shared<PreDumpScatterTask>();
-
     // Fork branch 1: global computation + global file I/O (1 thread)
     auto dumpGlobalTask = std::make_shared<DumpGlobalTask>(icyc);
 
@@ -76,12 +72,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Predictor -> Corrector
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Corrector -> Scatter (BarrierData)
-    graph->edges(correctorSubgraph, preDumpScatter);
-
-    // Fork: Scatter -> DumpGlobal (BarrierData) + DumpMesh (MeshData)
-    graph->edges(preDumpScatter, dumpGlobalTask);
-    graph->edges(preDumpScatter, dumpMeshTask);
+    // Fork: Corrector -> DumpGlobal (BarrierData) + DumpMesh (MeshData)
+    // CorrFinalCollector checks dump schedule and emits MeshData only when needed.
+    graph->edges(correctorSubgraph, dumpGlobalTask);
+    graph->edges(correctorSubgraph, dumpMeshTask);
 
     // Join: DumpGlobal (BarrierData) + DumpMesh (MeshData) -> TimestepState
     graph->edges(dumpGlobalTask, timestepSM);

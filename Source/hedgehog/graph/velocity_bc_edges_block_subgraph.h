@@ -145,8 +145,14 @@ public:
                     fds_cc_velocity_bc_ts(e.meshData->t, e.meshData->nm, applyToEstimated_, 1);
                     if (isCorrFinal_) {
                         fds_update_devices_1_ts(e.meshData->t, e.meshData->dt, e.meshData->nm);
-                        fds_update_hrr_mass(e.meshData->t, e.meshData->dt, e.meshData->nm);
+                        fds_update_hrr_ts(e.meshData->dt, e.meshData->nm);
+                        fds_update_mass_ts(e.meshData->dt, e.meshData->nm);
+                        fds_update_fire_spread_outputs_ts(e.meshData->t, e.meshData->dt, e.meshData->nm);
                     }
+                }
+
+                if (isCorrFinal_) {
+                    fds_reduce_hrr_mass(completedMeshes_[0].meshData->dt);
                 }
 
                 auto bd = std::make_shared<BarrierData>();

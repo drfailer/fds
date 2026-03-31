@@ -143,6 +143,10 @@ void fds_check_divergence(int nm);
 void fds_update_global_outputs(double t, double dt, int nm);
 void fds_update_devices_1_ts(double t, double dt, int nm);
 void fds_update_hrr_mass(double t, double dt, int nm);
+void fds_update_hrr_ts(double dt, int nm);
+void fds_update_mass_ts(double dt, int nm);
+void fds_update_fire_spread_outputs_ts(double t, double dt, int nm);
+void fds_reduce_hrr_mass(double dt);
 void fds_dump_mesh_outputs(double t, double dt, int nm);
 void fds_dump_mesh_outputs_ts(double t, double dt, int nm);
 

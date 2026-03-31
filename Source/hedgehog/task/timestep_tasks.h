@@ -7,45 +7,6 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Scatter node at the start of the dump fork.
-///
-/// Receives BarrierData (all meshes collected after corrector) and forks into
-/// two parallel branches:
-///   - Emits individual MeshData tokens → DumpMeshOutputsTask (per-mesh I/O)
-///   - Forwards BarrierData → DumpGlobalTask (global computation + global I/O)
-///
-/// Skip-dump optimization: checks dump schedules for all meshes. When no mesh
-/// needs output, sets skipMeshDump=true and skips emitting MeshData entirely.
-/// TimestepState sees the flag and proceeds without waiting for per-mesh tokens.
-class PreDumpScatterTask : public hh::AbstractTask<1, BarrierData, MeshData, BarrierData> {
-public:
-    PreDumpScatterTask()
-        : hh::AbstractTask<1, BarrierData, MeshData, BarrierData>("PreDumpScatter", 1) {}
-
-    void execute(std::shared_ptr<BarrierData> data) override {
-        // Check if any mesh needs dumping this timestep
-        bool anyDump = false;
-        for (auto &md : data->meshes) {
-            bool dump = false;
-            fds_check_dump_schedule(md->t, md->nm, &dump);
-            if (dump) { anyDump = true; break; }
-        }
-
-        if (anyDump) {
-            // Fork branch 1: individual MeshData tokens for per-mesh dump
-            for (auto &md : data->meshes) {
-                this->addResult(md);
-            }
-            data->skipMeshDump = false;
-        } else {
-            data->skipMeshDump = true;
-        }
-
-        // Fork branch 2 (always): BarrierData for global computation + global I/O
-        this->addResult(data);
-    }
-};
-
 /// Global computation and global file I/O task.
 ///
 /// Runs in parallel with per-mesh dumps (DumpMeshOutputsTask). Performs:

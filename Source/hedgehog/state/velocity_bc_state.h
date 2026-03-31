@@ -48,14 +48,17 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector for CorrFinal sub-graph.
+/// Collector for CorrFinal sub-graph (merged with PreDumpScatter).
 ///
-/// Gathers N kernel results, runs sequential finalization:
-///   - UPDATE_HRR + UPDATE_MASS + FIRE_SPREAD (cross-mesh accumulators, must be sequential)
-/// CC_VELOCITY_BC and UPDATE_DEVICES_1 moved to parallel VelocityBCEdgesTask.
-/// Then emits single BarrierData downstream (avoids re-collection at graph boundary).
+/// Gathers N kernel results from VelocityBCEdgesTask (which already ran
+/// UPDATE_HRR_TS, UPDATE_MASS_TS, UPDATE_FIRE_SPREAD_OUTPUTS_TS in parallel),
+/// then performs:
+///   1. REDUCE_HRR_MASS — sum per-mesh Q_DOT_MESH/M_DOT_MESH into globals
+///   2. Check dump schedule for all meshes
+///   3. Emit N MeshData → DumpMeshOutputsTask (only if any mesh needs dump)
+///   4. Emit 1 BarrierData → DumpGlobalTask (always, carries meshes + skipMeshDump flag)
 class CorrFinalCollector
-    : public hh::AbstractState<1, MeshData, BarrierData> {
+    : public hh::AbstractState<1, MeshData, MeshData, BarrierData> {
 public:
     explicit CorrFinalCollector(int nmeshes)
         : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
@@ -67,15 +70,37 @@ public:
         ++count_;
 
         if (count_ == nmeshes_) {
+            // Reduce per-mesh accumulators into globals
+            fds_reduce_hrr_mass(collected_[0]->dt);
+
+            // Check if any mesh needs dump I/O this timestep
+            bool anyDump = false;
             for (auto &md : collected_) {
-                fds_update_hrr_mass(md->t, md->dt, md->nm);
+                bool dump = false;
+                fds_check_dump_schedule(md->t, md->nm, &dump);
+                if (dump) { anyDump = true; break; }
             }
 
+            // Build BarrierData (always emitted for DumpGlobalTask)
             auto bd = std::make_shared<BarrierData>();
-            bd->meshes = std::move(collected_);
-            collected_.resize(nmeshes_, nullptr);
-            count_ = 0;
+            bd->meshes = collected_;  // copy shared_ptrs (TimestepState needs them)
+
+            if (anyDump) {
+                bd->skipMeshDump = false;
+                // Emit MeshData tokens for per-mesh dump I/O
+                for (auto &md : collected_) {
+                    this->addResult(md);
+                }
+            } else {
+                bd->skipMeshDump = true;
+            }
+
+            // Always emit BarrierData for DumpGlobalTask
             this->addResult(bd);
+
+            // Reset for next timestep
+            count_ = 0;
+            for (auto &md : collected_) { md = nullptr; }
         }
     }
 

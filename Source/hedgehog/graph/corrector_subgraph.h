@@ -35,7 +35,7 @@
 inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
-    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, BarrierData>>("Corrector");
+    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, MeshData, BarrierData>>("Corrector");
 
     // --- Kernel tasks (threads from budget) ---
 
