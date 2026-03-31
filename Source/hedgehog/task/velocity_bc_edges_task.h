@@ -5,7 +5,8 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Parallel task that calls MATCH_VELOCITY_KERNEL + VELOCITY_BC_PREPROCESSING +
+/// Parallel task that calls CC_VELOCITY_CUTFACES_TS (if CC_IBM) +
+/// MATCH_VELOCITY_KERNEL + VELOCITY_BC_PREPROCESSING +
 /// VELOCITY_BC_PROCESS_EDGES_KERNEL + CC_VELOCITY_BC_TS (if CC_IBM) for one mesh.
 /// All routines are thread-safe: explicit M% access, no POINT_TO_MESH.
 ///
@@ -25,6 +26,7 @@ public:
           runDevices_(runDevices) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
+        fds_cc_velocity_cutfaces_ts(data->nm, applyToEstimated_);
         fds_match_velocity_kernel(data->nm, applyToEstimated_);
         fds_velocity_bc_preprocessing(
             data->nm, data->t, applyToEstimated_);

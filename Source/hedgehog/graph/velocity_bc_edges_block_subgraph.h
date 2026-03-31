@@ -67,8 +67,9 @@ public:
                 }
             }
 
-            // Sequential preprocessing: MATCH_VELOCITY + VELOCITY_BC_PREPROCESSING
+            // Sequential preprocessing: CUTFACES + MATCH_VELOCITY + VELOCITY_BC_PREPROCESSING
             for (auto &md : collected_) {
+                fds_cc_velocity_cutfaces_ts(md->nm, applyToEstimated_);
                 fds_match_velocity_kernel(md->nm, applyToEstimated_);
                 fds_velocity_bc_preprocessing(md->nm, md->t, applyToEstimated_);
             }
