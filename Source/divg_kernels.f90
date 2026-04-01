@@ -211,7 +211,6 @@ LATE_IF: IF (PHASE_VAL == 0 .OR. PHASE_VAL == 3) THEN
 
 ENDIF LATE_IF
 
-
 CONTAINS
 
 
@@ -1864,6 +1863,7 @@ RECURSIVE SUBROUTINE DIVERGENCE_PART_2_BLOCK_KERNEL(M,DT,NM,K1,K2)
 USE COMPLEX_GEOMETRY, ONLY : CC_CGSC, CC_UNKZ, CC_SOLID, CC_CUTCFE
 USE CC_PRESSURE_KERNELS, ONLY : ADD_CUTCELL_D_PBAR_DT, &
    ADD_LINKEDCELL_D_PBAR_DT
+USE CC_PRESSURE, ONLY : GET_CUTCELL_DDDT
 
 TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM,K1,K2
@@ -1907,6 +1907,20 @@ IF (N_ZONE>0) THEN
             IPZ = M%PRESSURE_ZONE(I,J,K)
             IF (IPZ<1) CYCLE
             IF (M%CELL(M%CELL_INDEX(I,J,K))%SOLID) CYCLE
+            IF (CC_IBM) THEN
+               IF (M%CCVAR(I,J,K,CC_CGSC)==CC_SOLID) THEN
+                  CYCLE
+               ELSEIF(M%CCVAR(I,J,K,CC_CGSC)==CC_CUTCFE) THEN
+                  CALL ADD_CUTCELL_D_PBAR_DT(M,I,J,K, &
+                     PBAR_P(K,IPZ), &
+                     D_PBAR_DT_P(IPZ)); CYCLE
+               ELSEIF(M%CCVAR(I,J,K,CC_UNKZ) > 0) THEN
+                  CALL ADD_LINKEDCELL_D_PBAR_DT(M,I,J,K, &
+                     PBAR_P(K,IPZ), &
+                     D_PBAR_DT_P(IPZ), &
+                     RTRM(I,J,K),DP(I,J,K)); CYCLE
+               ENDIF
+            ENDIF
             DP(I,J,K) = DP(I,J,K) - (M%R_PBAR(K,IPZ)-RTRM(I,J,K))*D_PBAR_DT_P(IPZ)
          ENDDO
       ENDDO
@@ -1924,6 +1938,19 @@ DO K=K1,K2
       ENDDO
    ENDDO
 ENDDO
+
+! Zero out CC_IBM solid cells (K-restricted)
+
+IF (CC_IBM) THEN
+   DO K=K1,K2
+      DO J=1,M%JBAR
+         DO I=1,M%IBAR
+            IF (M%CCVAR(I,J,K,CC_CGSC) /= CC_SOLID) CYCLE
+            DP(I,J,K) = 0._EB
+         ENDDO
+      ENDDO
+   ENDDO
+ENDIF
 
 ! Specify divergence in boundary cells to account for volume being generated at the walls (K-filtered)
 ! First block includes K=0 ghost cells; last block includes K=KBP1 ghost cells.
@@ -2007,6 +2034,8 @@ ELSEIF (CORRECTOR) THEN
       ENDDO
    ENDDO
 ENDIF
+
+IF(CC_IBM) CALL GET_CUTCELL_DDDT(M,DT,NM)
 
 END SUBROUTINE DIVERGENCE_PART_2_BLOCK_KERNEL
 

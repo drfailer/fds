@@ -8,7 +8,8 @@
 /// Parallel task that calls the thread-safe velocity flux kernel.
 /// Each thread processes one mesh independently.
 /// Uses data->phase to select predictor (0) or corrector (1) arrays.
-/// CC_VELOCITY_BC_TS (DO_IBEDGES=FALSE) runs first if CC_IBM is active.
+/// Order matches original: BAROCLINIC=FALSE → VISCOSITY_BC → CC_VELOCITY_BC → VELOCITY_FLUX_KERNEL.
+/// CC_VELOCITY_BC_TS must run AFTER VISCOSITY_BC because it reads MU boundary values.
 class DivSetupKernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
@@ -17,9 +18,9 @@ public:
               "DivSetupKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        fds_cc_velocity_bc_ts(data->t, data->nm, data->phase, 0);  // CC_IBM: DO_IBEDGES=FALSE
         fds_set_baroclinic_false(data->nm);
         fds_viscosity_bc_kernel(data->nm, data->phase);
+        fds_cc_velocity_bc_ts(data->t, data->nm, data->phase, 0);  // CC_IBM: DO_IBEDGES=FALSE (after VISCOSITY_BC)
         fds_velocity_flux_kernel(data->nm, data->t, data->dt,
                                  data->phase);
         if (data->phase)

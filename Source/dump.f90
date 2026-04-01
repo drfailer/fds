@@ -200,13 +200,15 @@ END SUBROUTINE DUMP_MESH_OUTPUTS
 
 !> \brief Thread-safe version of DUMP_MESH_OUTPUTS
 !> \details Does NOT call POINT_TO_MESH — all sub-routines use M => MESHES(NM) internally.
-!> Omits periodic test special cases (DUMP_MMS, DUMP_ROTCUBE_MMS, SANDIA_OUT).
+!> Periodic test special cases (DUMP_MMS, DUMP_ROTCUBE_MMS, SANDIA_OUT) use POINT_TO_MESH
+!> but are guarded by NM==1 and fire only once, so no parallel conflict.
 
 SUBROUTINE DUMP_MESH_OUTPUTS_TS(T,DT,NM)
 
+USE TURBULENCE, ONLY: SANDIA_OUT
 REAL(EB), INTENT(IN) :: T,DT
 INTEGER, INTENT(IN) :: NM
-CHARACTER(80) :: FN_UVW,FN_SPECTRUM,FN_TMP,FN_SPEC
+CHARACTER(80) :: FN_UVW,FN_SPECTRUM,FN_TMP,FN_SPEC,FN_MMS
 LOGICAL :: DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC
 
 CALL CHECK_DUMP_SCHEDULE(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
@@ -241,6 +243,32 @@ IF (DO_SPEC) THEN
 ENDIF
 
 CALL ADVANCE_DUMP_COUNTERS(T,NM,DO_PART,DO_ISOF,DO_SM3D,DO_SLCF,DO_SL3D,DO_BNDF,DO_PL3D,DO_PROF,DO_UVW,DO_TMP,DO_SPEC)
+
+! Periodic test special cases (MMS output). These are one-shot routines (timer set to HUGE
+! after first call) guarded by NM==1. POINT_TO_MESH is safe here because no other thread
+! in the parallel dump path uses POINT_TO_MESH (all _TS routines use M% access).
+SELECT CASE(PERIODIC_TEST)
+   CASE(7,11)
+      IF (T>=MMS_TIMER .AND. NM==1) THEN
+         CALL POINT_TO_MESH(NM)
+         WRITE(FN_MMS,'(A,A)') TRIM(CHID),'_mms.csv'
+         CALL DUMP_MMS(FN_MMS,T)
+         MMS_TIMER=HUGE_EB
+      ENDIF
+   CASE(21,22,23)
+      IF (T>=MMS_TIMER .AND. NM==1) THEN
+         CALL POINT_TO_MESH(NM)
+         WRITE(FN_MMS,'(A,A)') TRIM(CHID),'_mms.csv'
+         CALL DUMP_ROTCUBE_MMS(NM,FN_MMS,T)
+         MMS_TIMER=HUGE_EB
+      ENDIF
+   CASE(9)
+      IF (T>=TURB_INIT_CLOCK) THEN
+         CALL POINT_TO_MESH(NM)
+         TURB_INIT_CLOCK=HUGE_EB
+         CALL SANDIA_OUT(NM)
+      ENDIF
+END SELECT
 
 END SUBROUTINE DUMP_MESH_OUTPUTS_TS
 

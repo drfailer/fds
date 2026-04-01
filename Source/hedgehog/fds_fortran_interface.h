@@ -1,6 +1,8 @@
 #ifndef FDS_FORTRAN_INTERFACE_H
 #define FDS_FORTRAN_INTERFACE_H
 
+#include <cstring>
+
 // C++ declarations for Fortran ISO_C_BINDING subroutines
 // These map to the BIND(C) wrappers in fds_c_interface.f90
 
