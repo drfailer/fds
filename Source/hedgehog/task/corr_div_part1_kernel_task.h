@@ -16,8 +16,7 @@ public:
 
     void execute(std::shared_ptr<MeshData> data) override {
         fds_combustion_bc_kernel(data->nm);
-        fds_divergence_part_1_kernel_skip_qr(data->nm, data->t, data->dt);
-        fds_divergence_part_1_add_qr(data->nm);
+        fds_divergence_part_1_kernel(data->nm, data->t, data->dt);
         this->addResult(data);
     }
 

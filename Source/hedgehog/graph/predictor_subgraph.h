@@ -105,12 +105,16 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
         // Merged barrier: PredJoin + DivP1Late + PredDivExchange + PressureInit
         auto predJoinDivExchangeSM = makeBarrierSM(nmeshes, "PredJoin+DivLate+DivExch",
-            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 for (auto &md : meshes) {
                     fds_divergence_part_1_late_b(md->nm, md->t, md->dt);
                 }
                 fds_exchange_divergence_info();
+                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                for (auto &md : meshes) {
+                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
+                }
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
@@ -156,7 +160,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
         // Merged barrier: WallBCFinalize + PredWallDivKernel + PredDivExchange + PressureInit
         auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallBCFin+WallDiv+DivExch",
-            "WALLBC_FINALIZE\\nPART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            "WALLBC_FINALIZE\\nPART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 for (auto &md : meshes) {
                     fds_wall_bc_finalize(md->nm, md->t, md->dt_bc, md->call_ht_1d);
@@ -166,6 +170,10 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                     fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
                 }
                 fds_exchange_divergence_info();
+                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                for (auto &md : meshes) {
+                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
+                }
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();

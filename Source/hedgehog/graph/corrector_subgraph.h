@@ -139,9 +139,13 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
         auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
-            "EXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            "EXCH_DIV_INFO\\nDIV_P2_PREPROC\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
+                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                for (auto &md : meshes) {
+                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
+                }
                 fds_rte_source_correction();
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
@@ -175,13 +179,22 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
 
         // Group C: Join2 + MeshExch(2) + QR + DivExchange (2N→N barrier)
         auto groupCSM = makeBarrierSM(nmeshes, "Join2+MeshExch2+DivExch",
-            "MESH_EXCHANGE(2)\\nQR_ADD\\nEXCH_DIV_INFO\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN",
+            "MESH_EXCHANGE(2)\\nQR_ADD\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN",
             [useParallelPressure](auto& meshes) {
                 if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
                 for (auto &md : meshes) {
                     fds_divergence_part_1_add_qr_b(md->nm);
                 }
+                // Copy RTRM from WORK1_B → WORK1 so DivP2 finds it in WORK1.
+                // Fork2DivP1 uses WORK_BRANCH=2 to avoid conflicting with radiation.
+                for (auto &md : meshes) {
+                    fds_copy_work1_b_to_work1(md->nm);
+                }
                 fds_exchange_divergence_info();
+                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                for (auto &md : meshes) {
+                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
+                }
                 fds_rte_source_correction();
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {

@@ -92,6 +92,7 @@ void fds_divergence_part_1_add_qr_b(int nm);
 void fds_divergence_part_1_prefork(int nm, double t, double dt);
 void fds_divergence_part_1_early_b(int nm, double t, double dt);
 void fds_divergence_part_1_late_b(int nm, double t, double dt);
+void fds_copy_work1_b_to_work1(int nm);
 void fds_velocity_flux_kernel(int nm, double t, double dt, int estimated);
 void fds_velocity_flux_block_kernel(int nm, double t, double dt, int estimated, int k1, int k2);
 int fds_velocity_flux_can_block_decompose(int nm);
@@ -135,6 +136,7 @@ void fds_compute_radiation_kernel(int nm, double t, int rad_iter,
 void fds_compute_radiation_kernel_b(int nm, double t, int rad_iter,
     double* rad_q_sum_out, double* kfst4_sum_out);
 void fds_accumulate_rad_sums(double rad_q_partial, double kfst4_partial);
+void fds_cccompute_radiation(int nm, double t, int rad_iter);
 void fds_agglomeration(double dt, int nm);
 void fds_cc_end_step(double t, double dt, int diag);
 void fds_check_divergence(int nm);

@@ -5,8 +5,13 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Parallel task that calls the thread-safe divergence part 2 kernel.
+/// Parallel task that calls the thread-safe divergence part 2 block kernel.
 /// Each thread processes one mesh independently.
+///
+/// IMPORTANT: fds_divergence_part_2_preprocessing must be called sequentially
+/// for all meshes in the preceding barrier BEFORE this task runs.
+/// The preprocessing handles global zone ops (USUM modification, D_PBAR_DT
+/// computation) which are not thread-safe.
 class DivergencePart2KernelTask
     : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
@@ -15,7 +20,8 @@ public:
               "DivPart2Kernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
-        fds_divergence_part_2_kernel(data->nm, data->dt);
+        int kbar = fds_get_kbar(data->nm);
+        fds_divergence_part_2_block_kernel(data->nm, data->dt, 1, kbar);
         this->addResult(data);
     }
 

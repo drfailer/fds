@@ -18,6 +18,7 @@ public:
         fds_compute_radiation_kernel(
             work->nm, work->t, work->radIter,
             &work->radQSumPartial, &work->kfst4SumPartial);
+        fds_cccompute_radiation(work->nm, work->t, work->radIter);
         this->addResult(work);
     }
 

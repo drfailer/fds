@@ -32,7 +32,7 @@ inline auto buildChangeTimeStepSubgraph(int nmeshes, size_t kernelThreads) {
 
     auto retryPreKernel = std::make_shared<RetryPreKernelTask>();
     auto retryMomDivKernel = std::make_shared<RetryMomentumDivKernelTask>(
-        static_cast<size_t>(nmeshes));
+        kernelThreads);
 
     auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
         std::make_shared<RetryLoopState>(nmeshes), "RetryLoop");
