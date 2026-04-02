@@ -2,11 +2,11 @@
 """
 FDS Benchmark Suite
 
-Compares fds_master (OpenMP) vs fds_hh (Hedgehog) across multiple configurations:
-  - fds_master with varying OMP_NUM_THREADS (default: 4, 8, 16)
+Compares fds_master (MPI+OpenMP) vs fds_hh (Hedgehog) across multiple configurations:
+  - fds_master with MPI (nproc=nmeshes) + varying OMP_NUM_THREADS
   - fds_hh single process (with and without pressure subgraph)
-  - fds_hh with MPI (multiple processes, each handling a subset of meshes)
-  - fds_hh with mesh re-decomposition (--mesh-dim)
+  - fds_hh with MPI (nproc=nmeshes, same as fds_master)
+  - fds_hh with mesh re-decomposition (--mesh-dim 8 8 8)
 
 Usage:
     # Run full benchmark (uses default cases)
@@ -204,7 +204,17 @@ def build_run_configs(omp_thread_counts: List[int],
         description="fds_hh (pressure=on)",
     ))
 
-    # 7. fds_hh with MPI (if requested)
+    # 7. fds_hh with MPI (nproc=nmeshes, same as fds_master)
+    configs.append(RunConfig(
+        label="hh_mpi",
+        exe="fds_hh",
+        omp_threads=1,
+        mpi_procs=-1,  # sentinel: use case.nmeshes
+        pressure_subgraph="auto",
+        description="fds_hh MPI=nmeshes (pressure=auto)",
+    ))
+
+    # 8. fds_hh with MPI (custom count, if requested)
     if mpi_procs >= 2:
         configs.append(RunConfig(
             label=f"hh_mpi{mpi_procs}",
@@ -215,16 +225,16 @@ def build_run_configs(omp_thread_counts: List[int],
             description=f"fds_hh MPI={mpi_procs} (pressure=auto)",
         ))
 
-    # 6. fds_hh with mesh re-decomposition
+    # 9. fds_hh with mesh re-decomposition (target 8x8x8 to ensure splitting)
     if enable_mesh_dim:
         configs.append(RunConfig(
-            label="hh_redec_16",
+            label="hh_redec_8",
             exe="fds_hh",
             omp_threads=1,
             mpi_procs=1,
             pressure_subgraph="auto",
-            mesh_dim=(16, 16, 16),
-            description="fds_hh --mesh-dim 16 16 16 (pressure=auto)",
+            mesh_dim=(8, 8, 8),
+            description="fds_hh --mesh-dim 8 8 8 (pressure=auto)",
         ))
 
     return configs
@@ -343,7 +353,7 @@ def clean_work_dir(work_dir: Path, chid: str):
     for pattern in ['*.sf', '*.sf.bnd', '*.smv', '*.fds', '*_git.txt',
                     '*.s3d', '*.s3d.bnd', '*.xyz', '*.be', '*.ge', '*.iso',
                     '*.prt5', '*.restart', '*.q', '*.szz',
-                    '*.fed', '*.end', '*.dot']:
+                    '*.fed', '*.end']:
         for f in work_dir.glob(pattern):
             f.unlink()
 
