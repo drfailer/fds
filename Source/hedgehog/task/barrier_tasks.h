@@ -64,4 +64,69 @@ private:
     int invocations_ = 0;
 };
 
+/// CorrFinal dump task — reduces HRR/MASS, checks dump schedule,
+/// emits MeshData (per-mesh dump) + BarrierData (global dump + timestep loop).
+///
+/// Replaces CorrFinalCollector state (which lacked canTerminate).
+/// Upstream: CollectorState collects N MeshData → 1 BarrierData.
+class CorrFinalDumpTask
+    : public hh::AbstractTask<1, BarrierData, MeshData, BarrierData> {
+public:
+    CorrFinalDumpTask()
+        : hh::AbstractTask<1, BarrierData, MeshData, BarrierData>(
+              "CorrFinalDump", 1) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        auto t0 = std::chrono::steady_clock::now();
+
+        // Reduce per-mesh accumulators into globals
+        fds_reduce_hrr_mass(data->dt());
+
+        // Check if any mesh needs dump I/O this timestep
+        bool anyDump = false;
+        for (auto &md : data->meshes) {
+            bool dump = false;
+            fds_check_dump_schedule(md->t, md->nm, &dump);
+            if (dump) { anyDump = true; break; }
+        }
+
+        // Build BarrierData (always emitted for DumpGlobalTask)
+        auto bd = std::make_shared<BarrierData>();
+        bd->meshes = data->meshes;  // copy shared_ptrs (TimestepState needs them)
+
+        if (anyDump) {
+            bd->skipMeshDump = false;
+            // Emit MeshData tokens for per-mesh dump I/O
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
+        } else {
+            bd->skipMeshDump = true;
+        }
+
+        // Always emit BarrierData for DumpGlobalTask
+        this->addResult(bd);
+
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "REDUCE_HRR_MASS\\n"
+            << "CHECK_DUMP_SCHEDULE\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+};
+
 #endif // BARRIER_TASKS_H

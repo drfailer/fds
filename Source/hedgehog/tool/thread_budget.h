@@ -24,10 +24,13 @@ struct ThreadBudget {
 
     // --- Predictor standalone sections ---
     size_t predStep1;           // PredStep1KernelTask          (HEAVY)
+    size_t predDivPrefork;      // DivP1PreforkKernelTask       (LIGHT) — split from barrier
     size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT)
     size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
+    size_t predSynTurb;         // SyntheticTurbulenceKernelTask(LIGHT) — split from barrier
     size_t predFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
+    size_t predDivP1Late;       // DivP1LateKernelTask          (LIGHT) — split from barrier
 
     // --- Predictor fork: {DivSetup+PartMom} || {WallBC+DivP1Early} ---
     size_t predForkDivSetup;    // DivSetupKernelTask     (HEAVY)
@@ -37,10 +40,13 @@ struct ThreadBudget {
 
     // --- Corrector standalone sections ---
     size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
+    size_t corrParticleOps;     // ParticleOpsKernelTask         (MEDIUM) — split from barrier
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
     size_t velCorrector;        // VelocityCorrectorKernelTask  (LIGHT)
     size_t corrFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
     size_t corrWallBC;          // WallBCKernelTask             (MEDIUM)
+    size_t corrWallBCFinalize;  // WallBCFinalizeKernelTask     (LIGHT) — split from barrier
+    size_t corrQRAddCopy;       // QRAddCopyKernelTask          (LIGHT) — split from barrier
 
     // --- Corrector fork1: {DivSetup} || {Fork1Comb} ---
     size_t corrFork1DivSetup;   // DivSetupKernelTask     (MEDIUM)
@@ -90,10 +96,13 @@ struct ThreadBudget {
 
         // --- Predictor standalone ---
         b.predStep1      = solo(4);  // 1.4ms/elem
+        b.predDivPrefork = solo(1);  // split from barrier (light)
         b.predDivPart2   = solo(1);  // 283us/elem
         b.velPredictor   = solo(1);  // 90us/elem
+        b.predSynTurb    = solo(1);  // split from barrier (light)
         b.predFinalVelBC = solo(2);  // 615us/elem
         b.retryMomDiv    = solo(1);  // rarely used
+        b.predDivP1Late  = solo(1);  // split from barrier (light)
 
         // --- Predictor fork: A{DivSetup(4)+PartMom(1)} || B{WallBC(2)+DivP1Early(2)} ---
         {
@@ -105,11 +114,14 @@ struct ThreadBudget {
         }
 
         // --- Corrector standalone ---
-        b.corrStep1      = solo(4);  // 1.5ms/elem
-        b.corrDivPart2   = solo(2);  // 604us/elem
-        b.velCorrector   = solo(1);  // 89us/elem
-        b.corrFinalVelBC = solo(2);  // 472us/elem
-        b.corrWallBC     = solo(2);  // 513us/elem
+        b.corrStep1         = solo(4);  // 1.5ms/elem
+        b.corrParticleOps   = solo(2);  // split from barrier (medium)
+        b.corrDivPart2      = solo(2);  // 604us/elem
+        b.velCorrector      = solo(1);  // 89us/elem
+        b.corrFinalVelBC    = solo(2);  // 472us/elem
+        b.corrWallBC        = solo(2);  // 513us/elem
+        b.corrWallBCFinalize = solo(1); // split from barrier (light)
+        b.corrQRAddCopy     = solo(1);  // split from barrier (light)
 
         // --- Corrector fork1: A{DivSetup(2)} || B{Fork1Comb(2)} ---
         {
@@ -141,19 +153,25 @@ struct ThreadBudget {
     void print(std::ostream &os) const {
         os << "[FDS-HH] Thread budget (cap=" << cap_ << "):\n"
            << "  Predictor:  step1=" << predStep1
+           << " divPrefork=" << predDivPrefork
            << " divP2=" << predDivPart2
            << " velPred=" << velPredictor
+           << " synTurb=" << predSynTurb
            << " finalVBC=" << predFinalVelBC
-           << " retry=" << retryMomDiv << "\n"
+           << " retry=" << retryMomDiv
+           << " divP1Late=" << predDivP1Late << "\n"
            << "  Pred fork:  divSetup=" << predForkDivSetup
            << " partMom=" << predForkPartMom
            << " wallBC=" << predForkWallBC
            << " divP1Early=" << predForkDivP1Early << "\n"
            << "  Corrector:  step1=" << corrStep1
+           << " particleOps=" << corrParticleOps
            << " divP2=" << corrDivPart2
            << " velCorr=" << velCorrector
            << " finalVBC=" << corrFinalVelBC
-           << " wallBC=" << corrWallBC << "\n"
+           << " wallBC=" << corrWallBC
+           << " wallBCFin=" << corrWallBCFinalize
+           << " qrAddCopy=" << corrQRAddCopy << "\n"
            << "  Corr fork1: divSetup=" << corrFork1DivSetup
            << " comb=" << corrFork1Comb << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation

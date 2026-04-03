@@ -20,7 +20,7 @@
 ///   Predictor -> Corrector -> Dump fork -> TimestepState -> cycle back
 ///
 /// The dump phase uses a fork-join pattern:
-///   CorrFinalCollector forks into two parallel branches:
+///   CorrFinalDumpTask forks into two parallel branches:
 ///     - DumpGlobalTask (BarrierData): global computation + global file I/O
 ///     - DumpMeshOutputsTask (MeshData): per-mesh file I/O (skipped on non-dump timesteps)
 ///   TimestepState joins both branches, runs STOP_CHECK, then either cycles
@@ -73,7 +73,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     graph->edges(predictorSubgraph, correctorSubgraph);
 
     // Fork: Corrector -> DumpGlobal (BarrierData) + DumpMesh (MeshData)
-    // CorrFinalCollector checks dump schedule and emits MeshData only when needed.
+    // CorrFinalDumpTask checks dump schedule and emits MeshData only when needed.
     graph->edges(correctorSubgraph, dumpGlobalTask);
     graph->edges(correctorSubgraph, dumpMeshTask);
 

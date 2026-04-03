@@ -6,55 +6,70 @@
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
 #include "../task/velocity_bc_edges_task.h"
-#include "../state/velocity_bc_state.h"
+#include "../task/barrier_tasks.h"
+#include "../state/barrier_state.h"
 #include "../state/collector_state.h"
 
 /// Build the PredFinal sub-graph.
 ///
-/// MeshExchange(3) + SyntheticTurbulence merged into upstream barrier.
-/// PhaseTransition merged into the collector.
+/// PhaseTransition converted from state (PredFinalCollector) to task:
+///   CollectorState (N MeshData → 1 BarrierData) + PhaseTransitionTask (BarrierData → N MeshData)
 ///
-///   VelocityBCEdgesTask(mesh-level) -> PredFinalCollector(phase transition)
-///
-/// Outputs MeshData directly (no BarrierData intermediate).
+///   VelocityBCEdgesTask → CollectorState → PhaseTransitionTask → output
 inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PredFinalCollector>(nmeshes), "PredFinalCollector");
+    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        std::make_shared<CollectorState>(nmeshes), "PredFinalCollector");
+    auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
     subgraph->inputs(kernelTask);
     subgraph->edges(kernelTask, collectorSM);
-    subgraph->outputs(collectorSM);
+    subgraph->edges(collectorSM, phaseTransTask);
+    subgraph->outputs(phaseTransTask);
 
     return subgraph;
 }
 
 /// Build the CorrFinal sub-graph.
 ///
-/// MeshExchange(6b) merged into the orchestrator.
-/// PreDumpScatter merged into the collector: emits MeshData (per-mesh dump) +
-/// BarrierData (global dump + timestep loop).
+/// States converted to tasks:
+///   - CorrFinalOrchestrator → CollectorState + BarrierTask (MeshExch6+CC_END_STEP)
+///   - CorrFinalCollector → CollectorState + CorrFinalDumpTask (reduce+dump schedule)
 ///
-///   CorrFinalOrch(MeshExch6+CC_END_STEP) -> VelocityBCEdgesTask -> CorrFinalCollector
+///   CollectorState → OrchTask → VelocityBCEdgesTask → CollectorState → CorrFinalDumpTask
 inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     using SubGraphType = hh::Graph<1, MeshData, MeshData, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 
     bool ccIBM = fds_is_cc_ibm() != 0;
-    auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<CorrFinalOrchestrator>(nmeshes, ccIBM), "CorrFinalOrch");
+
+    // CorrFinalOrchestrator → CollectorState + BarrierTask
+    auto orchCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        std::make_shared<CollectorState>(nmeshes), "CorrFinalOrchCollector");
+    auto orchTask = makeBarrierTask("CorrFinalOrch",
+        "CC_END_STEP\\nMESH_EXCHANGE(6)",
+        [ccIBM](auto& meshes) {
+            if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
+            fds_mesh_exchange(6);
+        });
+
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(
         kernelThreads, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*isCorrFinal=*/true);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, MeshData, BarrierData>>(
-        std::make_shared<CorrFinalCollector>(nmeshes), "CorrFinalCollector");
 
-    subgraph->inputs(orchSM);
-    subgraph->edges(orchSM, kernelTask);
-    subgraph->edges(kernelTask, collectorSM);
-    subgraph->outputs(collectorSM);
+    // CorrFinalCollector → CollectorState + CorrFinalDumpTask
+    auto dumpCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
+        std::make_shared<CollectorState>(nmeshes), "CorrFinalDumpCollector");
+    auto dumpTask = std::make_shared<CorrFinalDumpTask>();
+
+    subgraph->inputs(orchCollectorSM);
+    subgraph->edges(orchCollectorSM, orchTask);
+    subgraph->edges(orchTask, kernelTask);
+    subgraph->edges(kernelTask, dumpCollectorSM);
+    subgraph->edges(dumpCollectorSM, dumpTask);
+    subgraph->outputs(dumpTask);
 
     return subgraph;
 }

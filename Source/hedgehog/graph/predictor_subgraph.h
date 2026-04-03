@@ -11,6 +11,7 @@
 #include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
 #include "../state/div_setup_state.h"
+#include "../state/fork_join_state.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
@@ -18,6 +19,9 @@
 #include "../task/pred_wall_div_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
+#include "../task/div_p1_prefork_kernel_task.h"
+#include "../task/synthetic_turbulence_kernel_task.h"
+#include "../task/div_p1_late_kernel_task.h"
 #include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
@@ -28,10 +32,10 @@
 
 /// Build the Predictor sub-graph.
 ///
-/// Optimizations applied:
-///   - MeshExchange(3) + PredFinalOrch merged into single barrier
-///   - PredFinalCollector + PhaseTransition merged into PredFinal collector
-///   - PredFinal subgraph now outputs MeshData directly (no BarrierData)
+/// Barrier splits applied:
+///   - meshExch1DivPrefork: DivP1Prefork per-mesh loop → parallel kernel task
+///   - meshExch3SynTurb: SyntheticTurbulence per-mesh loop → parallel kernel task
+///   - predJoinDivExchange: DivP1Late per-mesh loop → ForkJoin + parallel kernel task
 inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
@@ -56,17 +60,17 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
         std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
 
-    // Merged: MeshExchange(3) + PredFinalOrch (synthetic turbulence)
-    // Uses BarrierTask (BarrierData→MeshData) since upstream subgraph emits BarrierData
-    auto meshExch3SynTurbTask = makeBarrierTask("MeshExch3+SynTurb",
-        "CC_END_STEP\\nMESH_EXCHANGE(3)\\nSYNTHETIC_TURBULENCE",
+    // Split barrier: MeshExchange(3) + CC_END_STEP (global only)
+    // SyntheticTurbulence per-mesh loop extracted to downstream kernel task.
+    auto meshExch3Task = makeBarrierTask("MeshExch3",
+        "CC_END_STEP\\nMESH_EXCHANGE(3)",
         [ccIBM](auto& meshes) {
             if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
             fds_mesh_exchange(3);
-            for (auto &md : meshes) {
-                fds_synthetic_turbulence_if_enabled(md->dt, md->t, md->nm);
-            }
         });
+
+    // Extracted: SyntheticTurbulence per-mesh (parallel)
+    auto synTurbKernelTask = std::make_shared<SyntheticTurbulenceKernelTask>(budget.predSynTurb);
 
     // --- Wire the sub-graph ---
 
@@ -79,20 +83,22 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
     if (!ccIBM) {
-        // Merged barrier: MeshExchange(1) + HvacInitDivPrefork
-        auto meshExch1DivPreforkSM = makeBarrierSM(nmeshes, "MeshExch1+DivPrefork",
-            "MESH_EXCHANGE(1)\\nEXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV\\nDIV_P1_PREFORK",
+        // Split barrier: MeshExchange(1) + Hvac + InitDiv (global only)
+        // DivP1Prefork per-mesh loop extracted to downstream kernel task.
+        auto meshExch1SM = makeBarrierSM(nmeshes, "MeshExch1+Hvac+InitDiv",
+            "MESH_EXCHANGE(1)\\nEXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV",
             [](auto& meshes) {
                 fds_mesh_exchange(1);
                 fds_exchange_inserted_particles();
                 fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
                 fds_initialize_divergence_integrals();
-                for (auto &md : meshes) {
-                    fds_divergence_part_1_prefork(md->nm, md->t, md->dt);
-                }
             });
 
-        subgraph->edges(predStep1KernelTask, meshExch1DivPreforkSM);
+        // Extracted: DivP1Prefork per-mesh (parallel)
+        auto divP1PreforkKernelTask = std::make_shared<DivP1PreforkKernelTask>(budget.predDivPrefork);
+
+        subgraph->edges(predStep1KernelTask, meshExch1SM);
+        subgraph->edges(meshExch1SM, divP1PreforkKernelTask);
 
         // Fork: (VFLUX + PART_MOM) || (WallBC + DIV_P1_early) — threads from budget
         auto predForkVFluxSG = buildPredForkVFluxSubgraph(
@@ -100,16 +106,20 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
         auto predForkDivSG = buildPredForkDivSubgraph(
             nmeshes, budget.predForkWallBC, budget.predForkDivP1Early);
 
-        subgraph->edges(meshExch1DivPreforkSM, predForkVFluxSG);
-        subgraph->edges(meshExch1DivPreforkSM, predForkDivSG);
+        subgraph->edges(divP1PreforkKernelTask, predForkVFluxSG);
+        subgraph->edges(divP1PreforkKernelTask, predForkDivSG);
 
-        // Merged barrier: PredJoin + DivP1Late + PredDivExchange + PressureInit
-        auto predJoinDivExchangeSM = makeBarrierSM(nmeshes, "PredJoin+DivLate+DivExch",
-            "DIV_P1_LATE\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // Split barrier: ForkJoin(2N→N) → DivP1Late(parallel) → DivExchange(global)
+        auto predForkJoinSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
+            std::make_shared<ForkJoinState>(2), "PredForkJoin");
+
+        // Extracted: DivP1Late per-mesh (parallel)
+        auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
+
+        // Smaller barrier: global divergence exchange + zone ops (no per-mesh DivP1Late)
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "DivExch+DivP2Preproc",
+            "EXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
-                for (auto &md : meshes) {
-                    fds_divergence_part_1_late_b(md->nm, md->t, md->dt);
-                }
                 fds_exchange_divergence_info();
                 // Zone ops for DivP2 (modifies global USUM, must run sequentially)
                 for (auto &md : meshes) {
@@ -120,14 +130,15 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                     fds_pressure_iteration_init();
                     fds_pressure_iteration_increment();
                 }
-            },
-            2 * nmeshes);  // Expects 2*N tokens from 2 fork branches
+            });
 
-        subgraph->edges(predForkVFluxSG, predJoinDivExchangeSM);
-        subgraph->edges(predForkDivSG, predJoinDivExchangeSM);
+        subgraph->edges(predForkVFluxSG, predForkJoinSM);
+        subgraph->edges(predForkDivSG, predForkJoinSM);
+        subgraph->edges(predForkJoinSM, divP1LateKernelTask);
+        subgraph->edges(divP1LateKernelTask, predDivExchangeSM);
 
         // DivP2 -> Pressure -> VelPred
-        subgraph->edges(predJoinDivExchangeSM, predDivP2KernelTask);
+        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
     } else {
         // CC_IBM: MeshExchange(1) only
         auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
@@ -212,9 +223,10 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     subgraph->edges(velPredKernelTask, changeTimeStepCollectorSM);
     subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
 
-    // Merged MeshExch(3) + SyntheticTurbulence -> PredFinal -> output
-    subgraph->edges(changeTimeStepSubgraph, meshExch3SynTurbTask);
-    subgraph->edges(meshExch3SynTurbTask, predFinalSubgraph);
+    // Split: MeshExch(3) → SyntheticTurbulence(parallel) → PredFinal
+    subgraph->edges(changeTimeStepSubgraph, meshExch3Task);
+    subgraph->edges(meshExch3Task, synTurbKernelTask);
+    subgraph->edges(synTurbKernelTask, predFinalSubgraph);
 
     subgraph->outputs(predFinalSubgraph);
 

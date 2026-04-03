@@ -13,7 +13,7 @@
 /// In corrector mode (isCorrFinal=true), also calls UPDATE_DEVICES_1_TS,
 /// UPDATE_HRR_TS, UPDATE_MASS_TS, UPDATE_FIRE_SPREAD_OUTPUTS_TS.
 /// These write to per-mesh indexed arrays; the sequential reduce happens
-/// in CorrFinalCollector after all meshes complete.
+/// in CorrFinalDumpTask after all meshes complete.
 ///
 /// @param applyToEstimated 1 for predictor (estimated vars), 0 for corrector (actual vars)
 /// @param doIBEdges 1 to process immersed boundary edges, 0 to skip
