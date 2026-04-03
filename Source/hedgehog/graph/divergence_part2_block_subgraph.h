@@ -31,14 +31,16 @@ public:
     }
 };
 
-/// Orchestrator state for DIVERGENCE_PART_2 block decomposition.
+/// Orchestrator task for DIVERGENCE_PART_2 block decomposition.
 /// Collects N MeshData tokens, runs sequential preprocessing per mesh
 /// (zone ops, R_PBAR, D_PBAR_DT_P), then decomposes each mesh into K-blocks.
+///
+/// Runs on a single thread.
 class DivPart2BlockOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
 public:
     DivPart2BlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractState<1, MeshData, MeshBlockData>(),
+        : hh::AbstractTask<1, MeshData, MeshBlockData>("DivPart2Orch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
@@ -90,17 +92,14 @@ inline auto buildDivergencePart2BlockSubgraph(int nmeshes, size_t blockThreads,
                                                int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("DivPart2Block");
 
-    auto orchestratorSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<DivPart2BlockOrchestrator>(nmeshes, numBlocks),
-        "DivPart2Orch");
+    auto orchestratorTask = std::make_shared<DivPart2BlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<DivergencePart2BlockKernelTask>(blockThreads);
-    auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<MeshBlockReassembleState>(), "DivPart2Reassemble");
+    auto reassembleTask = std::make_shared<MeshBlockReassembleTask>("DivPart2Reassemble");
 
-    subgraph->inputs(orchestratorSM);
-    subgraph->edges(orchestratorSM, blockKernel);
-    subgraph->edges(blockKernel, reassembleSM);
-    subgraph->outputs(reassembleSM);
+    subgraph->inputs(orchestratorTask);
+    subgraph->edges(orchestratorTask, blockKernel);
+    subgraph->edges(blockKernel, reassembleTask);
+    subgraph->outputs(reassembleTask);
 
     return subgraph;
 }

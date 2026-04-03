@@ -62,17 +62,15 @@ inline auto buildVelocityPredictorBlockSubgraph(size_t blockThreads,
                                                   int numBlocks, int nmeshes) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityPredictorBlock");
 
-    auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<MeshBlockDecomposeState>(numBlocks), "VelPredDecompose");
+    auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "VelPredDecompose");
     auto blockKernel = std::make_shared<VelocityPredictorBlockKernelTask>(blockThreads);
-    auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<MeshBlockReassembleState>(), "VelPredReassemble");
+    auto reassembleTask = std::make_shared<MeshBlockReassembleTask>("VelPredReassemble");
     auto postKernel = std::make_shared<VelPredPostKernelTask>(static_cast<size_t>(nmeshes));
 
-    subgraph->inputs(decomposeSM);
-    subgraph->edges(decomposeSM, blockKernel);
-    subgraph->edges(blockKernel, reassembleSM);
-    subgraph->edges(reassembleSM, postKernel);
+    subgraph->inputs(decomposeTask);
+    subgraph->edges(decomposeTask, blockKernel);
+    subgraph->edges(blockKernel, reassembleTask);
+    subgraph->edges(reassembleTask, postKernel);
     subgraph->outputs(postKernel);
 
     return subgraph;

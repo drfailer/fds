@@ -6,7 +6,7 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Collector for CC_IBM post-processing after velocity predictor kernel.
+/// Collector task for CC_IBM post-processing after velocity predictor kernel.
 ///
 /// Gathers all N kernel results, then for each mesh runs the sequential
 /// operations that must follow VELOCITY_PREDICTOR_KERNEL for CC_IBM:
@@ -14,12 +14,13 @@
 ///   2. WALL_VELOCITY_NO_GRADH(STORE=FALSE) — fix wall velocities for sparse solvers
 ///   3. CHECK_STABILITY_KERNEL — compute CFL-limited DT_NEW
 ///
-/// This matches the ordering in velo.f90 VELOCITY_PREDICTOR (lines 574-612).
+/// Runs on a single thread.
 class VelocityPredictorCCCollector
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit VelocityPredictorCCCollector(int nmeshes)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        : hh::AbstractTask<1, MeshData, MeshData>("VelPredCCCollector", 1),
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 

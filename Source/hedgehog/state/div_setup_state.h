@@ -6,14 +6,16 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator state for predictor div setup sub-graph.
+/// Orchestrator task for predictor div setup sub-graph.
 /// CC_VELOCITY_BC moved to parallel DivSetupKernelTask (thread-safe).
 /// This orchestrator is now a pass-through barrier (kept for graph topology).
+///
+/// Runs on a single thread.
 class PredDivSetupOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit PredDivSetupOrchestrator(int nmeshes)
-        : hh::AbstractState<1, MeshData, MeshData>(),
+        : hh::AbstractTask<1, MeshData, MeshData>("PredDivSetupOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
@@ -35,14 +37,16 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Orchestrator state for corrector div setup sub-graph.
+/// Orchestrator task for corrector div setup sub-graph.
 /// CC_VELOCITY_BC moved to parallel DivSetupKernelTask (thread-safe).
 /// This orchestrator is now a pass-through barrier (kept for graph topology).
+///
+/// Runs on a single thread.
 class CorrDivSetupOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit CorrDivSetupOrchestrator(int nmeshes)
-        : hh::AbstractState<1, MeshData, MeshData>(),
+        : hh::AbstractTask<1, MeshData, MeshData>("Fork1VFluxOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }

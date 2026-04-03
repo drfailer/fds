@@ -10,12 +10,14 @@
 
 /// Decomposes a MeshData token into multiple MeshBlockData tokens along K.
 /// Each MeshData produces ceil(KBAR / blockSize) blocks, dispatched immediately.
-class MeshBlockDecomposeState
-    : public hh::AbstractState<1, MeshData, MeshBlockData> {
+///
+/// Runs on a single thread.
+class MeshBlockDecomposeTask
+    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
 public:
     /// @param numBlocks Target number of blocks per mesh
-    explicit MeshBlockDecomposeState(int numBlocks)
-        : hh::AbstractState<1, MeshData, MeshBlockData>(),
+    explicit MeshBlockDecomposeTask(int numBlocks, std::string name = "MeshBlockDecompose")
+        : hh::AbstractTask<1, MeshData, MeshBlockData>(std::move(name), 1),
           numBlocks_(std::max(1, numBlocks)) {}
 
     void execute(std::shared_ptr<MeshData> data) override {
@@ -38,10 +40,13 @@ private:
 /// Reassembles MeshBlockData tokens back into MeshData.
 /// Collects all blocks for a given mesh (identified by nm) and emits
 /// the original MeshData when all blocks have arrived.
-class MeshBlockReassembleState
-    : public hh::AbstractState<1, MeshBlockData, MeshData> {
+///
+/// Runs on a single thread.
+class MeshBlockReassembleTask
+    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
 public:
-    MeshBlockReassembleState() = default;
+    explicit MeshBlockReassembleTask(std::string name = "MeshBlockReassemble")
+        : hh::AbstractTask<1, MeshBlockData, MeshData>(std::move(name), 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;

@@ -11,21 +11,15 @@ inline auto buildCorrRadiationSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<
         hh::Graph<1, MeshData, MeshData>>("CorrRadiation");
 
-    auto orchSM = std::make_shared<
-        hh::StateManager<1, MeshData, CorrRadiationWork>>(
-        std::make_shared<CorrRadiationOrchestrator>(nmeshes),
-        "CorrRadOrch");
+    auto orchTask = std::make_shared<CorrRadiationOrchestrator>(nmeshes);
     auto kernelTask = std::make_shared<CorrRadiationKernelTask>(
         kernelThreads);
-    auto collectorSM = std::make_shared<
-        hh::StateManager<1, CorrRadiationWork, MeshData>>(
-        std::make_shared<CorrRadiationCollector>(nmeshes),
-        "CorrRadCollector");
+    auto collectorTask = std::make_shared<CorrRadiationCollector>(nmeshes);
 
-    subgraph->inputs(orchSM);
-    subgraph->edges(orchSM, kernelTask);
-    subgraph->edges(kernelTask, collectorSM);
-    subgraph->outputs(collectorSM);
+    subgraph->inputs(orchTask);
+    subgraph->edges(orchTask, kernelTask);
+    subgraph->edges(kernelTask, collectorTask);
+    subgraph->outputs(collectorTask);
 
     return subgraph;
 }

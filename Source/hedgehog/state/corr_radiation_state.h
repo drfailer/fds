@@ -8,13 +8,18 @@
 
 #include <vector>
 
-// Orchestrator: collects N MeshData tokens, dispatches parallel radiation work.
-// No sequential pre-processing needed (MESH_EXCHANGE(6) already done).
+/// Orchestrator task: collects N MeshData tokens, dispatches parallel radiation work.
+/// No sequential pre-processing needed (MESH_EXCHANGE(6) already done).
+///
+/// Runs on a single thread.
 class CorrRadiationOrchestrator
-    : public hh::AbstractState<1, MeshData, CorrRadiationWork> {
+    : public hh::AbstractTask<1, MeshData, CorrRadiationWork> {
 public:
     explicit CorrRadiationOrchestrator(int nmeshes)
-        : nmeshes_(nmeshes) { collected_.reserve(nmeshes); }
+        : hh::AbstractTask<1, MeshData, CorrRadiationWork>("CorrRadOrch", 1),
+          nmeshes_(nmeshes) {
+        collected_.reserve(nmeshes);
+    }
 
     void execute(std::shared_ptr<MeshData> data) override {
         collected_.push_back(data);
@@ -33,15 +38,17 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-// Collector: gathers N CorrRadiationWork results, accumulates global
-// RAD_Q_SUM/KFST4_SUM, emits N MeshData tokens downstream.
-//
-// Uses direct indexed placement (nm - offset) to avoid sorting.
+/// Collector task: gathers N CorrRadiationWork results, accumulates global
+/// RAD_Q_SUM/KFST4_SUM, emits N MeshData tokens downstream.
+///
+/// Uses direct indexed placement (nm - offset) to avoid sorting.
+/// Runs on a single thread.
 class CorrRadiationCollector
-    : public hh::AbstractState<1, CorrRadiationWork, MeshData> {
+    : public hh::AbstractTask<1, CorrRadiationWork, MeshData> {
 public:
     explicit CorrRadiationCollector(int nmeshes)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        : hh::AbstractTask<1, CorrRadiationWork, MeshData>("CorrRadCollector", 1),
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 

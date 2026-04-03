@@ -41,16 +41,14 @@ public:
 inline auto buildParticleMomentumBlockSubgraph(size_t kernelThreads, int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("ParticleMomentumBlock");
 
-    auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<MeshBlockDecomposeState>(numBlocks), "PartMomDecompose");
+    auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "PartMomDecompose");
     auto blockKernel = std::make_shared<ParticleMomentumBlockKernelTask>(kernelThreads);
-    auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<MeshBlockReassembleState>(), "PartMomReassemble");
+    auto reassembleTask = std::make_shared<MeshBlockReassembleTask>("PartMomReassemble");
 
-    subgraph->inputs(decomposeSM);
-    subgraph->edges(decomposeSM, blockKernel);
-    subgraph->edges(blockKernel, reassembleSM);
-    subgraph->outputs(reassembleSM);
+    subgraph->inputs(decomposeTask);
+    subgraph->edges(decomposeTask, blockKernel);
+    subgraph->edges(blockKernel, reassembleTask);
+    subgraph->outputs(reassembleTask);
 
     return subgraph;
 }

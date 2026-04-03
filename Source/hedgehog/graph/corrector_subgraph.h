@@ -249,9 +249,8 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(corrDivP2KernelTask, corrPressureSM);
         subgraph->edges(corrPressureSM, velCorrKernelTask);
         // Sink for TerminationData when parallel pressure is not used
-        auto termSinkSM = std::make_shared<hh::StateManager<1, TerminationData, TerminationData>>(
-            std::make_shared<TerminationDataSink>(), "TermDataSink");
-        subgraph->input<TerminationData>(termSinkSM);
+        auto termSinkTask = std::make_shared<TerminationDataSink>();
+        subgraph->input<TerminationData>(termSinkTask);
     }
 
     // CorrFinal sub-graph (MeshExch6b in CorrFinalOrch task)

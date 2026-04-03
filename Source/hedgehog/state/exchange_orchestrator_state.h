@@ -10,7 +10,7 @@
 #include "../data/mesh_data.h"
 #include "../tool/mesh_dependency_graph.h"
 
-/// Pure dependency gate for mesh exchange orchestration.
+/// Pure dependency gate task for mesh exchange orchestration.
 ///
 /// Receives MeshData "push done" signals from the upstream ExchangePushTask.
 /// Each signal means that mesh NM has finished copying its data to all
@@ -18,18 +18,16 @@
 /// a mesh downstream only when all of its receive-dependencies have also
 /// pushed.
 ///
-/// This state contains NO I/O — all copies and communication happen in
-/// upstream/downstream tasks.  This makes it reusable across different
-/// exchange codes (5, 3, 1, etc.) by pairing it with different push tasks.
+/// This task contains NO I/O — all copies and communication happen in
+/// upstream/downstream tasks.
 ///
-/// A mesh can proceed when:
-///   - It has been pushed (its data is saved in targets' OMESHes)
-///   - All of its receive-dependencies have been pushed (its OMESH is fresh)
-class ExchangeGateState
-    : public hh::AbstractState<1, MeshData, MeshData> {
+/// Runs on a single thread.
+class ExchangeGateTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    ExchangeGateState(std::shared_ptr<MeshDependencyGraph> depGraph)
-        : depGraph_(std::move(depGraph)),
+    ExchangeGateTask(std::shared_ptr<MeshDependencyGraph> depGraph)
+        : hh::AbstractTask<1, MeshData, MeshData>("ExchangeGate", 1),
+          depGraph_(std::move(depGraph)),
           satisfied_(static_cast<size_t>(depGraph_->totalMeshes())),
           lower_(depGraph_->lowerMesh()),
           upper_(depGraph_->upperMesh()) {
@@ -76,7 +74,7 @@ public:
         }
     }
 
-    [[nodiscard]] std::string info() const {
+    [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
         oss << "EXCHANGE_GATE\\n"
             << std::fixed << std::setprecision(3)
@@ -112,25 +110,6 @@ private:
     std::vector<bool> noDeps_;
     double gateTime_ = 0.0;
     int invocations_ = 0;
-};
-
-/// StateManager for ExchangeGateState, with dot-file diagnostics.
-class ExchangeGateManager
-    : public hh::StateManager<1, MeshData, MeshData> {
-public:
-    ExchangeGateManager(
-        std::shared_ptr<ExchangeGateState> const &state,
-        std::string const &name)
-        : hh::StateManager<1, MeshData, MeshData>(
-              state, name) {}
-
-    [[nodiscard]] std::string extraPrintingInformation() const override {
-        this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<ExchangeGateState>(
-            this->state())->info();
-        this->state()->unlock();
-        return ret;
-    }
 };
 
 #endif // EXCHANGE_ORCHESTRATOR_STATE_H

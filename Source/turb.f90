@@ -728,6 +728,7 @@ USE TRAN, ONLY: GET_IJK
 REAL(EB), INTENT(IN) :: DT,T
 INTEGER, INTENT(IN) :: NM
 INTEGER :: NE,NV,II,JJ,KK,IERROR
+TYPE(MESH_TYPE), POINTER :: M
 TYPE(VENTS_TYPE), POINTER :: VT
 TYPE(SURFACE_TYPE), POINTER :: SF
 REAL(EB) :: XX,YY,ZZ,SHAPE_FACTOR,VOLUME_WEIGHTING_FACTOR(3),EDDY_VOLUME(3),PROFILE_FACTOR,RAMP_T,TSI,&
@@ -741,10 +742,10 @@ INTEGER, PARAMETER :: SHAPE_CODE=1 ! 1=tent, 2=tophat
 !
 ! See Chapter 4: The Synthetic Eddy Method
 
-CALL POINT_TO_MESH(NM)
+M => MESHES(NM)
 
-VENT_LOOP: DO NV=1,N_VENT
-   VT => VENTS(NV)
+VENT_LOOP: DO NV=1,M%N_VENT
+   VT => M%VENTS(NV)
    IF (VT%N_EDDY==0) CYCLE VENT_LOOP
 
    VT%U_EDDY = 0._EB
@@ -771,13 +772,13 @@ VENT_LOOP: DO NV=1,N_VENT
             ! determine advection velocity based on eddy position
             PROFILE_FACTOR = 1._EB
             IF ( VT%BOUNDARY_TYPE==OPEN_BOUNDARY .AND. OPEN_WIND_BOUNDARY ) THEN
-               ZZ=CELLSK(MIN(CELLSK_HI,MAX(CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-ZS)*RDZINT))))
+               ZZ=M%CELLSK(MIN(M%CELLSK_HI,MAX(M%CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-M%ZS)*M%RDZINT))))
                KK=FLOOR(ZZ+1._EB)
                Z_WGT = ZZ+0.5_EB-FLOOR(ZZ+0.5_EB)
                IF (Z_WGT>0.5_EB) KK = KK - 1
-               VEL_NORMAL = -(U_WIND(KK)*(1.0-Z_WGT)+U_WIND(KK+1)*Z_WGT)
-               VEL_TANG_1 = (V_WIND(KK)*(1.0-Z_WGT)+V_WIND(KK+1)*Z_WGT)
-               VEL_TANG_2 = (W_WIND(KK)*(1.0-Z_WGT)+W_WIND(KK+1)*Z_WGT)
+               VEL_NORMAL = -(M%U_WIND(KK)*(1.0-Z_WGT)+M%U_WIND(KK+1)*Z_WGT)
+               VEL_TANG_1 = (M%V_WIND(KK)*(1.0-Z_WGT)+M%V_WIND(KK+1)*Z_WGT)
+               VEL_TANG_2 = (M%W_WIND(KK)*(1.0-Z_WGT)+M%W_WIND(KK+1)*Z_WGT)
             ELSEIF (SF%RAMP(VELO_PROF_Z)%INDEX>0) THEN
                PROFILE_FACTOR = EVALUATE_RAMP(VT%Z_EDDY(NE),SF%RAMP(VELO_PROF_Z)%INDEX)
             ENDIF
@@ -790,20 +791,20 @@ VENT_LOOP: DO NV=1,N_VENT
             DO KK=VT%K1+1,VT%K2 ! this block can be made more efficient
                DO JJ=VT%J1+1,VT%J2
                   XX = (VT%X1  - VT%X_EDDY(NE))/VT%SIGMA_IJ(1,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(1,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(1,3)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(1,2)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(1,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%U_EDDY(JJ,KK) = VT%U_EDDY(JJ,KK) + VT%CU_EDDY(NE)*SHAPE_FACTOR
 
                   XX = (VT%X1  - VT%X_EDDY(NE))/VT%SIGMA_IJ(2,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(2,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(2,3)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(2,2)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(2,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%V_EDDY(JJ,KK) = VT%V_EDDY(JJ,KK) + VT%CV_EDDY(NE)*SHAPE_FACTOR
 
                   XX = (VT%X1  - VT%X_EDDY(NE))/VT%SIGMA_IJ(3,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(3,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(3,3)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(3,2)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(3,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%W_EDDY(JJ,KK) = VT%W_EDDY(JJ,KK) + VT%CW_EDDY(NE)*SHAPE_FACTOR
                ENDDO
@@ -815,14 +816,14 @@ VENT_LOOP: DO NV=1,N_VENT
             ! determine advection velocity based on eddy position
             PROFILE_FACTOR = 1._EB
             IF ( VT%BOUNDARY_TYPE==OPEN_BOUNDARY .AND. OPEN_WIND_BOUNDARY ) THEN
-               ZZ=CELLSK(MIN(CELLSK_HI,MAX(CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-ZS)*RDZINT))))
+               ZZ=M%CELLSK(MIN(M%CELLSK_HI,MAX(M%CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-M%ZS)*M%RDZINT))))
                KK=FLOOR(ZZ+1._EB)
                Z_WGT = ZZ+0.5_EB-FLOOR(ZZ+0.5_EB)
                IF (Z_WGT>0.5_EB) KK = KK - 1
-               VEL_TANG_1 = (U_WIND(KK)*(1.0-Z_WGT)+U_WIND(KK+1)*Z_WGT)
-               VEL_NORMAL = -(V_WIND(KK)*(1.0-Z_WGT)+V_WIND(KK+1)*Z_WGT)
-               VEL_TANG_2 = (W_WIND(KK)*(1.0-Z_WGT)+W_WIND(KK+1)*Z_WGT)
-            ELSEIF (SF%RAMP(VELO_PROF_Z)%INDEX>0) THEN 
+               VEL_TANG_1 = (M%U_WIND(KK)*(1.0-Z_WGT)+M%U_WIND(KK+1)*Z_WGT)
+               VEL_NORMAL = -(M%V_WIND(KK)*(1.0-Z_WGT)+M%V_WIND(KK+1)*Z_WGT)
+               VEL_TANG_2 = (M%W_WIND(KK)*(1.0-Z_WGT)+M%W_WIND(KK+1)*Z_WGT)
+            ELSEIF (SF%RAMP(VELO_PROF_Z)%INDEX>0) THEN
                PROFILE_FACTOR = EVALUATE_RAMP(VT%Z_EDDY(NE),SF%RAMP(VELO_PROF_Z)%INDEX)
             ENDIF
 
@@ -833,21 +834,21 @@ VENT_LOOP: DO NV=1,N_VENT
             IF (IERROR==1) CALL EDDY_AMPLITUDE(NE,NV,NM)
             DO KK=VT%K1+1,VT%K2
                DO II=VT%I1+1,VT%I2
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(1,1)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(1,1)
                   YY = (VT%Y1  - VT%Y_EDDY(NE))/VT%SIGMA_IJ(1,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(1,3)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(1,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%U_EDDY(II,KK) = VT%U_EDDY(II,KK) + VT%CU_EDDY(NE)*SHAPE_FACTOR
 
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(2,1)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(2,1)
                   YY = (VT%Y1  - VT%Y_EDDY(NE))/VT%SIGMA_IJ(2,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(2,3)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(2,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%V_EDDY(II,KK) = VT%V_EDDY(II,KK) + VT%CV_EDDY(NE)*SHAPE_FACTOR
 
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(3,1)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(3,1)
                   YY = (VT%Y1  - VT%Y_EDDY(NE))/VT%SIGMA_IJ(3,2)
-                  ZZ = (ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(3,3)
+                  ZZ = (M%ZC(KK) - VT%Z_EDDY(NE))/VT%SIGMA_IJ(3,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%W_EDDY(II,KK) = VT%W_EDDY(II,KK) + VT%CW_EDDY(NE)*SHAPE_FACTOR
                ENDDO
@@ -859,17 +860,17 @@ VENT_LOOP: DO NV=1,N_VENT
             ! determine advection velocity based on eddy position
             PROFILE_FACTOR = 1._EB
             IF ( VT%BOUNDARY_TYPE==OPEN_BOUNDARY .AND. OPEN_WIND_BOUNDARY ) THEN
-               ZZ=CELLSK(MIN(CELLSK_HI,MAX(CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-ZS)*RDZINT))))
+               ZZ=M%CELLSK(MIN(M%CELLSK_HI,MAX(M%CELLSK_LO,FLOOR((VT%Z_EDDY(NE)-M%ZS)*M%RDZINT))))
                KK=FLOOR(ZZ+1._EB)
                Z_WGT = ZZ+0.5_EB-FLOOR(ZZ+0.5_EB)
                IF (Z_WGT>0.5_EB) KK = KK - 1
-               VEL_TANG_1 = (U_WIND(KK)*(1.0-Z_WGT)+U_WIND(KK+1)*Z_WGT)
-               VEL_TANG_2 = (V_WIND(KK)*(1.0-Z_WGT)+V_WIND(KK+1)*Z_WGT)
-               VEL_NORMAL = -(W_WIND(KK)*(1.0-Z_WGT)+W_WIND(KK+1)*Z_WGT)
+               VEL_TANG_1 = (M%U_WIND(KK)*(1.0-Z_WGT)+M%U_WIND(KK+1)*Z_WGT)
+               VEL_TANG_2 = (M%V_WIND(KK)*(1.0-Z_WGT)+M%V_WIND(KK+1)*Z_WGT)
+               VEL_NORMAL = -(M%W_WIND(KK)*(1.0-Z_WGT)+M%W_WIND(KK+1)*Z_WGT)
             ELSEIF (SF%RAMP(VELO_PROF_Z)%INDEX>0) THEN
                PROFILE_FACTOR = EVALUATE_RAMP(VT%Z_EDDY(NE),SF%RAMP(VELO_PROF_Z)%INDEX)
             ENDIF
-            
+
             VT%X_EDDY(NE) = VT%X_EDDY(NE) + DT*VEL_TANG_1*PROFILE_FACTOR
             VT%Y_EDDY(NE) = VT%Y_EDDY(NE) + DT*VEL_TANG_2*PROFILE_FACTOR
             VT%Z_EDDY(NE) = VT%Z_EDDY(NE) - DT*VEL_NORMAL*PROFILE_FACTOR*SIGN(1._EB,REAL(VT%IOR,EB))
@@ -877,20 +878,20 @@ VENT_LOOP: DO NV=1,N_VENT
             IF (IERROR==1) CALL EDDY_AMPLITUDE(NE,NV,NM)
             DO JJ=VT%J1+1,VT%J2
                DO II=VT%I1+1,VT%I2
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(1,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(1,2)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(1,1)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(1,2)
                   ZZ = (VT%Z1  - VT%Z_EDDY(NE))/VT%SIGMA_IJ(1,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%U_EDDY(II,JJ) = VT%U_EDDY(II,JJ) + VT%CU_EDDY(NE)*SHAPE_FACTOR
 
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(2,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(2,2)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(2,1)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(2,2)
                   ZZ = (VT%Z1  - VT%Z_EDDY(NE))/VT%SIGMA_IJ(2,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%V_EDDY(II,JJ) = VT%V_EDDY(II,JJ) + VT%CV_EDDY(NE)*SHAPE_FACTOR
 
-                  XX = (XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(3,1)
-                  YY = (YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(3,2)
+                  XX = (M%XC(II) - VT%X_EDDY(NE))/VT%SIGMA_IJ(3,1)
+                  YY = (M%YC(JJ) - VT%Y_EDDY(NE))/VT%SIGMA_IJ(3,2)
                   ZZ = (VT%Z1  - VT%Z_EDDY(NE))/VT%SIGMA_IJ(3,3)
                   SHAPE_FACTOR = SHAPE_FUNCTION(XX,SHAPE_CODE)*SHAPE_FUNCTION(YY,SHAPE_CODE)*SHAPE_FUNCTION(ZZ,SHAPE_CODE)
                   VT%W_EDDY(II,JJ) = VT%W_EDDY(II,JJ) + VT%CW_EDDY(NE)*SHAPE_FACTOR

@@ -21,13 +21,12 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "PredFinalCollector");
+    auto collectorTask = std::make_shared<CollectorTask>(nmeshes, "PredFinalCollector");
     auto phaseTransTask = std::make_shared<PhaseTransitionTask>();
 
     subgraph->inputs(kernelTask);
-    subgraph->edges(kernelTask, collectorSM);
-    subgraph->edges(collectorSM, phaseTransTask);
+    subgraph->edges(kernelTask, collectorTask);
+    subgraph->edges(collectorTask, phaseTransTask);
     subgraph->outputs(phaseTransTask);
 
     return subgraph;
@@ -46,9 +45,8 @@ inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
 
     bool ccIBM = fds_is_cc_ibm() != 0;
 
-    // CorrFinalOrchestrator → CollectorState + BarrierTask
-    auto orchCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrFinalOrchCollector");
+    // CorrFinalOrchestrator → CollectorTask + BarrierTask
+    auto orchCollectorTask = std::make_shared<CollectorTask>(nmeshes, "CorrFinalOrchCollector");
     auto orchTask = makeBarrierTask("CorrFinalOrch",
         "CC_END_STEP\\nMESH_EXCHANGE(6)",
         [ccIBM](auto& meshes) {
@@ -59,16 +57,15 @@ inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(
         kernelThreads, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*isCorrFinal=*/true);
 
-    // CorrFinalCollector → CollectorState + CorrFinalDumpTask
-    auto dumpCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "CorrFinalDumpCollector");
+    // CorrFinalCollector → CollectorTask + CorrFinalDumpTask
+    auto dumpCollectorTask = std::make_shared<CollectorTask>(nmeshes, "CorrFinalDumpCollector");
     auto dumpTask = std::make_shared<CorrFinalDumpTask>();
 
-    subgraph->inputs(orchCollectorSM);
-    subgraph->edges(orchCollectorSM, orchTask);
+    subgraph->inputs(orchCollectorTask);
+    subgraph->edges(orchCollectorTask, orchTask);
     subgraph->edges(orchTask, kernelTask);
-    subgraph->edges(kernelTask, dumpCollectorSM);
-    subgraph->edges(dumpCollectorSM, dumpTask);
+    subgraph->edges(kernelTask, dumpCollectorTask);
+    subgraph->edges(dumpCollectorTask, dumpTask);
     subgraph->outputs(dumpTask);
 
     return subgraph;

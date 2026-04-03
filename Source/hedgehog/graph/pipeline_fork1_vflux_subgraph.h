@@ -15,11 +15,10 @@ inline auto buildFork1VFluxSubgraph(int nmeshes, bool ccIBM,
         "Fork1-BranchA-VFlux");
 
     if (ccIBM) {
-        auto orchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<CorrDivSetupOrchestrator>(nmeshes), "Fork1VFluxOrch");
+        auto orchTask = std::make_shared<CorrDivSetupOrchestrator>(nmeshes);
         auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);
-        subgraph->inputs(orchSM);
-        subgraph->edges(orchSM, kernel);
+        subgraph->inputs(orchTask);
+        subgraph->edges(orchTask, kernel);
         subgraph->outputs(kernel);
     } else {
         auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);

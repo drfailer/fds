@@ -7,16 +7,16 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Generic barrier state that collects N MeshData tokens and emits a single
-/// BarrierData containing all of them. This is pure data-flow control with
-/// no computation — the actual work is done by a downstream barrier task.
+/// Task that collects N MeshData tokens and emits a single BarrierData
+/// containing all of them. Pure data-flow control with no computation —
+/// the actual work is done by a downstream barrier task.
 ///
-/// Meshes are placed directly at their correct position using NM as the index,
-/// avoiding any sorting overhead.
-class CollectorState : public hh::AbstractState<1, MeshData, BarrierData> {
+/// Runs on a single thread. Meshes are placed directly at their correct
+/// position using NM as the index, avoiding any sorting overhead.
+class CollectorTask : public hh::AbstractTask<1, MeshData, BarrierData> {
 public:
-    explicit CollectorState(int nmeshes)
-        : hh::AbstractState<1, MeshData, BarrierData>(),
+    explicit CollectorTask(int nmeshes, std::string name = "Collector")
+        : hh::AbstractTask<1, MeshData, BarrierData>(std::move(name), 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }

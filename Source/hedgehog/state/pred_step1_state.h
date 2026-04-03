@@ -6,15 +6,18 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator for PredStep1 sub-graph (Pattern B).
+/// Orchestrator task for PredStep1 sub-graph.
 /// Collects N MeshData tokens, runs sequential INSERT_ALL_PARTICLES for each mesh,
 /// then dispatches MeshData for parallel COMPUTE_VISCOSITY + MASS_FINITE_DIFFERENCES kernels.
-class PredStep1Orchestrator : public hh::AbstractState<1, MeshData, MeshData> {
-    int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+///
+/// Runs on a single thread.
+class PredStep1Orchestrator : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit PredStep1Orchestrator(int nmeshes)
-        : nmeshes_(nmeshes) { collected_.reserve(nmeshes); }
+        : hh::AbstractTask<1, MeshData, MeshData>("PredStep1Orch", 1),
+          nmeshes_(nmeshes) {
+        collected_.reserve(nmeshes);
+    }
 
     void execute(std::shared_ptr<MeshData> data) override {
         collected_.push_back(data);
@@ -31,6 +34,10 @@ public:
             collected_.reserve(nmeshes_);
         }
     }
+
+private:
+    int nmeshes_;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 #endif // PRED_STEP1_STATE_H

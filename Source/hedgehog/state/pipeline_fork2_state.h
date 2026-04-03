@@ -6,14 +6,17 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Fork state for Corrector Fork 2: RADIATION || DIV_P1.
+/// Fork task for Corrector Fork 2: RADIATION || DIV_P1.
 /// Collects N MeshData tokens, runs InitDivIntegrals (zero DSUM/PSUM/USUM),
 /// then emits MeshData. Hedgehog multicasts to both branches.
-class PipelineFork2State
-    : public hh::AbstractState<1, MeshData, MeshData> {
+///
+/// Runs on a single thread.
+class PipelineFork2Task
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    explicit PipelineFork2State(int nmeshes)
-        : nmeshes_(nmeshes) {
+    explicit PipelineFork2Task(int nmeshes)
+        : hh::AbstractTask<1, MeshData, MeshData>("PipelineFork2", 1),
+          nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 

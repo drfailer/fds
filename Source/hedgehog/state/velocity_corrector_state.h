@@ -6,18 +6,19 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator for CC_IBM pre-processing before velocity corrector kernel.
+/// Orchestrator task for CC_IBM pre-processing before velocity corrector kernel.
 ///
 /// Collects all N mesh tokens, then for each mesh runs:
 ///   1. CC_PROJECT_VELOCITY(STORE=TRUE) — store projected velocities
 ///   2. WALL_VELOCITY_NO_GRADH(STORE=TRUE) — store wall velocities for sparse solvers
 ///
-/// This matches velo.f90 VELOCITY_CORRECTOR (lines 646-656).
+/// Runs on a single thread.
 class VelocityCorrectorCCOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit VelocityCorrectorCCOrchestrator(int nmeshes)
-        : nmeshes_(nmeshes) {
+        : hh::AbstractTask<1, MeshData, MeshData>("VelCorrCCOrch", 1),
+          nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
@@ -44,18 +45,19 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector for CC_IBM post-processing after velocity corrector kernel.
+/// Collector task for CC_IBM post-processing after velocity corrector kernel.
 ///
 /// Gathers all N kernel results, then for each mesh runs:
 ///   1. CC_PROJECT_VELOCITY(STORE=FALSE) — apply projected velocities
 ///   2. WALL_VELOCITY_NO_GRADH(STORE=FALSE) — restore wall velocities for sparse solvers
 ///
-/// This matches velo.f90 VELOCITY_CORRECTOR (lines 660-670).
+/// Runs on a single thread.
 class VelocityCorrectorCCCollector
-    : public hh::AbstractState<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit VelocityCorrectorCCCollector(int nmeshes)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        : hh::AbstractTask<1, MeshData, MeshData>("VelCorrCCCollector", 1),
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 

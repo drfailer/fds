@@ -10,7 +10,6 @@
 #include "../fds_fortran_interface.h"
 
 /// Block kernel task for density computation.
-/// Processes a K-range sub-block: species mass density, M_DOT_PPP, RHOS/RHO sum.
 class DensityBlockKernelTask
     : public hh::AbstractTask<1, MeshBlockData, MeshBlockData> {
 public:
@@ -30,15 +29,12 @@ public:
     }
 };
 
-/// Orchestrator state for density block decomposition.
-/// Collects N MeshData tokens, runs sequential preprocessing per mesh
-/// (work array setup, wall corrections, settling velocity),
-/// then decomposes each mesh into K-blocks for parallel execution.
+/// Orchestrator task for density block decomposition.
 class DensityBlockOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
 public:
     DensityBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractState<1, MeshData, MeshBlockData>(),
+        : hh::AbstractTask<1, MeshData, MeshBlockData>("DensityOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
@@ -47,12 +43,10 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // Sequential preprocessing per mesh
             for (auto &md : collected_) {
                 fds_density_block_preprocessing(md->nm, md->t, md->dt);
             }
 
-            // Decompose each mesh into K-blocks
             for (auto &md : collected_) {
                 int kbar = fds_get_kbar(md->nm);
                 int bs = std::max(1, (kbar + numBlocks_ - 1) / numBlocks_);
@@ -77,13 +71,12 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector state for density block decomposition.
-/// Reassembles blocks back into MeshData, runs sequential postprocessing
-/// (CHECK_MASS_DENSITY, mass fraction extraction, PBAR, RSUM, TMP).
+/// Collector task for density block decomposition.
 class DensityBlockCollector
-    : public hh::AbstractState<1, MeshBlockData, MeshData> {
+    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
 public:
-    DensityBlockCollector() = default;
+    DensityBlockCollector()
+        : hh::AbstractTask<1, MeshBlockData, MeshData>("DensityCollector", 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;
@@ -111,31 +104,18 @@ private:
 };
 
 /// Build the density sub-graph with block decomposition.
-///
-/// Pipeline:
-///   MeshData -> Orchestrator(settling vel, work arrays, wall corr, decompose) ->
-///   DensityBlockKernel(parallel: species density, M_DOT_PPP, RHOS/RHO sum) ->
-///   Collector(STORE_FLUX, CHECK_MASS_DENSITY, ZZ/=RHO, CLIP, PBAR, RSUM, TMP)
-///   -> MeshData
-///
-/// @param nmeshes Number of meshes
-/// @param kernelThreads Number of threads for parallel block tasks
-/// @param numBlocks Target number of blocks per mesh
 inline auto buildDensityBlockSubgraph(int nmeshes, size_t kernelThreads,
                                        int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("DensityBlock");
 
-    auto orchestratorSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<DensityBlockOrchestrator>(nmeshes, numBlocks),
-        "DensityOrch");
+    auto orchestratorTask = std::make_shared<DensityBlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<DensityBlockKernelTask>(kernelThreads);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<DensityBlockCollector>(), "DensityCollector");
+    auto collectorTask = std::make_shared<DensityBlockCollector>();
 
-    subgraph->inputs(orchestratorSM);
-    subgraph->edges(orchestratorSM, blockKernel);
-    subgraph->edges(blockKernel, collectorSM);
-    subgraph->outputs(collectorSM);
+    subgraph->inputs(orchestratorTask);
+    subgraph->edges(orchestratorTask, blockKernel);
+    subgraph->edges(blockKernel, collectorTask);
+    subgraph->outputs(collectorTask);
 
     return subgraph;
 }

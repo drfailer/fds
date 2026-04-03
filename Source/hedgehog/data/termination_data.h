@@ -10,10 +10,12 @@
 /// done_=true, and their canTerminate() returns true to break the cycle.
 struct TerminationData {};
 
-/// Sink state for TerminationData when no cycle states need it.
+/// Sink task for TerminationData when no cycle states need it.
 /// Used in predictor/corrector subgraphs when parallel pressure is disabled.
-class TerminationDataSink : public hh::AbstractState<1, TerminationData, TerminationData> {
+class TerminationDataSink : public hh::AbstractTask<1, TerminationData, TerminationData> {
 public:
+    TerminationDataSink()
+        : hh::AbstractTask<1, TerminationData, TerminationData>("TermDataSink", 1) {}
     void execute(std::shared_ptr<TerminationData>) override {}
 };
 

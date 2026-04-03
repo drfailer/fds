@@ -6,15 +6,18 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Orchestrator for CorrParticle sub-graph (Pattern B).
+/// Orchestrator task for CorrParticle sub-graph.
 /// Collects N MeshData tokens, runs sequential PARTICLE_MASS_ENERGY + MOVE_PARTICLES
 /// (cross-mesh particle transfer), then dispatches MeshData for parallel PARTICLE_MOMENTUM_KERNEL.
-class CorrParticleOrchestrator : public hh::AbstractState<1, MeshData, MeshData> {
-    int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+///
+/// Runs on a single thread.
+class CorrParticleOrchestrator : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     explicit CorrParticleOrchestrator(int nmeshes)
-        : nmeshes_(nmeshes) { collected_.reserve(nmeshes); }
+        : hh::AbstractTask<1, MeshData, MeshData>("CorrParticleOrch", 1),
+          nmeshes_(nmeshes) {
+        collected_.reserve(nmeshes);
+    }
 
     void execute(std::shared_ptr<MeshData> data) override {
         collected_.push_back(data);
@@ -32,6 +35,10 @@ public:
             collected_.reserve(nmeshes_);
         }
     }
+
+private:
+    int nmeshes_;
+    std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
 #endif // CORR_PARTICLE_STATE_H

@@ -12,25 +12,29 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Generic barrier state that collects N MeshData tokens, runs a barrier
-/// function, then re-emits N MeshData tokens.  Replaces the common pattern
-/// of CollectorState(MeshData->BarrierData) + BarrierTask(BarrierData->MeshData)
-/// with a single state node, eliminating one inter-node queue.
-///
-/// Timing and routine info are exposed via the BarrierStateManager's
-/// extraPrintingInformation() for dot-file diagnostics.
+/// Barrier function signature: takes collected meshes, runs global work.
 using BarrierFn = std::function<void(std::vector<std::shared_ptr<MeshData>>&)>;
 
-class BarrierState : public hh::AbstractState<1, MeshData, MeshData> {
+/// Barrier collector task that collects N MeshData tokens, runs a barrier
+/// function, then re-emits N MeshData tokens.
+///
+/// Runs on a single thread. Accumulates tokens internally, firing the
+/// barrier function only when all expected tokens have arrived.
+///
+/// Timing and routine info are exposed via extraPrintingInformation()
+/// for dot-file diagnostics.
+class BarrierCollectorTask
+    : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
     /// @param nmeshes Number of unique meshes (determines output count)
+    /// @param name Task name for dot-file display
     /// @param routines Label for dot-file display
     /// @param fn Barrier function called when all tokens arrive
     /// @param totalExpected Total tokens to collect before firing (default: nmeshes).
     ///        Set to numBranches*nmeshes for fork-join+barrier merges.
-    BarrierState(int nmeshes, std::string routines, BarrierFn fn,
-                 int totalExpected = 0)
-        : hh::AbstractState<1, MeshData, MeshData>(),
+    BarrierCollectorTask(int nmeshes, std::string name, std::string routines,
+                         BarrierFn fn, int totalExpected = 0)
+        : hh::AbstractTask<1, MeshData, MeshData>(std::move(name), 1),
           nmeshes_(nmeshes), routines_(std::move(routines)), fn_(std::move(fn)),
           totalExpected_(totalExpected > 0 ? totalExpected : nmeshes),
           nmOffset_(fds_get_lower_mesh_index()) {
@@ -53,7 +57,7 @@ public:
         }
     }
 
-    [[nodiscard]] std::string info() const {
+    [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
         oss << routines_ << "\\n"
             << std::fixed << std::setprecision(3) << totalTime_ << "s"
@@ -73,32 +77,13 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// StateManager wrapping BarrierState, with extraPrintingInformation()
-/// delegating to the state's info() method.
-class BarrierStateManager
-    : public hh::StateManager<1, MeshData, MeshData> {
-public:
-    BarrierStateManager(std::shared_ptr<BarrierState> const &state,
-                        std::string const &name)
-        : hh::StateManager<1, MeshData, MeshData>(state, name) {}
-
-    [[nodiscard]] std::string extraPrintingInformation() const override {
-        this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<BarrierState>(
-            this->state())->info();
-        this->state()->unlock();
-        return ret;
-    }
-};
-
-/// Helper to create a BarrierStateManager wrapping a BarrierState.
+/// Helper to create a BarrierCollectorTask.
 inline auto makeBarrierSM(int nmeshes, std::string name,
                            std::string routines, BarrierFn fn,
                            int totalExpected = 0) {
-    return std::make_shared<BarrierStateManager>(
-        std::make_shared<BarrierState>(nmeshes, std::move(routines), std::move(fn),
-                                       totalExpected),
-        std::move(name));
+    return std::make_shared<BarrierCollectorTask>(
+        nmeshes, std::move(name), std::move(routines), std::move(fn),
+        totalExpected);
 }
 
 /// Task variant: accepts pre-collected BarrierData, runs barrier function,

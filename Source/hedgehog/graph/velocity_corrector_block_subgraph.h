@@ -85,18 +85,16 @@ inline auto buildVelocityCorrectorBlockSubgraph(size_t blockThreads,
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityCorrectorBlock");
 
     auto preKernel = std::make_shared<VelCorrPreKernelTask>(static_cast<size_t>(nmeshes));
-    auto decomposeSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<MeshBlockDecomposeState>(numBlocks), "VelCorrDecompose");
+    auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "VelCorrDecompose");
     auto blockKernel = std::make_shared<VelocityCorrectorBlockKernelTask>(blockThreads);
-    auto reassembleSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<MeshBlockReassembleState>(), "VelCorrReassemble");
+    auto reassembleTask = std::make_shared<MeshBlockReassembleTask>("VelCorrReassemble");
     auto postKernel = std::make_shared<VelCorrPostKernelTask>(static_cast<size_t>(nmeshes));
 
     subgraph->inputs(preKernel);
-    subgraph->edges(preKernel, decomposeSM);
-    subgraph->edges(decomposeSM, blockKernel);
-    subgraph->edges(blockKernel, reassembleSM);
-    subgraph->edges(reassembleSM, postKernel);
+    subgraph->edges(preKernel, decomposeTask);
+    subgraph->edges(decomposeTask, blockKernel);
+    subgraph->edges(blockKernel, reassembleTask);
+    subgraph->edges(reassembleTask, postKernel);
     subgraph->outputs(postKernel);
 
     return subgraph;

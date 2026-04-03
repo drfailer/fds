@@ -43,8 +43,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
     // --- Kernel tasks (threads from budget) ---
 
-    auto predStep1OrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-        std::make_shared<PredStep1Orchestrator>(nmeshes), "PredStep1Orch");
+    auto predStep1OrchTask = std::make_shared<PredStep1Orchestrator>(nmeshes);
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
     auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(budget.predDivPart2);
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(budget.velPredictor);
@@ -57,8 +56,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
     // --- Common barrier states ---
 
-    auto changeTimeStepCollectorSM = std::make_shared<hh::StateManager<1, MeshData, BarrierData>>(
-        std::make_shared<CollectorState>(nmeshes), "ChangeTimeStepCollector");
+    auto changeTimeStepCollectorTask = std::make_shared<CollectorTask>(nmeshes, "ChangeTimeStepCollector");
 
     // Split barrier: MeshExchange(3) + CC_END_STEP (global only)
     // SyntheticTurbulence per-mesh loop extracted to downstream kernel task.
@@ -74,11 +72,11 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
     // --- Wire the sub-graph ---
 
-    subgraph->input<MeshData>(predStep1OrchSM);
+    subgraph->input<MeshData>(predStep1OrchTask);
     subgraph->input<TerminationData>(changeTimeStepSubgraph);
 
     // PredStep1 (VISC + MASS_FD + DENSITY merged)
-    subgraph->edges(predStep1OrchSM, predStep1KernelTask);
+    subgraph->edges(predStep1OrchTask, predStep1KernelTask);
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
@@ -110,8 +108,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(divP1PreforkKernelTask, predForkDivSG);
 
         // Split barrier: ForkJoin(2N→N) → DivP1Late(parallel) → DivExchange(global)
-        auto predForkJoinSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<ForkJoinState>(2), "PredForkJoin");
+        auto predForkJoinTask = std::make_shared<ForkJoinTask>(2, "PredForkJoin");
 
         // Extracted: DivP1Late per-mesh (parallel)
         auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
@@ -132,9 +129,9 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        subgraph->edges(predForkVFluxSG, predForkJoinSM);
-        subgraph->edges(predForkDivSG, predForkJoinSM);
-        subgraph->edges(predForkJoinSM, divP1LateKernelTask);
+        subgraph->edges(predForkVFluxSG, predForkJoinTask);
+        subgraph->edges(predForkDivSG, predForkJoinTask);
+        subgraph->edges(predForkJoinTask, divP1LateKernelTask);
         subgraph->edges(divP1LateKernelTask, predDivExchangeSM);
 
         // DivP2 -> Pressure -> VelPred
@@ -159,11 +156,10 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
                 fds_initialize_divergence_integrals();
             });
 
-        auto predDivSetupOrchSM = std::make_shared<hh::StateManager<1, MeshData, MeshData>>(
-            std::make_shared<PredDivSetupOrchestrator>(nmeshes), "PredDivSetupOrch");
+        auto predDivSetupOrchTask = std::make_shared<PredDivSetupOrchestrator>(nmeshes);
         auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(budget.standalone(4));
-        subgraph->edges(meshExchange1SM, predDivSetupOrchSM);
-        subgraph->edges(predDivSetupOrchSM, predDivSetupKernelTask);
+        subgraph->edges(meshExchange1SM, predDivSetupOrchTask);
+        subgraph->edges(predDivSetupOrchTask, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
         // WallBC inlined: no orchestrator needed in predictor (dt_bc=0, call_ht_1d=0 defaults)
@@ -220,8 +216,8 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     }
 
     // VelocityPredictor -> ChangeTimeStep
-    subgraph->edges(velPredKernelTask, changeTimeStepCollectorSM);
-    subgraph->edges(changeTimeStepCollectorSM, changeTimeStepSubgraph);
+    subgraph->edges(velPredKernelTask, changeTimeStepCollectorTask);
+    subgraph->edges(changeTimeStepCollectorTask, changeTimeStepSubgraph);
 
     // Split: MeshExch(3) → SyntheticTurbulence(parallel) → PredFinal
     subgraph->edges(changeTimeStepSubgraph, meshExch3Task);

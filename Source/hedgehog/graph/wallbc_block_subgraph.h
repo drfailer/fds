@@ -11,7 +11,6 @@
 #include "../fds_fortran_interface.h"
 
 /// Block kernel task for WallBC.
-/// Processes wall cells for a K-range sub-block of a mesh.
 class WallBCBlockKernelTask
     : public hh::AbstractTask<1, WallBCBlockWork, WallBCBlockWork> {
 public:
@@ -32,14 +31,12 @@ public:
     }
 };
 
-/// Orchestrator state for WallBC block decomposition.
-/// Collects N MeshData tokens, computes global DT_BC/CALL_HT_1D,
-/// runs per-mesh preprocessing, then K-decomposes each mesh into blocks.
+/// Orchestrator task for WallBC block decomposition.
 class WallBCBlockOrchestrator
-    : public hh::AbstractState<1, MeshData, WallBCBlockWork> {
+    : public hh::AbstractTask<1, MeshData, WallBCBlockWork> {
 public:
     WallBCBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractState<1, MeshData, WallBCBlockWork>(),
+        : hh::AbstractTask<1, MeshData, WallBCBlockWork>("WallBCBlockOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
@@ -51,7 +48,6 @@ public:
             double dt_bc = 0.0;
             int call_ht_1d = 0;
 
-            // Compute global state (corrector phase only)
             if (collected_[0]->phase == 1) {
                 dt_bc = fds_compute_wall_bc_dt_bc(collected_[0]->t);
                 fds_increment_wall_counter();
@@ -61,13 +57,10 @@ public:
                 }
             }
 
-            // Per-mesh preprocessing + K-decomposition
             for (auto &md : collected_) {
-                // Sequential preprocessing (ghost values, near-surface vars, HTC)
                 fds_wall_bc_preprocessing_kernel(
                     md->nm, md->t, dt_bc, call_ht_1d);
 
-                // K-decompose this mesh into blocks
                 int kbar = fds_get_kbar(md->nm);
                 int bs = std::max(1, (kbar + numBlocks_ - 1) / numBlocks_);
                 int total = (kbar + bs - 1) / bs;
@@ -92,13 +85,12 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector state for WallBC block decomposition.
-/// Reassembles blocks back into MeshData, runs sequential finalization.
+/// Collector task for WallBC block decomposition.
 class WallBCBlockCollector
-    : public hh::AbstractState<1, WallBCBlockWork, MeshData> {
+    : public hh::AbstractTask<1, WallBCBlockWork, MeshData> {
 public:
     explicit WallBCBlockCollector(int nmeshes)
-        : hh::AbstractState<1, WallBCBlockWork, MeshData>(),
+        : hh::AbstractTask<1, WallBCBlockWork, MeshData>("WallBCBlockColl", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {}
 
     void execute(std::shared_ptr<WallBCBlockWork> block) override {
@@ -118,19 +110,16 @@ public:
             entries_.erase(nm);
 
             if (static_cast<int>(completedMeshes_.size()) == nmeshes_) {
-                // Sort by mesh index for deterministic ordering
                 std::sort(completedMeshes_.begin(), completedMeshes_.end(),
                     [this](const Entry &a, const Entry &b) {
                         return a.meshData->nm < b.meshData->nm;
                     });
 
-                // Sequential finalization for all meshes
                 for (auto &e : completedMeshes_) {
                     fds_wall_bc_finalize(e.meshData->nm, e.meshData->t,
                                          e.dt_bc, e.call_ht_1d);
                 }
 
-                // Reset WALL_COUNTER after WALL_BC loop (corrector only)
                 if (completedMeshes_[0].isCorrector) {
                     fds_reset_wall_counter();
                 }
@@ -160,32 +149,19 @@ private:
 };
 
 /// Build the WallBC sub-graph with intra-mesh K-block decomposition.
-///
-/// Pipeline:
-///   MeshData -> Orchestrator(globals + preprocess + K-decompose) ->
-///   WallBCBlockKernel(parallel) -> Collector(reassemble + finalize) -> MeshData
-///
-/// @param nmeshes Number of meshes
-/// @param kernelThreads Number of threads for parallel tasks
-/// @param numBlocks Target number of blocks per mesh
 inline auto buildWallBCBlockSubgraph(int nmeshes, size_t kernelThreads,
                                       int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
         "WallBCBlock");
 
-    auto orchestratorSM = std::make_shared<
-        hh::StateManager<1, MeshData, WallBCBlockWork>>(
-        std::make_shared<WallBCBlockOrchestrator>(nmeshes, numBlocks),
-        "WallBCBlockOrch");
+    auto orchestratorTask = std::make_shared<WallBCBlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<WallBCBlockKernelTask>(kernelThreads);
-    auto collectorSM = std::make_shared<
-        hh::StateManager<1, WallBCBlockWork, MeshData>>(
-        std::make_shared<WallBCBlockCollector>(nmeshes), "WallBCBlockColl");
+    auto collectorTask = std::make_shared<WallBCBlockCollector>(nmeshes);
 
-    subgraph->inputs(orchestratorSM);
-    subgraph->edges(orchestratorSM, blockKernel);
-    subgraph->edges(blockKernel, collectorSM);
-    subgraph->outputs(collectorSM);
+    subgraph->inputs(orchestratorTask);
+    subgraph->edges(orchestratorTask, blockKernel);
+    subgraph->edges(blockKernel, collectorTask);
+    subgraph->outputs(collectorTask);
 
     return subgraph;
 }

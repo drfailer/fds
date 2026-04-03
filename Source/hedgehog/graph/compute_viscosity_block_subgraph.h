@@ -9,7 +9,6 @@
 #include "../fds_fortran_interface.h"
 
 /// Block kernel task for compute viscosity.
-/// Processes MU_DNS, STRAIN_RATE, turb model MU, and KRES for a K-range sub-block.
 class ComputeViscosityBlockKernelTask
     : public hh::AbstractTask<1, MeshBlockData, MeshBlockData> {
 public:
@@ -30,14 +29,13 @@ public:
     }
 };
 
-/// Orchestrator state for viscosity block decomposition.
+/// Orchestrator task for viscosity block decomposition.
 /// Collects N MeshData tokens, then decomposes each mesh into K-blocks.
-/// No pre-processing needed (unlike velocity flux which needs baroclinic+viscBC).
 class ComputeViscosityBlockOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
 public:
     ComputeViscosityBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractState<1, MeshData, MeshBlockData>(),
+        : hh::AbstractTask<1, MeshData, MeshBlockData>("ViscOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
@@ -46,14 +44,12 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            // CC_IBM pre-processing: set cutface velocities before strain rate computation
             if (fds_is_cc_ibm()) {
                 for (auto &md : collected_) {
                     fds_cutface_velocities(md->nm, md->phase, 1);
                 }
             }
 
-            // Decompose each mesh into K-blocks
             for (auto &md : collected_) {
                 int kbar = fds_get_kbar(md->nm);
                 int bs = std::max(1, (kbar + numBlocks_ - 1) / numBlocks_);
@@ -78,13 +74,13 @@ private:
     std::vector<std::shared_ptr<MeshData>> collected_;
 };
 
-/// Collector state for viscosity block decomposition.
-/// Reassembles blocks back into MeshData, runs sequential post-processing
-/// (wall loops + corner mirroring).
+/// Collector task for viscosity block decomposition.
+/// Reassembles blocks back into MeshData, runs sequential post-processing.
 class ComputeViscosityBlockCollector
-    : public hh::AbstractState<1, MeshBlockData, MeshData> {
+    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
 public:
-    ComputeViscosityBlockCollector() = default;
+    ComputeViscosityBlockCollector()
+        : hh::AbstractTask<1, MeshBlockData, MeshData>("ViscCollector", 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;
@@ -96,7 +92,6 @@ public:
         entry.count++;
         if (entry.count == entry.expected) {
             auto md = entry.meshData;
-            // Post-processing: wall loops + corner mirroring
             fds_compute_viscosity_post_block(md->nm, md->phase);
             this->addResult(md);
             entries_.erase(nm);
@@ -113,29 +108,18 @@ private:
 };
 
 /// Build the compute viscosity sub-graph with block decomposition.
-///
-/// Pipeline:
-///   MeshData -> Orchestrator(decompose) ->
-///   ViscBlockKernel(parallel) -> Collector(wall loops + corner mirroring) -> MeshData
-///
-/// @param nmeshes Number of meshes
-/// @param kernelThreads Number of threads for parallel tasks
-/// @param numBlocks Target number of blocks per mesh
 inline auto buildComputeViscosityBlockSubgraph(int nmeshes, size_t kernelThreads,
                                                 int numBlocks) {
     auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("ViscosityBlock");
 
-    auto orchestratorSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
-        std::make_shared<ComputeViscosityBlockOrchestrator>(nmeshes, numBlocks),
-        "ViscOrch");
+    auto orchestratorTask = std::make_shared<ComputeViscosityBlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<ComputeViscosityBlockKernelTask>(kernelThreads);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
-        std::make_shared<ComputeViscosityBlockCollector>(), "ViscCollector");
+    auto collectorTask = std::make_shared<ComputeViscosityBlockCollector>();
 
-    subgraph->inputs(orchestratorSM);
-    subgraph->edges(orchestratorSM, blockKernel);
-    subgraph->edges(blockKernel, collectorSM);
-    subgraph->outputs(collectorSM);
+    subgraph->inputs(orchestratorTask);
+    subgraph->edges(orchestratorTask, blockKernel);
+    subgraph->edges(blockKernel, collectorTask);
+    subgraph->outputs(collectorTask);
 
     return subgraph;
 }
