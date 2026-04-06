@@ -414,6 +414,11 @@ LOGICAL :: DO_LO,DO_HI
 INTEGER :: IIG,JJG,KKG,IOR
 REAL(EB) :: UN
 
+! Initialize workspace pointers (module-level TARGET arrays from CC_SCALARS_DATA)
+U_TEMP => U_WORK
+F_TEMP => F_WORK
+Z_TEMP => Z_WORK
+
 ! Mesh Loop:
 MESH_LOOP : DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
 
