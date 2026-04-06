@@ -26,9 +26,7 @@ public:
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             fds_initialize_divergence_integrals();
 
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
 
             collected_.clear();
             collected_.reserve(nmeshes_);

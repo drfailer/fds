@@ -50,10 +50,8 @@ public:
             totalTime_ += std::chrono::duration<double>(t1 - t0).count();
             ++invocations_;
             count_ = 0;
-            for (auto &md : collected_) {
-                this->addResult(md);
-                md = nullptr;
-            }
+            this->batchAddResult(collected_);
+            for (auto &md : collected_) { md = nullptr; }
         }
     }
 
@@ -101,7 +99,7 @@ public:
         auto t1 = std::chrono::steady_clock::now();
         totalTime_ += std::chrono::duration<double>(t1 - t0).count();
         ++invocations_;
-        for (auto &md : data->meshes) { this->addResult(md); }
+        this->batchAddResult(data->meshes);
     }
 
     [[nodiscard]] std::string extraPrintingInformation() const override {

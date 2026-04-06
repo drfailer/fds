@@ -87,9 +87,7 @@ private:
         }
 
         // Scatter MeshData for parallel kernel processing
-        for (auto &md : data->meshes) {
-            this->addResult(md);
-        }
+        this->batchAddResult(data->meshes);
     }
 };
 

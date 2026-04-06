@@ -42,8 +42,8 @@ public:
         for (auto &md : data->meshes) {
             md->t = t;
             md->phase = 1;  // corrector
-            this->addResult(md);
         }
+        this->batchAddResult(data->meshes);
     }
 
     std::string extraPrintingInformation() const override {
@@ -97,9 +97,7 @@ public:
         if (anyDump) {
             bd->skipMeshDump = false;
             // Emit MeshData tokens for per-mesh dump I/O
-            for (auto &md : data->meshes) {
-                this->addResult(md);
-            }
+            this->batchAddResult(data->meshes);
         } else {
             bd->skipMeshDump = true;
         }
