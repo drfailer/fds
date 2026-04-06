@@ -13,13 +13,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# Hedgehog communicator task library (also pulls in hedgehog itself)
+# Pin hedgehog version (must come before hh_communicator so our version wins)
+FetchContent_Declare(
+    hedgehog
+    GIT_REPOSITORY https://github.com/drfailer/hedgehog.git
+    GIT_TAG        batch-queues
+)
+
+# Hedgehog communicator task library (its internal hedgehog declaration is ignored)
 FetchContent_Declare(
     hh_communicator
     GIT_REPOSITORY https://github.com/drfailer/hh_communicator_draft.git
     GIT_TAG new-profiling
 )
-FetchContent_MakeAvailable(hh_communicator)
+FetchContent_MakeAvailable(hedgehog hh_communicator)
 
 # Hedgehog requires threading and TBB
 find_package(Threads REQUIRED)
