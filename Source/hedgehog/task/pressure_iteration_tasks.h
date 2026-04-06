@@ -29,9 +29,16 @@ public:
         // The flag is stable during parallel execution (set/cleared in barriers).
         if (fds_pressure_iteration_needs_baroclinic() ||
             fds_get_pressure_iterations() == 1) {
-            fds_match_velocity_flux_kernel(md->nm);
+            if (fds_is_cc_ibm()) {
+                fds_cc_match_velocity_flux(md->nm);
+            } else {
+                fds_match_velocity_flux_kernel(md->nm);
+            }
         }
         fds_no_flux_kernel(md->nm, md->dt);
+        if (fds_is_cc_ibm()) {
+            fds_cc_no_flux(md->dt, md->nm, 0); // FORCE_FLG=FALSE
+        }
         if (fds_get_pressure_iterations() == 1) {
             fds_pressure_iteration_zero_wall_work1(md->nm);
         }

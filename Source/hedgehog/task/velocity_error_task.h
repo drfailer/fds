@@ -18,6 +18,9 @@ public:
 
     void execute(std::shared_ptr<MeshData> data) override {
         fds_compute_velocity_error_kernel(data->nm, data->dt);
+        if (fds_is_cc_ibm()) {
+            fds_cc_compute_velocity_error(data->dt, data->nm);
+        }
         this->addResult(data);
     }
 

@@ -33,6 +33,9 @@ public:
         if (fds_pressure_iteration_needs_baroclinic()) {
             fds_baroclinic_correction(md->t, md->nm);
         }
+        if (fds_is_cc_ibm()) {
+            fds_cc_no_flux(md->dt, md->nm, 1); // FORCE_FLG=TRUE
+        }
         this->addResult(md);
     }
 
