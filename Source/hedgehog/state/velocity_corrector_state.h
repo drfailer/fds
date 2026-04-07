@@ -31,9 +31,7 @@ public:
                 fds_wall_velocity_no_gradh_kernel(md->nm, md->dt, 1, 0);  // store=1, predictor=0
             }
 
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
 
             collected_.clear();
             collected_.reserve(nmeshes_);
@@ -71,9 +69,7 @@ public:
                 fds_wall_velocity_no_gradh_kernel(md->nm, md->dt, 0, 0);  // store=0, predictor=0
             }
 
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
 
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;

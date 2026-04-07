@@ -25,9 +25,10 @@ public:
         collected_.push_back(data);
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             for (auto &md : collected_) {
-                this->addResult(std::make_shared<CorrRadiationWork>(
+                this->bufferResult(std::make_shared<CorrRadiationWork>(
                     md->nm, md->t, 1, md));
             }
+            this->flushResults<CorrRadiationWork>();
             collected_.clear();
             collected_.reserve(nmeshes_);
         }
@@ -62,8 +63,9 @@ public:
                     w->radQSumPartial, w->kfst4SumPartial);
             }
             for (auto &w : collected_) {
-                this->addResult(w->originalMeshData);
+                this->bufferResult(w->originalMeshData);
             }
+            this->flushResults<MeshData>();
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;
         }

@@ -86,8 +86,9 @@ private:
                 md->firstPass = true;
                 md->dt_bc = 0.0;
                 md->call_ht_1d = 0;
-                this->addResult(md);
+                this->bufferResult(md);
             }
+            this->flushResults<MeshData>();
         }
 
         meshCount_ = 0;

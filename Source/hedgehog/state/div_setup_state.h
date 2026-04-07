@@ -24,9 +24,7 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
             collected_.clear();
             collected_.reserve(nmeshes_);
         }
@@ -55,9 +53,7 @@ public:
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
             collected_.clear();
             collected_.reserve(nmeshes_);
         }

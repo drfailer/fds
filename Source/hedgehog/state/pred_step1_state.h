@@ -27,9 +27,7 @@ public:
                 fds_insert_particles(md->t, md->nm);
             }
             // Dispatch for parallel kernel execution
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
             collected_.clear();
             collected_.reserve(nmeshes_);
         }

@@ -57,16 +57,15 @@ public:
                 if (predictor_) {
                     fds_init_change_time_step(dt);
                 }
-                for (int i = 0; i < nmeshes_; ++i) {
-                    this->addResult(std::move(collected_[i]));
-                }
+                this->batchAddResult(collected_);
             } else {
                 // Increment counter for next iteration
                 fds_pressure_iteration_increment();
 
                 for (int i = 0; i < nmeshes_; ++i) {
-                    this->addResult(std::make_shared<PressureIterMeshData>(std::move(collected_[i])));
+                    this->bufferResult(std::make_shared<PressureIterMeshData>(std::move(collected_[i])));
                 }
+                this->flushResults<PressureIterMeshData>();
             }
 
             count_ = 0;

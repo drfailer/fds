@@ -35,9 +35,7 @@ public:
                 fds_check_stability_kernel_only(md->nm, md->t + md->dt, md->dt);
             }
 
-            for (auto &md : collected_) {
-                this->addResult(md);
-            }
+            this->batchAddResult(collected_);
 
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;
