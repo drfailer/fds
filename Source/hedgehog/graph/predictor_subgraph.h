@@ -108,7 +108,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(divP1PreforkKernelTask, predForkDivSG);
 
         // Split barrier: ForkJoin(2N→N) → DivP1Late(parallel) → DivExchange(global)
-        auto predForkJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, "PredForkJoin");
+        auto predForkJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, budget.predDivP1Late, "PredForkJoin");
 
         // Extracted: DivP1Late per-mesh (parallel)
         auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
