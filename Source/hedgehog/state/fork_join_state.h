@@ -2,9 +2,10 @@
 #define FORK_JOIN_STATE_H
 
 #include <hedgehog/hedgehog.h>
-#include <unordered_map>
+#include <vector>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../fds_fortran_interface.h"
 
 /// Join task for fork-join patterns with MeshData.
 /// Counts arrivals per mesh from multiple branches and emits after all arrive.
@@ -12,22 +13,25 @@
 /// Runs on a single thread.
 class ForkJoinTask : public hh::AbstractTask<1, MeshData, MeshData> {
 public:
-    explicit ForkJoinTask(int numBranches = 2, std::string name = "ForkJoin")
+    explicit ForkJoinTask(int nmeshes, int numBranches = 2, std::string name = "ForkJoin")
         : hh::AbstractTask<1, MeshData, MeshData>(std::move(name), 1),
-          numBranches_(numBranches) {}
+          numBranches_(numBranches), nmOffset_(fds_get_lower_mesh_index()) {
+        counts_.resize(nmeshes, 0);
+    }
 
     void execute(std::shared_ptr<MeshData> data) override {
-        int nm = data->nm;
-        counts_[nm]++;
-        if (counts_[nm] == numBranches_) {
-            counts_.erase(nm);
+        int idx = data->nm - nmOffset_;
+        counts_[idx]++;
+        if (counts_[idx] == numBranches_) {
+            counts_[idx] = 0;
             this->addResult(data);
         }
     }
 
 private:
     int numBranches_;
-    std::unordered_map<int, int> counts_;
+    int nmOffset_;
+    std::vector<int> counts_;
 };
 
 /// Join task for fork-join patterns with BarrierData.
