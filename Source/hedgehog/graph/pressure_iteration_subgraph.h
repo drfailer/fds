@@ -8,7 +8,6 @@
 #include "../data/termination_data.h"
 #include "../task/baroclinic_kernel_task.h"
 #include "../task/pressure_iteration_tasks.h"
-#include "../task/mesh_exchange_task.h"
 #include "../task/velocity_error_task.h"
 #include "../state/pressure_convergence_state.h"
 #include "../state/barrier_state.h"
@@ -18,12 +17,12 @@
 
 /// Build the pressure iteration sub-graph.
 ///
-/// Architecture (parallel pull-only exchange via MeshExchangeGraph):
+/// Architecture (push/buffer/pull exchange via MeshExchangeGraph):
 ///
 ///   BaroclinicKernel(task, parallel)
-///     -> PreSolveExchange (dependency-managed parallel exchange)
+///     -> PreSolveExchange (push → deps gate → pull)
 ///     -> PressureSolveKernel(task, parallel)
-///     -> PostSolveExchange (dependency-managed parallel exchange)
+///     -> PostSolveExchange (push → deps gate → pull)
 ///     -> VelocityErrorTask(task, parallel)
 ///     -> PressureConvergence(barrier: convergence check only)
 ///       -> PressureIterMeshData -> BaroclinicKernel (outer cycle)
@@ -37,13 +36,13 @@
 /// @param budget Thread budget for task thread allocation
 /// @param predictor True for predictor phase
 /// @param depGraph Pre-built mesh dependency graph
-/// @param commService Pointer to the MPI comm service (unused, kept for API compat)
+/// @param commService Pointer to the MPI comm service (passed to MeshExchangeGraph)
 /// @param presFlag Pressure solver flag (FFT_FLAG=0, ULMAT_FLAG=3)
 inline auto buildPressureIterationSubgraph(int nmeshes,
                                             const ThreadBudget &budget,
                                             bool predictor,
                                             std::shared_ptr<MeshDependencyGraph> depGraph,
-                                            [[maybe_unused]] void *commService,
+                                            hh::comm::CommService *commService,
                                             int presFlag = 0) {
     using SubGraphType = hh::Graph<2, MeshData, TerminationData, MeshData>;
     auto subgraph = std::make_shared<SubGraphType>("PressureIteration");
@@ -53,13 +52,13 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
     auto solveKernel = std::make_shared<PressureSolveKernelTask>(budget.pressureSolve, presFlag);
     auto velErrorTask = std::make_shared<VelocityErrorTask>(budget.velError);
 
-    // --- Dependency-aware parallel exchanges (encapsulated cycles) ---
+    // --- Push/buffer/pull exchanges (linear pipelines, no internal cycle) ---
     auto preSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
-        depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
-        "PreSolveExchange");
+        depGraph, budget.exchangePush, budget.exchangePull,
+        commService, "PreSolveExchange");
     auto postSolveExchange = std::make_shared<MeshExchangeGraph<MeshData>>(
-        depGraph, std::make_shared<FluxExchangeTask>(budget.fluxExchange),
-        "PostSolveExchange");
+        depGraph, budget.exchangePush, budget.exchangePull,
+        commService, "PostSolveExchange");
 
     // --- Convergence barrier (convergence check only) ---
     auto convergenceSM = std::make_shared<PressureConvergenceManager>(
@@ -71,9 +70,7 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
     // Entry: MeshData -> baroclinicKernel
     subgraph->input<MeshData>(baroclinicKernel);
 
-    // TerminationData -> both exchange graphs + convergence
-    MeshExchangeGraph<MeshData>::wireTermination(subgraph, preSolveExchange);
-    MeshExchangeGraph<MeshData>::wireTermination(subgraph, postSolveExchange);
+    // TerminationData -> convergence (exchange graphs need none — no internal cycle)
     subgraph->input<TerminationData>(convergenceSM);
 
     // Pipeline: Baroclinic -> PreSolveExchange -> Solve -> PostSolveExchange -> VelError -> Convergence

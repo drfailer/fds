@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
     budget.print(std::cout);
 
     // Initialize communicator service (reuses FDS's already-initialized MPI)
-    FDSMPIService commService;
+    FDSMPIService commService(true);
     std::cout << "[FDS-HH] CommService: rank=" << commService.rank()
               << " nbProcesses=" << commService.nbProcesses() << std::endl;
 
@@ -159,8 +159,11 @@ int main(int argc, char *argv[]) {
     fds_close_all_mesh_output_files();
     fds_flush_output_files();
 
-    // Step 7: Generate dot file for visualization (per-rank to avoid collisions)
-    std::string dotFile = "fds_hh_graph_" + std::to_string(commService.rank()) + ".dot";
+    // Step 7: Generate dot file for visualization
+    // Single process: fds_hh_graph.dot; MPI: fds_hh_graph_{rank}.dot
+    std::string dotFile = (commService.nbProcesses() > 1)
+        ? "fds_hh_graph_" + std::to_string(commService.rank()) + ".dot"
+        : "fds_hh_graph.dot";
     graph->createDotFile(
         dotFile,
         hh::ColorScheme::EXECUTION,

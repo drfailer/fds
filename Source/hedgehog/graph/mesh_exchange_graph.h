@@ -2,62 +2,84 @@
 #define MESH_EXCHANGE_GRAPH_H
 
 #include <hedgehog/hedgehog.h>
+#include <communicator_task.hpp>
 #include <memory>
-#include "../data/mesh_exchange_data.h"
-#include "../data/termination_data.h"
-#include "../state/mesh_dependencies_manager_state.h"
+#include "../data/mesh_data.h"
 #include "../tool/mesh_dependency_graph.h"
+#include "../tool/exchange_buffer.h"
+#include "../tool/exchange_strategy.h"
+#include "../task/exchange_push_buffer_task.h"
+#include "../task/exchange_pull_buffer_task.h"
+#include "../state/exchange_deps_state.h"
 
-/// Reusable sub-graph encapsulating the dependency-managed parallel exchange cycle.
+/// Reusable sub-graph encapsulating the push/buffer/pull exchange pipeline.
 ///
-/// Architecture:
-///   MeshDepsManager(state) <-> ExchangeTask(task, parallel)
+/// Architecture (linear — no internal cycle):
+///   [CommunicatorTask →] PushTask(parallel) → DepsGate(1 thread) → PullTask(parallel)
 ///
-/// Input T tokens arrive, the dependency manager tracks per-mesh state
-/// (NotArrived -> Wait -> Processing -> Processed -> Done) and dispatches
-/// MeshExchangeData to the exchange task.  When all neighbors are processed,
-/// T tokens are emitted to the output.
+/// When a CommService is provided, a CommunicatorTask sits at the front of
+/// the pipeline.  For same-rank data (strategy returns {self}), the
+/// communicator calls addResult directly (no MPI).  For cross-rank data
+/// (future Phase 3), the communicator serializes and sends via MPI.
 ///
-/// @tparam T Data type flowing through the exchange (must be accepted by
-///           MeshDependenciesManagerState, typically MeshData)
-template <typename T>
-class MeshExchangeGraph : public hh::Graph<2, T, TerminationData, T> {
+/// Push copies source mesh arrays into a pre-allocated ExchangeBuffer.
+/// DepsGate emits downstream only when all receive dependencies have pushed.
+/// Pull copies from the ExchangeBuffer into OMESH arrays.
+///
+/// Each instance owns its own ExchangeBuffer, so concurrent exchanges
+/// (e.g. pre-solve and post-solve in the pressure iteration) never share
+/// buffers and cannot race.
+///
+/// No TerminationData needed — there is no internal cycle.  The parent
+/// graph's cycle management (e.g. pressure convergence barrier) handles
+/// termination.
+///
+/// @tparam T Data type flowing through the exchange (typically MeshData)
+/// @tparam Strategy Exchange strategy trait (e.g. FluxExchangeStrategy)
+template <typename T, typename Strategy = FluxExchangeStrategy>
+class MeshExchangeGraph : public hh::Graph<1, T, T> {
 public:
     /// @param depGraph Pre-built mesh dependency graph
-    /// @param exchangeTask Task performing the actual exchange copies
+    /// @param pushThreads Thread count for the push task
+    /// @param pullThreads Thread count for the pull task
+    /// @param commService Optional MPI comm service; when non-null a CommunicatorTask
+    ///                    is wired at the front of the pipeline
+    /// @param name Graph name for profiling/debugging
     MeshExchangeGraph(
         std::shared_ptr<MeshDependencyGraph> depGraph,
-        std::shared_ptr<hh::AbstractTask<1, MeshExchangeData, MeshExchangeData>> exchangeTask,
+        size_t pushThreads,
+        size_t pullThreads,
+        hh::comm::CommService *commService = nullptr,
         std::string const &name = "MeshExchange")
-        : hh::Graph<2, T, TerminationData, T>(name) {
+        : hh::Graph<1, T, T>(name) {
 
-        auto depManagerSM = std::make_shared<MeshDependenciesManager>(
-            std::make_shared<MeshDependenciesManagerState>(std::move(depGraph)),
-            "MeshDepsManager");
+        auto buffer = std::make_shared<ExchangeBuffer<Strategy>>(*depGraph);
 
-        // Entry: T -> depManager (arrival tracking), TerminationData -> depManager (termination)
-        this->template input<T>(depManagerSM);
-        this->template input<TerminationData>(depManagerSM);
+        auto pushTask = std::make_shared<ExchangePushBufferTask<Strategy>>(
+            pushThreads, depGraph, buffer);
+        auto gateTask = std::make_shared<ExchangeDepsGateTask>(
+            std::move(depGraph));
+        auto pullTask = std::make_shared<ExchangePullBufferTask<Strategy>>(
+            pullThreads, buffer);
 
-        // Cycle: depManager -> exchangeTask -> depManager
-        this->edges(depManagerSM, exchangeTask);
-        this->template edge<MeshExchangeData>(exchangeTask, depManagerSM);
+        if (commService) {
+            // CommunicatorTask at the front: loop-back strategy (same rank)
+            auto commTask = std::make_shared<hh::CommunicatorTask<T>>(
+                commService, name + "_Comm");
+            commTask->template strategy<T>(
+                [rank = commService->rank()](auto) {
+                    return std::vector<hh::comm::rank_t>{rank};
+                });
 
-        // Exit: depManager emits T (Done meshes)
-        this->outputs(depManagerSM);
-    }
+            this->template input<T>(commTask);
+            this->edges(commTask, pushTask);
+        } else {
+            this->template input<T>(pushTask);
+        }
 
-    /// Wire TerminationData from a parent graph to this exchange sub-graph.
-    ///
-    /// Call this in the parent graph builder to route TerminationData:
-    /// @code
-    ///   MeshExchangeGraph<MeshData>::wireTermination(parentGraph, exchangeGraph);
-    /// @endcode
-    template <size_t S, typename... AllTypes>
-    static void wireTermination(
-        std::shared_ptr<hh::Graph<S, AllTypes...>> parentGraph,
-        std::shared_ptr<MeshExchangeGraph<T>> self) {
-        parentGraph->template input<TerminationData>(self);
+        this->edges(pushTask, gateTask);
+        this->edges(gateTask, pullTask);
+        this->outputs(pullTask);
     }
 };
 

@@ -57,10 +57,11 @@ struct ThreadBudget {
     size_t corrFork2DivP1;      // Fork2DivP1KernelTask    (MEDIUM)
 
     // --- Pressure iteration (shared by pred & corr instances) ---
-    size_t baroclinic;          // BaroclinicKernelTask    (LIGHT)
-    size_t fluxExchange;        // FluxExchangeTask        (LIGHT)
-    size_t pressureSolve;       // PressureSolveKernelTask (MEDIUM)
-    size_t velError;            // VelocityErrorTask       (LIGHT)
+    size_t baroclinic;          // BaroclinicKernelTask         (LIGHT)
+    size_t exchangePush;        // ExchangePushBufferTask       (LIGHT)
+    size_t exchangePull;        // ExchangePullBufferTask       (LIGHT)
+    size_t pressureSolve;       // PressureSolveKernelTask      (MEDIUM)
+    size_t velError;            // VelocityErrorTask            (LIGHT)
 
     /// Compute standalone thread count for a given weight (1-4).
     /// Useful for tasks not in the named fields (e.g., CC_IBM path).
@@ -138,13 +139,14 @@ struct ThreadBudget {
         }
 
         // --- Pressure iteration pipeline ---
-        // Baroclinic → ExchPre → Solve → ExchPost → VelError
+        // Baroclinic → Push → Pull → Solve → VelError
         {
-            auto t = distribute({1, 1, 4, 2});
+            auto t = distribute({1, 2, 2, 4, 2});
             b.baroclinic    = t[0];
-            b.fluxExchange  = t[1];
-            b.pressureSolve = t[2];
-            b.velError      = t[3];
+            b.exchangePush  = t[1];
+            b.exchangePull  = t[2];
+            b.pressureSolve = t[3];
+            b.velError      = t[4];
         }
 
         return b;
@@ -177,7 +179,8 @@ struct ThreadBudget {
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"
            << "  Pressure:   baroclinic=" << baroclinic
-           << " exchange=" << fluxExchange
+           << " push=" << exchangePush
+           << " pull=" << exchangePull
            << " solve=" << pressureSolve
            << " velError=" << velError << std::endl;
     }

@@ -227,12 +227,19 @@ int fds_flux_pack_size(int nm, int nom);
 int fds_flux_get_process(int nm);
 int fds_flux_max_buffer_size();
 
+// Full-slab flux push/pull (for push/buffer/pull exchange pipeline)
+void fds_flux_push_slab(int nm, int nom, double *buf, int bufsize);
+void fds_flux_pull_slab(int nm, int nom, const double *buf, int bufsize);
+int fds_flux_slab_size(int nm, int nom);
+int fds_flux_max_slab_size();
+
 // Generic mesh exchange dependency queries
 int fds_exchange_recv_dep_count(int nm);   // how many meshes send TO nm
 int fds_exchange_recv_dep_mesh(int nm, int idx); // 1-based idx -> NOM
 int fds_exchange_send_dep_count(int nm);   // how many meshes nm sends TO
 int fds_exchange_send_dep_mesh(int nm, int idx); // 1-based idx -> NOM
 int fds_mesh_process(int nm);              // MPI rank owning mesh nm
+int fds_get_n_mpi_processes();             // number of MPI processes
 int fds_get_total_meshes();                // global mesh count
 void fds_dump_mesh_exchange_topology();    // debug: dump NIC topology
 
