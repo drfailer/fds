@@ -32,6 +32,18 @@ struct FluxExchangeStrategy {
     static int maxBufferSize() {
         return fds_flux_max_slab_size();
     }
+
+    /// Buffer size using receiver-side data (safe when nm is remote).
+    /// Arguments: nom = local dest mesh, nm = source mesh (possibly remote).
+    static int bufferSizeRecv(int nom, int nm) {
+        return fds_flux_slab_size_recv(nom, nm);
+    }
+
+    /// Pull using receiver-side data (safe when nm is remote).
+    /// Arguments: nom = local dest mesh, nm = source mesh (possibly remote).
+    static void pullFromBufferRecv(int nom, int nm, const double *buf, int size) {
+        fds_flux_pull_slab_recv(nom, nm, buf, size);
+    }
 };
 
 #endif // EXCHANGE_STRATEGY_H

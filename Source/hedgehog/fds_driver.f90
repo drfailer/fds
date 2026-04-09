@@ -2128,6 +2128,69 @@ ENDIF
 END FUNCTION MESH_EXCHANGE_FLUX_SLAB_SIZE
 
 
+!> \brief Return the slab buffer size using receiver-side data only.
+!>
+!> Same as MESH_EXCHANGE_FLUX_SLAB_SIZE but uses MESHES(NOM)%OMESH(NM)%I_MIN_R
+!> instead of MESHES(NM)%OMESH(NOM)%I_MIN_S.  This works when NM is remote
+!> (MESHES(NM)%OMESH not allocated) because NOM is local and I_MIN_R equals
+!> the sender's I_MIN_S by symmetry.
+FUNCTION MESH_EXCHANGE_FLUX_SLAB_SIZE_RECV(NOM, NM) RESULT(NSIZE)
+INTEGER, INTENT(IN) :: NOM, NM
+INTEGER :: NSIZE
+TYPE(OMESH_TYPE), POINTER :: OM_RECV
+OM_RECV => MESHES(NOM)%OMESH(NM)
+IF (OM_RECV%NIC_R == 0) THEN
+   NSIZE = 0
+ELSE
+   NSIZE = 4 * (OM_RECV%I_MAX_R - OM_RECV%I_MIN_R + 1) &
+             * (OM_RECV%J_MAX_R - OM_RECV%J_MIN_R + 1) &
+             * (OM_RECV%K_MAX_R - OM_RECV%K_MIN_R + 1)
+ENDIF
+END FUNCTION MESH_EXCHANGE_FLUX_SLAB_SIZE_RECV
+
+
+!> \brief Pull flux slab data using receiver-side data only.
+!>
+!> Same as MESH_EXCHANGE_FLUX_PULL_SLAB but uses MESHES(NOM)%OMESH(NM)%I_MIN_R
+!> instead of MESHES(NM)%OMESH(NOM)%I_MIN_S.  This works when NM is remote
+!> because NOM is local and I_MIN_R equals the sender's I_MIN_S by symmetry.
+!>
+!> Thread-safe: RECURSIVE, uses local pointers only.
+RECURSIVE SUBROUTINE MESH_EXCHANGE_FLUX_PULL_SLAB_RECV(NOM, NM, BUF, BUFSIZE)
+INTEGER, INTENT(IN) :: NOM, NM, BUFSIZE
+REAL(EB), INTENT(IN) :: BUF(BUFSIZE)
+TYPE(OMESH_TYPE), POINTER :: OM_RECV
+INTEGER :: IMIN, IMAX, JMIN, JMAX, KMIN, KMAX, NI, NJ, NK, SLAB, OFF
+REAL(EB), POINTER, DIMENSION(:,:,:) :: HP2
+
+! Use receiver-side R indices (same values as sender's S indices by symmetry)
+OM_RECV => MESHES(NOM)%OMESH(NM)
+IMIN = OM_RECV%I_MIN_R ; IMAX = OM_RECV%I_MAX_R
+JMIN = OM_RECV%J_MIN_R ; JMAX = OM_RECV%J_MAX_R
+KMIN = OM_RECV%K_MIN_R ; KMAX = OM_RECV%K_MAX_R
+NI = IMAX - IMIN + 1
+NJ = JMAX - JMIN + 1
+NK = KMAX - KMIN + 1
+SLAB = NI * NJ * NK
+
+IF (PREDICTOR) THEN
+   HP2 => OM_RECV%H
+ELSE
+   HP2 => OM_RECV%HS
+ENDIF
+
+OFF = 0
+OM_RECV%FVX(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = RESHAPE(BUF(OFF+1:OFF+SLAB), [NI, NJ, NK])
+OFF = OFF + SLAB
+OM_RECV%FVY(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = RESHAPE(BUF(OFF+1:OFF+SLAB), [NI, NJ, NK])
+OFF = OFF + SLAB
+OM_RECV%FVZ(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = RESHAPE(BUF(OFF+1:OFF+SLAB), [NI, NJ, NK])
+OFF = OFF + SLAB
+HP2(IMIN:IMAX,JMIN:JMAX,KMIN:KMAX) = RESHAPE(BUF(OFF+1:OFF+SLAB), [NI, NJ, NK])
+
+END SUBROUTINE MESH_EXCHANGE_FLUX_PULL_SLAB_RECV
+
+
 !> \brief Return the max slab buffer size across all local mesh-neighbor pairs.
 FUNCTION MESH_EXCHANGE_FLUX_MAX_SLAB_SIZE() RESULT(MAX_SIZE)
 INTEGER :: MAX_SIZE, NM, NNN, NOM, SZ

@@ -7,8 +7,9 @@
 
 /// Parallel task that pulls exchange data from the buffer into OMESH arrays.
 ///
-/// For each source mesh NM that sends to this mesh NOM, copies the buffered
-/// data into MESHES(NOM)%OMESH(NM) using the Strategy's pullFromBuffer.
+/// For each source mesh NM that sends to this mesh NOM (same-rank and
+/// cross-rank), copies the buffered data into MESHES(NOM)%OMESH(NM)
+/// using the Strategy's pullFromBuffer.
 ///
 /// Thread safety: multiple threads pull for different destination meshes (NOM)
 /// concurrently.  Each writes to non-overlapping OMESH entries.
@@ -29,7 +30,7 @@ public:
         for (int nm : buffer_->recvSources(nom)) {
             int sz = buffer_->bufferSize(nm, nom);
             if (sz > 0) {
-                Strategy::pullFromBuffer(nm, nom, buffer_->buffer(nm, nom), sz);
+                Strategy::pullFromBufferRecv(nom, nm, buffer_->buffer(nm, nom), sz);
             }
         }
         this->addResult(md);

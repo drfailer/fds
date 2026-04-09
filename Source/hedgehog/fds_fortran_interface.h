@@ -233,6 +233,10 @@ void fds_flux_pull_slab(int nm, int nom, const double *buf, int bufsize);
 int fds_flux_slab_size(int nm, int nom);
 int fds_flux_max_slab_size();
 
+// Receiver-side slab size/pull (safe when nm is remote, nom is local)
+int fds_flux_slab_size_recv(int nom, int nm);
+void fds_flux_pull_slab_recv(int nom, int nm, const double *buf, int bufsize);
+
 // Generic mesh exchange dependency queries
 int fds_exchange_recv_dep_count(int nm);   // how many meshes send TO nm
 int fds_exchange_recv_dep_mesh(int nm, int idx); // 1-based idx -> NOM

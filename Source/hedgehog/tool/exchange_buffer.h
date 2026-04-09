@@ -8,19 +8,23 @@
 
 /// Pre-allocated flat storage for exchange data, indexed by (source NM, dest NOM).
 ///
+/// Allocates buffers for ALL (source, dest) pairs where dest is a local mesh,
+/// including cross-rank sources.  This enables both same-rank and cross-rank
+/// exchange data to flow through the same ExchangeBuffer.
+///
 /// Each MeshExchangeGraph instance owns its own ExchangeBuffer, so concurrent
 /// exchanges (e.g. pre-solve and post-solve) never share buffers.
 ///
 /// Thread safety: different (NM, NOM) pairs occupy non-overlapping regions in
-/// the flat storage.  Pipeline ordering (deps gate emits only after all pushes
-/// complete) ensures that push and pull never access the same entry concurrently.
+/// the flat storage.  Pipeline ordering (deps gate emits only after all writes
+/// complete) ensures that write and pull never access the same entry concurrently.
 ///
 /// @tparam Strategy Exchange strategy trait (e.g. FluxExchangeStrategy)
 template <typename Strategy>
 class ExchangeBuffer {
 public:
     /// Build the buffer from the pre-computed dependency graph.
-    /// Allocates storage for all same-rank (source, dest) pairs.
+    /// Allocates storage for all (source, dest) pairs where dest is local.
     ExchangeBuffer(const MeshDependencyGraph &depGraph)
         : lower_(depGraph.lowerMesh()),
           upper_(depGraph.upperMesh()),
@@ -31,19 +35,20 @@ public:
         sizes_.resize(static_cast<size_t>(n * n), 0);
         recvSources_.resize(static_cast<size_t>(n));
 
-        int myRank = fds_mesh_process(lower_);
         int totalSize = 0;
 
-        // Forward pass: compute offsets and sizes for each (source, dest) pair
-        for (int nm = lower_; nm <= upper_; ++nm) {
-            for (int nom : depGraph.sendTargets(nm)) {
-                if (fds_mesh_process(nom) != myRank) continue;
-                int sz = Strategy::bufferSize(nm, nom);
+        // Iterate over local dest meshes and their recv deps (all ranks).
+        // This allocates buffers for same-rank AND cross-rank source meshes.
+        for (int nom = lower_; nom <= upper_; ++nom) {
+            const auto &deps = depGraph.recvDeps(nom);
+            for (int i = 0; i < totalMeshes_; ++i) {
+                if (!deps.contains(static_cast<size_t>(i))) continue;
+                int nm = i + 1;  // 1-based mesh index
+                int sz = Strategy::bufferSizeRecv(nom, nm);
                 if (sz <= 0) continue;
                 offsets_[index(nm, nom)] = totalSize;
                 sizes_[index(nm, nom)] = sz;
                 totalSize += sz;
-                // Build reverse mapping: nom receives from nm
                 recvSources_[static_cast<size_t>(nom)].push_back(nm);
             }
         }
@@ -63,7 +68,7 @@ public:
         return sizes_[index(nm, nom)];
     }
 
-    /// Get the list of same-rank source meshes that send TO mesh nm.
+    /// Get the list of all source meshes that send TO mesh nm.
     /// Used by the pull task to know which buffers to read from.
     [[nodiscard]] const std::vector<int> &recvSources(int nm) const {
         return recvSources_[static_cast<size_t>(nm)];

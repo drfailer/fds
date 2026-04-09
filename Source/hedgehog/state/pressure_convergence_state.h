@@ -28,8 +28,7 @@ class PressureConvergenceState
 public:
     PressureConvergenceState(int nmeshes, bool predictor)
         : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
-          predictor_(predictor),
-          multiProcess_(fds_get_n_mpi_processes() > 1) {
+          predictor_(predictor) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -39,14 +38,6 @@ public:
         if (++count_ == nmeshes_) {
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
-
-            // Cross-rank exchange: the push/buffer/pull pipeline only handles
-            // same-rank pairs.  With MPI, do a global exchange here so that
-            // cross-rank OMESH data is current for the convergence check and
-            // the next pressure iteration.
-            if (multiProcess_) {
-                fds_mesh_exchange(5);
-            }
 
             int converged;
             if (fds_iterate_pressure()) {
@@ -107,7 +98,6 @@ private:
     int count_ = 0;
     std::vector<std::shared_ptr<MeshData>> collected_;
     bool predictor_;
-    bool multiProcess_;
     bool done_ = false;
     double convTime_ = 0.0;
     int invocations_ = 0;

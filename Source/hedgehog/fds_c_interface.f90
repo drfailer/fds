@@ -1682,6 +1682,18 @@ FUNCTION C_FDS_FLUX_MAX_SLAB_SIZE() RESULT(MAX_SIZE) BIND(C, NAME="fds_flux_max_
     MAX_SIZE = MESH_EXCHANGE_FLUX_MAX_SLAB_SIZE()
 END FUNCTION C_FDS_FLUX_MAX_SLAB_SIZE
 
+FUNCTION C_FDS_FLUX_SLAB_SIZE_RECV(NOM, NM) RESULT(NSIZE) BIND(C, NAME="fds_flux_slab_size_recv")
+    INTEGER(C_INT), VALUE :: NOM, NM
+    INTEGER(C_INT) :: NSIZE
+    NSIZE = MESH_EXCHANGE_FLUX_SLAB_SIZE_RECV(NOM, NM)
+END FUNCTION C_FDS_FLUX_SLAB_SIZE_RECV
+
+RECURSIVE SUBROUTINE C_FDS_FLUX_PULL_SLAB_RECV(NOM, NM, BUF, BUFSIZE) BIND(C, NAME="fds_flux_pull_slab_recv")
+    INTEGER(C_INT), VALUE :: NOM, NM, BUFSIZE
+    REAL(C_DOUBLE), INTENT(IN) :: BUF(BUFSIZE)
+    CALL MESH_EXCHANGE_FLUX_PULL_SLAB_RECV(NOM, NM, BUF, BUFSIZE)
+END SUBROUTINE C_FDS_FLUX_PULL_SLAB_RECV
+
 !==============================================================================
 ! Generic mesh exchange dependency queries
 !==============================================================================
