@@ -13,10 +13,12 @@ struct MeshData {
     bool firstPass;    ///< True on first pass through CHANGE_TIME_STEP_LOOP, false on CFL retry
     double dt_bc;      ///< Boundary condition time step (set by WallBC orchestrator barrier)
     int call_ht_1d;    ///< Flag for 1-D heat transfer (0=false, 1=true)
+    int exchangeCode;   ///< Exchange operation code (5=flux, 3/6=velocity, 1/4=species)
+    int exchangeRound;  ///< Exchange round index (for double-buffered state selection)
 
-    MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true), dt_bc(0.0), call_ht_1d(0) {}
+    MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true), dt_bc(0.0), call_ht_1d(0), exchangeCode(5), exchangeRound(0) {}
     MeshData(int nm_, double t_, double dt_, int phase_)
-        : nm(nm_), t(t_), dt(dt_), phase(phase_), firstPass(true), dt_bc(0.0), call_ht_1d(0) {}
+        : nm(nm_), t(t_), dt(dt_), phase(phase_), firstPass(true), dt_bc(0.0), call_ht_1d(0), exchangeCode(5), exchangeRound(0) {}
 
     friend std::ostream &operator<<(std::ostream &os, const MeshData &md) {
         os << "MeshData{nm=" << md.nm << ", t=" << md.t

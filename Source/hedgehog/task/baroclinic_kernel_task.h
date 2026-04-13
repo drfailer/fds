@@ -36,6 +36,7 @@ public:
         if (fds_is_cc_ibm()) {
             fds_cc_no_flux(md->dt, md->nm, 1); // FORCE_FLG=TRUE
         }
+        md->exchangeRound = 0;  // pre-solve exchange
         this->addResult(md);
     }
 

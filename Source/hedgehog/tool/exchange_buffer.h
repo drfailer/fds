@@ -12,20 +12,19 @@
 /// including cross-rank sources.  This enables both same-rank and cross-rank
 /// exchange data to flow through the same ExchangeBuffer.
 ///
-/// Each MeshExchangeGraph instance owns its own ExchangeBuffer, so concurrent
-/// exchanges (e.g. pre-solve and post-solve) never share buffers.
+/// Each ExchangeBuffer is specific to one exchange code (e.g. CODE 5 for flux).
+/// Buffer sizes are determined at construction time by calling the unified
+/// dispatch function fds_exchange_slab_size_recv(code, nom, nm).
 ///
 /// Thread safety: different (NM, NOM) pairs occupy non-overlapping regions in
 /// the flat storage.  Pipeline ordering (deps gate emits only after all writes
 /// complete) ensures that write and pull never access the same entry concurrently.
-///
-/// @tparam Strategy Exchange strategy trait (e.g. FluxExchangeStrategy)
-template <typename Strategy>
 class ExchangeBuffer {
 public:
-    /// Build the buffer from the pre-computed dependency graph.
-    /// Allocates storage for all (source, dest) pairs where dest is local.
-    ExchangeBuffer(const MeshDependencyGraph &depGraph)
+    /// Build the buffer from the pre-computed dependency graph for a given
+    /// exchange code. Allocates storage for all (source, dest) pairs where
+    /// dest is local.
+    ExchangeBuffer(const MeshDependencyGraph &depGraph, int exchangeCode)
         : lower_(depGraph.lowerMesh()),
           upper_(depGraph.upperMesh()),
           totalMeshes_(depGraph.totalMeshes()) {
@@ -44,7 +43,7 @@ public:
             for (int i = 0; i < totalMeshes_; ++i) {
                 if (!deps.contains(static_cast<size_t>(i))) continue;
                 int nm = i + 1;  // 1-based mesh index
-                int sz = Strategy::bufferSizeRecv(nom, nm);
+                int sz = fds_exchange_slab_size_recv(exchangeCode, nom, nm);
                 if (sz <= 0) continue;
                 offsets_[index(nm, nom)] = totalSize;
                 sizes_[index(nm, nom)] = sz;

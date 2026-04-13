@@ -237,6 +237,13 @@ int fds_flux_max_slab_size();
 int fds_flux_slab_size_recv(int nom, int nm);
 void fds_flux_pull_slab_recv(int nom, int nm, const double *buf, int bufsize);
 
+// Unified exchange dispatch (runtime CODE selection)
+void fds_exchange_push_slab(int code, int nm, int nom, double *buf, int bufsize);
+void fds_exchange_pull_slab_recv(int code, int nom, int nm, const double *buf, int bufsize);
+int fds_exchange_slab_size(int code, int nm, int nom);       // sender-side (nm local)
+int fds_exchange_slab_size_recv(int code, int nom, int nm);  // receiver-side (nom local)
+int fds_exchange_max_slab_size(int code);
+
 // Generic mesh exchange dependency queries
 int fds_exchange_recv_dep_count(int nm);   // how many meshes send TO nm
 int fds_exchange_recv_dep_mesh(int nm, int idx); // 1-based idx -> NOM

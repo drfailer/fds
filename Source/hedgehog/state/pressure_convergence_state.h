@@ -26,6 +26,8 @@
 class PressureConvergenceState
     : public hh::AbstractState<2, MeshData, TerminationData, PressureIterMeshData, MeshData> {
 public:
+    /// @param nmeshes  Number of local meshes
+    /// @param predictor True for predictor phase
     PressureConvergenceState(int nmeshes, bool predictor)
         : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
           predictor_(predictor) {

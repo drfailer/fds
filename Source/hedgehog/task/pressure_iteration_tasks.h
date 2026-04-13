@@ -4,25 +4,31 @@
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
+#include "../data/pressure_iteration_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Parallel pressure solve kernel task.
 ///
+/// Receives SolvePhaseData from PostExchangeRouter (pre-solve exchange done).
 /// Runs Phase 2 per mesh: MATCH_VELOCITY_FLUX (if baroclinic, moved from
 /// PreKernel for parallelization) -> NO_FLUX -> WALL_WORK1 zeroing
 /// (iteration 1 only) -> COMPUTE_RHS -> solver (FFT or ULMAT) ->
 /// CHECK_RESIDUALS.
 ///
+/// After solving, sets exchangeRound=1 and emits MeshData back to the
+/// exchange graph for post-solve exchange.
+///
 /// Multi-threaded: each clone processes one mesh independently.
 class PressureSolveKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, SolvePhaseData, MeshData> {
 public:
     explicit PressureSolveKernelTask(size_t kernelThreads, int presFlag)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, SolvePhaseData, MeshData>(
               "PressureSolveKernel", kernelThreads),
           presFlag_(presFlag) {}
 
-    void execute(std::shared_ptr<MeshData> md) override {
+    void execute(std::shared_ptr<SolvePhaseData> spd) override {
+        auto md = spd->mesh;
         // match_velocity_flux_kernel: only called when baroclinic term is active
         // (or first iteration). Guards must match the original Fortran conditional:
         // IF (ITERATE_BAROCLINIC_TERM .OR. PRESSURE_ITERATIONS==1).
@@ -50,10 +56,11 @@ public:
             fds_pressure_solver_fft_kernel(md->nm);
             fds_pressure_check_residuals_kernel(md->nm);
         }
+        md->exchangeRound = 1;  // post-solve exchange
         this->addResult(md);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>> copy() override {
+    std::shared_ptr<hh::AbstractTask<1, SolvePhaseData, MeshData>> copy() override {
         return std::make_shared<PressureSolveKernelTask>(
             this->numberThreads(), presFlag_);
     }
