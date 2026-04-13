@@ -7,16 +7,16 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Join task for fork-join patterns with MeshData.
+/// Join task for fork-join patterns with MeshData<>.
 /// Counts arrivals per mesh from multiple branches and emits after all arrive.
 ///
 /// Runs on a single thread.
-class ForkJoinTask : public hh::AbstractTask<1, MeshData, MeshData> {
+class ForkJoinTask : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit ForkJoinTask(int nmeshes, int numBranches = 2,
                           int numDownstreamThreads = 1,
                           std::string name = "ForkJoin")
-        : hh::AbstractTask<1, MeshData, MeshData>(std::move(name), 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(std::move(name), 1),
           nmeshes_(nmeshes), numBranches_(numBranches),
           numDownstreamThreads_(numDownstreamThreads),
           nmOffset_(fds_get_lower_mesh_index()) {
@@ -24,7 +24,7 @@ public:
         readyList_.reserve(numDownstreamThreads);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         int idx = data->nm - nmOffset_;
         counts_[idx]++;
         if (counts_[idx] == numBranches_) {
@@ -50,7 +50,7 @@ private:
     int nmOffset_;
     int completedCount_ = 0;
     std::vector<int> counts_;
-    std::vector<std::shared_ptr<MeshData>> readyList_;
+    std::vector<std::shared_ptr<MeshData<>>> readyList_;
 };
 
 /// Join task for fork-join patterns with BarrierData.

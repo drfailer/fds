@@ -7,10 +7,10 @@
 #include "mesh_data.h"
 
 /// Data type emitted by CollectorState after all mesh tokens arrive at a barrier.
-/// Wraps the collected MeshData tokens so that a single-threaded barrier task
+/// Wraps the collected MeshData<> tokens so that a single-threaded barrier task
 /// can perform the global computation and then scatter the tokens back out.
 struct BarrierData {
-    std::vector<std::shared_ptr<MeshData>> meshes;
+    std::vector<std::shared_ptr<MeshData<>>> meshes;
 
     bool done = false;           ///< True when simulation should terminate
     double newDt = 0.0;          ///< CFL-adjusted DT for next time step

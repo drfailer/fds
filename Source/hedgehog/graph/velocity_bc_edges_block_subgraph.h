@@ -37,18 +37,18 @@ public:
 
 /// Orchestrator task for VelocityBC edges block decomposition.
 class VelocityBCEdgesBlockOrchestrator
-    : public hh::AbstractTask<1, MeshData, VelocityBCEdgesBlockWork> {
+    : public hh::AbstractTask<1, MeshData<>, VelocityBCEdgesBlockWork> {
 public:
     VelocityBCEdgesBlockOrchestrator(int nmeshes, int numBlocks,
                                       int applyToEstimated, bool runSyntheticTurbulence)
-        : hh::AbstractTask<1, MeshData, VelocityBCEdgesBlockWork>("VelBCEdgesOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, VelocityBCEdgesBlockWork>("VelBCEdgesOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)),
           applyToEstimated_(applyToEstimated),
           runSyntheticTurbulence_(runSyntheticTurbulence) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -87,7 +87,7 @@ private:
     int numBlocks_;
     int applyToEstimated_;
     bool runSyntheticTurbulence_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task for VelocityBC edges block decomposition.
@@ -152,7 +152,7 @@ private:
         int count = 0;
         int expected = 0;
         double dragUvwMax = 0.0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     int nmeshes_;
     int nmOffset_;
@@ -164,7 +164,7 @@ private:
 
 /// Build the PredFinal sub-graph with block decomposition.
 inline auto buildPredFinalBlockSubgraph(int nmeshes, size_t blockThreads, int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("PredFinal");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, BarrierData>>("PredFinal");
 
     auto orchTask = std::make_shared<VelocityBCEdgesBlockOrchestrator>(
         nmeshes, numBlocks, /*applyToEstimated=*/1, /*runSyntheticTurbulence=*/true);
@@ -182,7 +182,7 @@ inline auto buildPredFinalBlockSubgraph(int nmeshes, size_t blockThreads, int nu
 
 /// Build the CorrFinal sub-graph with block decomposition.
 inline auto buildCorrFinalBlockSubgraph(int nmeshes, size_t blockThreads, int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, BarrierData>>("CorrFinal");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, BarrierData>>("CorrFinal");
 
     auto orchTask = std::make_shared<VelocityBCEdgesBlockOrchestrator>(
         nmeshes, numBlocks, /*applyToEstimated=*/0, /*runSyntheticTurbulence=*/false);

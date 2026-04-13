@@ -8,19 +8,19 @@
 /// Parallel task that calls the thread-safe COMBUSTION_BC_KERNEL
 /// and DIVERGENCE_PART_1_KERNEL. Each thread processes one mesh independently.
 class CorrDivPart1KernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit CorrDivPart1KernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "CorrDivPart1Kernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_combustion_bc_kernel(data->nm);
         fds_divergence_part_1_kernel(data->nm, data->t, data->dt);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<CorrDivPart1KernelTask>(
             this->numberThreads());

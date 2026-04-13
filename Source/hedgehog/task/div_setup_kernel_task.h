@@ -11,13 +11,13 @@
 /// Order matches original: BAROCLINIC=FALSE → VISCOSITY_BC → CC_VELOCITY_BC → VELOCITY_FLUX_KERNEL.
 /// CC_VELOCITY_BC_TS must run AFTER VISCOSITY_BC because it reads MU boundary values.
 class DivSetupKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit DivSetupKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "DivSetupKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_set_baroclinic_false(data->nm);
         fds_viscosity_bc_kernel(data->nm, data->phase);
         fds_cc_velocity_bc_ts(data->t, data->nm, data->phase, 0);  // CC_IBM: DO_IBEDGES=FALSE (after VISCOSITY_BC)
@@ -28,7 +28,7 @@ public:
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<DivSetupKernelTask>(
             this->numberThreads());

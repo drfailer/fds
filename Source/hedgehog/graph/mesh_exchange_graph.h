@@ -26,30 +26,12 @@
 ///              |
 ///              +-> PullTask(parallel) -> Output
 ///
-/// Graph input broadcasts MeshData to both FanOutTask and Gate.
-/// FanOutTask pushes slab data into ExchangeMeshData objects.
-/// CommunicatorTask routes: same-rank loop-back, cross-rank via MPI.
-/// WriteBufferTask copies slab data into ExchangeBuffer, emits DepSignal.
-/// Gate waits for pending token + all dep signals, then emits downstream.
-/// PullTask reads from ExchangeBuffer into OMESH arrays.
-///
 /// Double-buffered: 2 ExchangeBuffer copies per code, indexed by roundId % 2.
-/// The Gate is also double-buffered (2 RoundSlots). This allows concurrent
-/// exchange rounds (e.g. pre-solve round 0 and post-solve round 1) to
-/// proceed without data races.
-///
-/// The exchange code is selected at runtime via md->exchangeCode.
-class MeshExchangeGraph : public hh::Graph<1, MeshData, MeshData> {
+template<MeshState S = MeshState::Default>
+class MeshExchangeGraph : public hh::Graph<1, MeshData<S>, MeshData<S>> {
     using Pool = hh::comm::tool::MemoryPool<ExchangeMeshData>;
     using BufferMap = std::unordered_map<int, std::array<std::shared_ptr<ExchangeBuffer>, 2>>;
 public:
-    /// @param depGraph Pre-built mesh dependency graph
-    /// @param pushThreads Thread count for the fan-out task
-    /// @param pullThreads Thread count for the write-buffer and pull tasks
-    /// @param supportedCodes Exchange codes this graph handles (e.g. {5})
-    /// @param commService Optional MPI comm service; when non-null a
-    ///                    CommunicatorTask is wired between fan-out and write
-    /// @param name Graph name for profiling/debugging
     MeshExchangeGraph(
         std::shared_ptr<MeshDependencyGraph> depGraph,
         size_t pushThreads,
@@ -57,7 +39,7 @@ public:
         std::vector<int> const &supportedCodes,
         hh::comm::CommService *commService = nullptr,
         std::string const &name = "MeshExchange")
-        : hh::Graph<1, MeshData, MeshData>(name) {
+        : hh::Graph<1, MeshData<S>, MeshData<S>>(name) {
 
         // Build double-buffered per-code ExchangeBuffers
         auto buffers = std::make_shared<BufferMap>();
@@ -77,19 +59,19 @@ public:
         pool->template fill<ExchangeMeshData>(
             static_cast<size_t>(std::max(4 * totalTargets, 32)));
 
-        auto fanOutTask = std::make_shared<ExchangeFanOutTask>(
+        auto fanOutTask = std::make_shared<ExchangeFanOutTask<S>>(
             pushThreads, depGraph, pool);
         auto writeTask = std::make_shared<ExchangeWriteBufferTask>(
             pullThreads, buffers, pool);
-        auto gateSM = std::make_shared<ExchangeDepsGateManager>(
-            std::make_shared<ExchangeDepsGateState>(depGraph),
+        auto gateSM = std::make_shared<ExchangeDepsGateManager<S>>(
+            std::make_shared<ExchangeDepsGateState<S>>(depGraph),
             name + "_Gate");
-        auto pullTask = std::make_shared<ExchangePullBufferTask>(
+        auto pullTask = std::make_shared<ExchangePullBufferTask<S>>(
             pullThreads, buffers);
 
-        // Graph input broadcasts MeshData to BOTH fanOutTask and gate
-        this->template input<MeshData>(fanOutTask);
-        this->template input<MeshData>(gateSM);
+        // Graph input broadcasts MeshData<S> to BOTH fanOutTask and gate
+        this->template input<MeshData<S>>(fanOutTask);
+        this->template input<MeshData<S>>(gateSM);
 
         if (commService) {
             auto commTask = std::make_shared<hh::CommunicatorTask<ExchangeMeshData>>(

@@ -32,20 +32,20 @@ public:
 };
 
 /// Orchestrator task for DIVERGENCE_PART_2 block decomposition.
-/// Collects N MeshData tokens, runs sequential preprocessing per mesh
+/// Collects N MeshData<> tokens, runs sequential preprocessing per mesh
 /// (zone ops, R_PBAR, D_PBAR_DT_P), then decomposes each mesh into K-blocks.
 ///
 /// Runs on a single thread.
 class DivPart2BlockOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshBlockData> {
 public:
     DivPart2BlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractTask<1, MeshData, MeshBlockData>("DivPart2Orch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshBlockData>("DivPart2Orch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -76,21 +76,21 @@ public:
 private:
     int nmeshes_;
     int numBlocks_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Build the DIVERGENCE_PART_2 sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> Orchestrator(zone ops + decompose) ->
-///   DivPart2BlockKernel(parallel) -> Reassemble -> MeshData
+///   MeshData<> -> Orchestrator(zone ops + decompose) ->
+///   DivPart2BlockKernel(parallel) -> Reassemble -> MeshData<>
 ///
 /// @param nmeshes Number of meshes
 /// @param blockThreads Number of threads for parallel block kernel
 /// @param numBlocks Target number of blocks per mesh
 inline auto buildDivergencePart2BlockSubgraph(int nmeshes, size_t blockThreads,
                                                int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("DivPart2Block");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("DivPart2Block");
 
     auto orchestratorTask = std::make_shared<DivPart2BlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<DivergencePart2BlockKernelTask>(blockThreads);

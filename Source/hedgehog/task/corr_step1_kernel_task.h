@@ -9,13 +9,13 @@
 /// COMPUTE_VISCOSITY_KERNEL, MASS_FINITE_DIFFERENCES_NEW_KERNEL,
 /// and DENSITY_KERNEL. Each thread processes one mesh independently.
 class CorrStep1KernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit CorrStep1KernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "CorrStep1Kernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         // estimated=true for corrector phase
         fds_compute_viscosity_kernel(data->nm, 1);
         fds_mass_finite_differences_kernel(data->nm);
@@ -23,7 +23,7 @@ public:
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<CorrStep1KernelTask>(
             this->numberThreads());
@@ -34,19 +34,19 @@ public:
 /// COMPUTE_VISCOSITY_KERNEL + MASS_FINITE_DIFFERENCES_NEW_KERNEL only.
 /// Used when viscosity is NOT block-decomposed but density IS.
 class CorrViscMassFDKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit CorrViscMassFDKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "CorrViscMassFDKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_compute_viscosity_kernel(data->nm, 1);
         fds_mass_finite_differences_kernel(data->nm);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<CorrViscMassFDKernelTask>(
             this->numberThreads());

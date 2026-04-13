@@ -60,7 +60,7 @@ private:
     struct Entry {
         int count = 0;
         int expected = 0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     std::unordered_map<int, Entry> entries_;
 };
@@ -68,7 +68,7 @@ private:
 /// Build the merged viscosity + density sub-graph with block decomposition.
 inline auto buildViscDensityBlockSubgraph(int nmeshes, size_t kernelThreads,
                                            int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("ViscDensityBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("ViscDensityBlock");
 
     auto orchestratorTask = std::make_shared<ComputeViscosityBlockOrchestrator>(nmeshes, numBlocks);
     auto viscKernel = std::make_shared<ComputeViscosityBlockKernelTask>(kernelThreads);

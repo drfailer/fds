@@ -13,17 +13,17 @@
 // ---------------------------------------------------------------------------
 // Barrier computation tasks.
 //
-// Tasks that receive BarrierData from upstream collectors and scatter MeshData
+// Tasks that receive BarrierData from upstream collectors and scatter MeshData<>
 // downstream.  Most barrier patterns use BarrierState (state/barrier_state.h)
-// which merges collector + barrier into a single MeshData→MeshData state node.
+// which merges collector + barrier into a single MeshData<>→MeshData<> state node.
 // ---------------------------------------------------------------------------
 
 /// Phase transition task — sets CORRECTOR=TRUE, advances T, zeros arrays,
 /// handles obstructions.
-class PhaseTransitionTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+class PhaseTransitionTask : public hh::AbstractTask<1, BarrierData, MeshData<>> {
 public:
     PhaseTransitionTask()
-        : hh::AbstractTask<1, BarrierData, MeshData>("PhaseTransition", 1) {}
+        : hh::AbstractTask<1, BarrierData, MeshData<>>("PhaseTransition", 1) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
         auto t0 = std::chrono::steady_clock::now();
@@ -65,15 +65,15 @@ private:
 };
 
 /// CorrFinal dump task — reduces HRR/MASS, checks dump schedule,
-/// emits MeshData (per-mesh dump) + BarrierData (global dump + timestep loop).
+/// emits MeshData<> (per-mesh dump) + BarrierData (global dump + timestep loop).
 ///
 /// Replaces CorrFinalCollector state (which lacked canTerminate).
-/// Upstream: CollectorState collects N MeshData → 1 BarrierData.
+/// Upstream: CollectorState collects N MeshData<> → 1 BarrierData.
 class CorrFinalDumpTask
-    : public hh::AbstractTask<1, BarrierData, MeshData, BarrierData> {
+    : public hh::AbstractTask<1, BarrierData, MeshData<>, BarrierData> {
 public:
     CorrFinalDumpTask()
-        : hh::AbstractTask<1, BarrierData, MeshData, BarrierData>(
+        : hh::AbstractTask<1, BarrierData, MeshData<>, BarrierData>(
               "CorrFinalDump", 1) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
@@ -96,7 +96,7 @@ public:
 
         if (anyDump) {
             bd->skipMeshDump = false;
-            // Emit MeshData tokens for per-mesh dump I/O
+            // Emit MeshData<> tokens for per-mesh dump I/O
             this->batchAddResult(data->meshes);
         } else {
             bd->skipMeshDump = true;

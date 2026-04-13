@@ -12,11 +12,11 @@
 /// Only used for non-CC_IBM.
 ///
 /// WallBC inlined: no orchestrator barrier needed in predictor (dt_bc=0, call_ht_1d=0
-/// are MeshData defaults). Finalize barrier collects all meshes before DivP1Early.
+/// are MeshData<> defaults). Finalize barrier collects all meshes before DivP1Early.
 inline auto buildPredForkDivSubgraph(int nmeshes,
                                       size_t wallBCThreads,
                                       size_t divP1EarlyThreads) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>(
         "PredFork-BranchB-WallBC+DivEarly");
 
     auto wallBCKernel = std::make_shared<WallBCKernelTask>(wallBCThreads);

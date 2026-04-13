@@ -7,20 +7,20 @@
 #include "../fds_fortran_interface.h"
 
 /// Fork task for Corrector Fork 2: RADIATION || DIV_P1.
-/// Collects N MeshData tokens, runs InitDivIntegrals (zero DSUM/PSUM/USUM),
-/// then emits MeshData. Hedgehog multicasts to both branches.
+/// Collects N MeshData<> tokens, runs InitDivIntegrals (zero DSUM/PSUM/USUM),
+/// then emits MeshData<>. Hedgehog multicasts to both branches.
 ///
 /// Runs on a single thread.
 class PipelineFork2Task
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit PipelineFork2Task(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("PipelineFork2", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("PipelineFork2", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -35,7 +35,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 #endif // PIPELINE_FORK2_STATE_H

@@ -12,7 +12,7 @@
 inline auto buildPredForkVFluxSubgraph(int nmeshes,
                                        size_t divSetupThreads,
                                        size_t partMomThreads) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>(
         "PredFork-BranchA-VFlux+PMom");
 
     auto kernel = std::make_shared<DivSetupKernelTask>(divSetupThreads);

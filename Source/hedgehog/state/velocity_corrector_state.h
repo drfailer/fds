@@ -14,15 +14,15 @@
 ///
 /// Runs on a single thread.
 class VelocityCorrectorCCOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelocityCorrectorCCOrchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("VelCorrCCOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("VelCorrCCOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -40,7 +40,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task for CC_IBM post-processing after velocity corrector kernel.
@@ -51,15 +51,15 @@ private:
 ///
 /// Runs on a single thread.
 class VelocityCorrectorCCCollector
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelocityCorrectorCCCollector(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("VelCorrCCCollector", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("VelCorrCCCollector", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_[data->nm - nmOffset_] = data;
         ++count_;
 
@@ -80,7 +80,7 @@ private:
     int nmeshes_;
     int nmOffset_;
     int count_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 #endif // VELOCITY_CORRECTOR_STATE_H

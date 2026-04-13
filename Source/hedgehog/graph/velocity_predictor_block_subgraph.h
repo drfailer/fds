@@ -33,20 +33,20 @@ public:
 /// Merged post-reassembly kernel for velocity predictor.
 /// CC_PROJECT_VELOCITY fix + WALL_VELOCITY_NO_GRADH fix + CHECK_STABILITY.
 class VelPredPostKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelPredPostKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "VelPredPostKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 1);
         fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 1);
         fds_check_stability_kernel_only(data->nm, data->t + data->dt, data->dt);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<VelPredPostKernelTask>(this->numberThreads());
     }
@@ -55,12 +55,12 @@ public:
 /// Build the velocity predictor sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> Decompose -> VelPredBlockKernel(parallel) -> Reassemble
+///   MeshData<> -> Decompose -> VelPredBlockKernel(parallel) -> Reassemble
 ///            -> VelPredPostKernel(CCProjectVel + WallVel + CheckStability)
-///            -> MeshData
+///            -> MeshData<>
 inline auto buildVelocityPredictorBlockSubgraph(size_t blockThreads,
                                                   int numBlocks, int nmeshes) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityPredictorBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("VelocityPredictorBlock");
 
     auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "VelPredDecompose");
     auto blockKernel = std::make_shared<VelocityPredictorBlockKernelTask>(blockThreads);

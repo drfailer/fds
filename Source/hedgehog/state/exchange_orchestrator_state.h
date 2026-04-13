@@ -12,7 +12,7 @@
 
 /// Pure dependency gate task for mesh exchange orchestration.
 ///
-/// Receives MeshData "push done" signals from the upstream ExchangePushTask.
+/// Receives MeshData<> "push done" signals from the upstream ExchangePushTask.
 /// Each signal means that mesh NM has finished copying its data to all
 /// same-rank targets.  The gate tracks which meshes have pushed and emits
 /// a mesh downstream only when all of its receive-dependencies have also
@@ -23,10 +23,10 @@
 ///
 /// Runs on a single thread.
 class ExchangeGateTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     ExchangeGateTask(std::shared_ptr<MeshDependencyGraph> depGraph)
-        : hh::AbstractTask<1, MeshData, MeshData>("ExchangeGate", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("ExchangeGate", 1),
           depGraph_(std::move(depGraph)),
           satisfied_(static_cast<size_t>(depGraph_->totalMeshes())),
           lower_(depGraph_->lowerMesh()),
@@ -44,7 +44,7 @@ public:
         }
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         auto t0 = std::chrono::steady_clock::now();
 
         int nm = data->nm;
@@ -105,7 +105,7 @@ private:
     DynBitset satisfied_;
     int lower_;
     int upper_;
-    std::vector<std::shared_ptr<MeshData>> pendingMeshes_;
+    std::vector<std::shared_ptr<MeshData<>>> pendingMeshes_;
     std::vector<bool> emitted_;
     std::vector<bool> noDeps_;
     double gateTime_ = 0.0;

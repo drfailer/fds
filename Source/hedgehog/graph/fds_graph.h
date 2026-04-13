@@ -13,6 +13,7 @@
 #include "../tool/thread_budget.h"
 #include "predictor_subgraph.h"
 #include "corrector_subgraph.h"
+#include "pressure_iteration_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
 ///
@@ -22,9 +23,9 @@
 /// The dump phase uses a fork-join pattern:
 ///   CorrFinalDumpTask forks into two parallel branches:
 ///     - DumpGlobalTask (BarrierData): global computation + global file I/O
-///     - DumpMeshOutputsTask (MeshData): per-mesh file I/O (skipped on non-dump timesteps)
+///     - DumpMeshOutputsTask (MeshData<>): per-mesh file I/O (skipped on non-dump timesteps)
 ///   TimestepState joins both branches, runs STOP_CHECK, then either cycles
-///   MeshData back to the predictor or emits BarrierData for termination.
+///   MeshData<> back to the predictor or emits BarrierData for termination.
 ///
 /// @param nmeshes Number of meshes
 /// @param t Initial simulation time
@@ -36,7 +37,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
                           const ThreadBudget &budget,
                           hh::comm::CommService *commService = nullptr) {
 
-    using GraphType = hh::Graph<2, MeshData, TerminationData, BarrierData>;
+    using GraphType = hh::Graph<2, MeshData<>, TerminationData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
     // --- Build mesh dependency graph (once, shared by predictor & corrector) ---
@@ -59,33 +60,50 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
         static_cast<size_t>(nmeshes));
 
     // Merged join + timestep loop: collects dump results, STOP_CHECK,
-    // then cycles MeshData back or emits BarrierData for termination.
+    // then cycles MeshData<> back or emits BarrierData for termination.
     auto timestepSM = std::make_shared<TimestepStateManager>(
         std::make_shared<TimestepState>(nmeshes, tEnd, icyc), "Timestep");
 
+    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
+
     // --- Wire the graph ---
 
-    // Input: MeshData -> Predictor, TerminationData -> Predictor + Corrector
+    // Input: MeshData<> + TerminationData -> Predictor
     graph->inputs(predictorSubgraph);
-    graph->input<TerminationData>(correctorSubgraph);
 
-    // Predictor -> Corrector
+    // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Fork: Corrector -> DumpGlobal (BarrierData) + DumpMesh (MeshData)
-    // CorrFinalDumpTask checks dump schedule and emits MeshData only when needed.
+    // Fork: Corrector -> DumpGlobal (BarrierData) + DumpMesh (MeshData<>)
+    // CorrFinalDumpTask checks dump schedule and emits MeshData<> only when needed.
     graph->edges(correctorSubgraph, dumpGlobalTask);
     graph->edges(correctorSubgraph, dumpMeshTask);
 
-    // Join: DumpGlobal (BarrierData) + DumpMesh (MeshData) -> TimestepState
+    // Join: DumpGlobal (BarrierData) + DumpMesh (MeshData<>) -> TimestepState
     graph->edges(dumpGlobalTask, timestepSM);
     graph->edges(dumpMeshTask, timestepSM);
 
-    // Cycle: TimestepState -> back to Predictor (MeshData)
+    // Cycle: TimestepState -> back to Predictor (MeshData<>)
     graph->edges(timestepSM, predictorSubgraph);
 
     // Graph output: TimestepState emits BarrierData when simulation is done
     graph->outputs(timestepSM);
+
+    // --- Shared pressure subgraph (when enabled) ---
+    if (useParallelPressure) {
+        auto pressureSubgraph = buildPressureIterationSubgraph(
+            nmeshes, budget, depGraph, commService, fds_get_pres_flag());
+
+        graph->input<TerminationData>(pressureSubgraph);
+
+        // Predictor <-> PressureSubgraph (PredPressure)
+        graph->edges(predictorSubgraph, pressureSubgraph);
+        graph->edges(pressureSubgraph, predictorSubgraph);
+
+        // Corrector <-> PressureSubgraph (CorrPressure)
+        graph->edges(correctorSubgraph, pressureSubgraph);
+        graph->edges(pressureSubgraph, correctorSubgraph);
+    }
 
     return graph;
 }

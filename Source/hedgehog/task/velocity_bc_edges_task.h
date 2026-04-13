@@ -19,16 +19,16 @@
 /// @param doIBEdges 1 to process immersed boundary edges, 0 to skip
 /// @param isCorrFinal true to run corrector-final per-mesh routines
 class VelocityBCEdgesTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     VelocityBCEdgesTask(size_t numThreads, int applyToEstimated,
                         int doIBEdges = 1, bool isCorrFinal = false)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "VelocityBCEdges", numThreads),
           applyToEstimated_(applyToEstimated), doIBEdges_(doIBEdges),
           isCorrFinal_(isCorrFinal) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_cc_velocity_cutfaces_ts(data->nm, applyToEstimated_);
         fds_match_velocity_kernel(data->nm, applyToEstimated_);
         fds_velocity_bc_preprocessing(
@@ -45,7 +45,7 @@ public:
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<VelocityBCEdgesTask>(
             this->numberThreads(), applyToEstimated_, doIBEdges_, isCorrFinal_);

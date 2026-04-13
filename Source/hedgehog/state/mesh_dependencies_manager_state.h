@@ -18,10 +18,10 @@ enum class ExchangeState { NotArrived, Wait, Processing, Processed, Done };
 /// Dependency-aware mesh exchange orchestrator with parallel pull-only exchange.
 ///
 /// Manages a cycle with FluxExchangeTask:
-///   - Receives MeshData from the upstream kernel (baroclinic)
+///   - Receives MeshData<> from the upstream kernel (baroclinic)
 ///   - Dispatches MeshExchangeData to the exchange task when dependencies are met
 ///   - Receives MeshExchangeData back from the exchange task
-///   - Emits MeshData to the downstream kernel (solve) when fully done
+///   - Emits MeshData<> to the downstream kernel (solve) when fully done
 ///
 /// Per-mesh state machine:
 ///   NotArrived -> Wait (on arrival from upstream)
@@ -45,7 +45,7 @@ enum class ExchangeState { NotArrived, Wait, Processing, Processed, Done };
 /// Termination: receives TerminationData from the graph input when the
 /// simulation is complete, setting done_=true so canTerminate() returns true.
 class MeshDependenciesManagerState
-    : public hh::AbstractState<3, MeshData, MeshExchangeData, TerminationData, MeshExchangeData, MeshData> {
+    : public hh::AbstractState<3, MeshData<>, MeshExchangeData, TerminationData, MeshExchangeData, MeshData<>> {
 public:
     MeshDependenciesManagerState(std::shared_ptr<MeshDependencyGraph> depGraph)
         : depGraph_(std::move(depGraph)),
@@ -69,7 +69,7 @@ public:
     }
 
     /// Handle arrival from upstream kernel (baroclinic).
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         auto t0 = std::chrono::steady_clock::now();
 
         if (roundComplete_) {
@@ -198,7 +198,7 @@ private:
     int nmeshes_;
 
     std::vector<ExchangeState> meshState_;
-    std::vector<std::shared_ptr<MeshData>> pendingMeshes_;
+    std::vector<std::shared_ptr<MeshData<>>> pendingMeshes_;
     std::vector<int> unarrivedNeighborCount_;
     std::vector<int> unprocessedNeighborCount_;
 
@@ -213,12 +213,12 @@ private:
 
 /// StateManager for MeshDependenciesManagerState with cycle termination support.
 class MeshDependenciesManager
-    : public hh::StateManager<3, MeshData, MeshExchangeData, TerminationData, MeshExchangeData, MeshData> {
+    : public hh::StateManager<3, MeshData<>, MeshExchangeData, TerminationData, MeshExchangeData, MeshData<>> {
 public:
     MeshDependenciesManager(
         std::shared_ptr<MeshDependenciesManagerState> const &state,
         std::string const &name)
-        : hh::StateManager<3, MeshData, MeshExchangeData, TerminationData, MeshExchangeData, MeshData>(
+        : hh::StateManager<3, MeshData<>, MeshExchangeData, TerminationData, MeshExchangeData, MeshData<>>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

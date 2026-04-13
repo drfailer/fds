@@ -8,18 +8,18 @@
 /// Parallel kernel task for synthetic turbulence.
 /// Extracted from meshExch3SynTurb barrier to run per-mesh in parallel.
 class SyntheticTurbulenceKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit SyntheticTurbulenceKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "SyntheticTurbulenceKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_synthetic_turbulence_if_enabled(data->dt, data->t, data->nm);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<SyntheticTurbulenceKernelTask>(this->numberThreads());
     }

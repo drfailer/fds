@@ -32,18 +32,18 @@ public:
 };
 
 /// Orchestrator state for velocity flux block decomposition.
-/// Collects N MeshData tokens, runs sequential pre-processing per mesh,
+/// Collects N MeshData<> tokens, runs sequential pre-processing per mesh,
 /// then decomposes each mesh into K-blocks for parallel execution.
 class VelocityFluxBlockOrchestrator
-    : public hh::AbstractState<1, MeshData, MeshBlockData> {
+    : public hh::AbstractState<1, MeshData<>, MeshBlockData> {
 public:
     VelocityFluxBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractState<1, MeshData, MeshBlockData>(),
+        : hh::AbstractState<1, MeshData<>, MeshBlockData>(),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -80,13 +80,13 @@ public:
 private:
     int nmeshes_;
     int numBlocks_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector state for velocity flux block decomposition.
-/// Reassembles blocks back into MeshData, runs sequential post-processing.
+/// Reassembles blocks back into MeshData<>, runs sequential post-processing.
 class VelocityFluxBlockCollector
-    : public hh::AbstractState<1, MeshBlockData, MeshData> {
+    : public hh::AbstractState<1, MeshBlockData, MeshData<>> {
 public:
     VelocityFluxBlockCollector() = default;
 
@@ -115,7 +115,7 @@ private:
     struct Entry {
         int count = 0;
         int expected = 0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     std::unordered_map<int, Entry> entries_;
 };
@@ -123,21 +123,21 @@ private:
 /// Build the velocity flux (DivSetup) sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> Orchestrator(baroclinic+viscBC, decompose) ->
-///   VelFluxBlockKernel(parallel) -> Collector(agglomeration) -> MeshData
+///   MeshData<> -> Orchestrator(baroclinic+viscBC, decompose) ->
+///   VelFluxBlockKernel(parallel) -> Collector(agglomeration) -> MeshData<>
 ///
 /// @param nmeshes Number of meshes
 /// @param kernelThreads Number of threads for parallel tasks
 /// @param numBlocks Target number of blocks per mesh
 inline auto buildVelocityFluxBlockSubgraph(int nmeshes, size_t kernelThreads,
                                             int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityFluxBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("VelocityFluxBlock");
 
-    auto orchestratorSM = std::make_shared<hh::StateManager<1, MeshData, MeshBlockData>>(
+    auto orchestratorSM = std::make_shared<hh::StateManager<1, MeshData<>, MeshBlockData>>(
         std::make_shared<VelocityFluxBlockOrchestrator>(nmeshes, numBlocks),
         "VelFluxOrch");
     auto blockKernel = std::make_shared<VelocityFluxBlockKernelTask>(kernelThreads);
-    auto collectorSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData>>(
+    auto collectorSM = std::make_shared<hh::StateManager<1, MeshBlockData, MeshData<>>>(
         std::make_shared<VelocityFluxBlockCollector>(), "VelFluxCollector");
 
     subgraph->inputs(orchestratorSM);

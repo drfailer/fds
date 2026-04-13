@@ -12,15 +12,15 @@
 ///
 /// Runs on a single thread.
 class PredDivSetupOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit PredDivSetupOrchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("PredDivSetupOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("PredDivSetupOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -32,7 +32,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Orchestrator task for corrector div setup sub-graph.
@@ -41,15 +41,15 @@ private:
 ///
 /// Runs on a single thread.
 class CorrDivSetupOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit CorrDivSetupOrchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("Fork1VFluxOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("Fork1VFluxOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -61,7 +61,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 #endif // DIV_SETUP_STATE_H

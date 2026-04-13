@@ -8,18 +8,18 @@
 /// Parallel kernel task for wall BC finalize.
 /// Extracted from groupB barrier to run per-mesh in parallel.
 class WallBCFinalizeKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit WallBCFinalizeKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "WallBCFinalizeKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_wall_bc_finalize(data->nm, data->t, data->dt_bc, data->call_ht_1d);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<WallBCFinalizeKernelTask>(this->numberThreads());
     }

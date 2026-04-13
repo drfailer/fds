@@ -26,30 +26,37 @@
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "../task/wallbc_kernel_task.h"
-#include "pressure_iteration_subgraph.h"
 #include "pred_fork_vflux_subgraph.h"
 #include "pred_fork_div_subgraph.h"
 
 /// Build the Predictor sub-graph.
 ///
+/// Template parameter PressureTag controls the DivP2 output and VelPred input
+/// MeshData state. When PressureTag != Default, DivP2 outputs typed data that
+/// exits the subgraph for the shared pressure subgraph, and VelPred accepts
+/// the typed result back.
+///
 /// Barrier splits applied:
 ///   - meshExch1DivPrefork: DivP1Prefork per-mesh loop → parallel kernel task
 ///   - meshExch3SynTurb: SyntheticTurbulence per-mesh loop → parallel kernel task
 ///   - predJoinDivExchange: DivP1Late per-mesh loop → ForkJoin + parallel kernel task
-inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
+template<MeshState PressureTag = MeshState::Default>
+inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
-    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, MeshData>>("Predictor");
+    auto subgraph = std::make_shared<hh::Graph<3,
+        MeshData<>, TerminationData, MeshData<MeshState::PredictorPressure>,
+        MeshData<>, MeshData<MeshState::PredictorPressure>>>("Predictor");
 
     // --- Kernel tasks (threads from budget) ---
 
     auto predStep1OrchTask = std::make_shared<PredStep1Orchestrator>(nmeshes);
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
-    auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(budget.predDivPart2);
-    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask>(budget.velPredictor);
+    auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.predDivPart2);
+    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask<PressureTag>>(budget.velPredictor);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
-    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
+    constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
     auto predFinalSubgraph = buildPredFinalSubgraph(nmeshes, budget.predFinalVelBC);
     auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, budget.retryMomDiv);
@@ -72,7 +79,7 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
     // --- Wire the sub-graph ---
 
-    subgraph->input<MeshData>(predStep1OrchTask);
+    subgraph->input<MeshData<>>(predStep1OrchTask);
     subgraph->input<TerminationData>(changeTimeStepSubgraph);
 
     // PredStep1 (VISC + MASS_FD + DENSITY merged)
@@ -197,13 +204,11 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
 
     // --- Common downstream: DivP2 -> Pressure -> VelPred -> ... ---
 
-    if (useParallelPressure) {
-        auto predPressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, budget, true,
-            depGraph, commService, fds_get_pres_flag());
-        subgraph->input<TerminationData>(predPressureSubgraph);
-        subgraph->edges(predDivP2KernelTask, predPressureSubgraph);
-        subgraph->edges(predPressureSubgraph, velPredKernelTask);
+    if constexpr (useParallelPressure) {
+        // Pressure handled externally via shared pressure subgraph.
+        // DivP2<PressureTag> exits subgraph, VelPred<PressureTag> receives from outside.
+        subgraph->outputs(predDivP2KernelTask);
+        subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
     } else {
         auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
             "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
@@ -227,6 +232,18 @@ inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
     subgraph->outputs(predFinalSubgraph);
 
     return subgraph;
+}
+
+/// Dispatch wrapper: selects the correct template instantiation at runtime.
+inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
+                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
+                                    hh::comm::CommService *commService = nullptr) {
+    if (fds_use_pressure_subgraph()) {
+        return buildPredictorSubgraphImpl<MeshState::PredictorPressure>(
+            nmeshes, budget, depGraph, commService);
+    }
+    return buildPredictorSubgraphImpl<MeshState::Default>(
+        nmeshes, budget, depGraph, commService);
 }
 
 #endif // PREDICTOR_SUBGRAPH_H

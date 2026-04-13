@@ -8,18 +8,18 @@
 /// Parallel kernel task for combustion chemistry.
 /// Calls COMBUSTION_GENERAL_KERNEL per mesh (thread-safe, no POINT_TO_MESH).
 class CombustionKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit CombustionKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "CombustionKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_combustion_kernel(data->nm, data->t, data->dt);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<CombustionKernelTask>(
             this->numberThreads());

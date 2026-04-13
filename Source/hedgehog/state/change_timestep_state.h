@@ -10,14 +10,14 @@
 
 /// Merged collector + retry loop state.
 ///
-/// Collects N MeshData tokens from the parallel kernel (or receives
+/// Collects N MeshData<> tokens from the parallel kernel (or receives
 /// RetrySequenceData from the bypass path), runs post-kernel work,
 /// checks for CFL retry, and either cycles back or exits.
 ///
 /// Output types (Hedgehog type-based routing):
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
 ///   - BarrierData → exits the subgraph (retry complete or no retry needed)
-class RetryLoopState : public hh::AbstractState<3, MeshData, RetrySequenceData, TerminationData,
+class RetryLoopState : public hh::AbstractState<3, MeshData<>, RetrySequenceData, TerminationData,
                                                   RetrySequenceData, BarrierData> {
 public:
     explicit RetryLoopState(int nmeshes)
@@ -25,8 +25,8 @@ public:
         collected_.resize(nmeshes, nullptr);
     }
 
-    /// Collect MeshData from parallel kernel (N tokens).
-    void execute(std::shared_ptr<MeshData> data) override {
+    /// Collect MeshData<> from parallel kernel (N tokens).
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_[data->nm - nmOffset_] = data;
         if (++count_ == nmeshes_) {
             count_ = 0;
@@ -106,18 +106,18 @@ private:
 
     int nmeshes_, nmOffset_, count_ = 0, iteration_ = 0;
     bool done_ = false;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Custom state manager for the retry loop cycle.
 class RetryLoopStateManager
-    : public hh::StateManager<3, MeshData, RetrySequenceData, TerminationData,
+    : public hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
                                RetrySequenceData, BarrierData> {
 public:
     RetryLoopStateManager(
         std::shared_ptr<RetryLoopState> const &state,
         std::string const &name)
-        : hh::StateManager<3, MeshData, RetrySequenceData, TerminationData,
+        : hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
                             RetrySequenceData, BarrierData>(
               state, name) {}
 

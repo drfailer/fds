@@ -16,15 +16,15 @@
 ///
 /// Runs on a single thread.
 class VelocityPredictorCCCollector
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelocityPredictorCCCollector(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("VelPredCCCollector", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("VelPredCCCollector", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_[data->nm - nmOffset_] = data;
         ++count_;
 
@@ -46,7 +46,7 @@ private:
     int nmeshes_;
     int nmOffset_;
     int count_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 #endif // VELOCITY_PREDICTOR_STATE_H

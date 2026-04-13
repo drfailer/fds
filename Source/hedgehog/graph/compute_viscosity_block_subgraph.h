@@ -30,17 +30,17 @@ public:
 };
 
 /// Orchestrator task for viscosity block decomposition.
-/// Collects N MeshData tokens, then decomposes each mesh into K-blocks.
+/// Collects N MeshData<> tokens, then decomposes each mesh into K-blocks.
 class ComputeViscosityBlockOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshBlockData> {
 public:
     ComputeViscosityBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractTask<1, MeshData, MeshBlockData>("ViscOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshBlockData>("ViscOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -71,16 +71,16 @@ public:
 private:
     int nmeshes_;
     int numBlocks_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task for viscosity block decomposition.
-/// Reassembles blocks back into MeshData, runs sequential post-processing.
+/// Reassembles blocks back into MeshData<>, runs sequential post-processing.
 class ComputeViscosityBlockCollector
-    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
+    : public hh::AbstractTask<1, MeshBlockData, MeshData<>> {
 public:
     ComputeViscosityBlockCollector()
-        : hh::AbstractTask<1, MeshBlockData, MeshData>("ViscCollector", 1) {}
+        : hh::AbstractTask<1, MeshBlockData, MeshData<>>("ViscCollector", 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;
@@ -102,7 +102,7 @@ private:
     struct Entry {
         int count = 0;
         int expected = 0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     std::unordered_map<int, Entry> entries_;
 };
@@ -110,7 +110,7 @@ private:
 /// Build the compute viscosity sub-graph with block decomposition.
 inline auto buildComputeViscosityBlockSubgraph(int nmeshes, size_t kernelThreads,
                                                 int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("ViscosityBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("ViscosityBlock");
 
     auto orchestratorTask = std::make_shared<ComputeViscosityBlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<ComputeViscosityBlockKernelTask>(kernelThreads);

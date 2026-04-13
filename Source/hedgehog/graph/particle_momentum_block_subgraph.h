@@ -34,12 +34,12 @@ public:
 /// Build the particle momentum sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> Decompose -> PartMomBlockKernel(parallel) -> Reassemble -> MeshData
+///   MeshData<> -> Decompose -> PartMomBlockKernel(parallel) -> Reassemble -> MeshData<>
 ///
 /// @param kernelThreads Number of threads for parallel tasks
 /// @param numBlocks Target number of blocks per mesh
 inline auto buildParticleMomentumBlockSubgraph(size_t kernelThreads, int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("ParticleMomentumBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("ParticleMomentumBlock");
 
     auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "PartMomDecompose");
     auto blockKernel = std::make_shared<ParticleMomentumBlockKernelTask>(kernelThreads);

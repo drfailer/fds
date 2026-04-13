@@ -4,35 +4,53 @@
 #include <hedgehog/hedgehog.h>
 #include <vector>
 #include "../data/mesh_data.h"
-#include "../data/pressure_iteration_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Parallel pressure solve kernel task.
 ///
-/// Receives SolvePhaseData from PostExchangeRouter (pre-solve exchange done).
-/// Runs Phase 2 per mesh: MATCH_VELOCITY_FLUX (if baroclinic, moved from
-/// PreKernel for parallelization) -> NO_FLUX -> WALL_WORK1 zeroing
-/// (iteration 1 only) -> COMPUTE_RHS -> solver (FFT or ULMAT) ->
-/// CHECK_RESIDUALS.
+/// Accepts two input types:
+///   - MeshData<SolvePhase>: from PostExchangeRouter (single-process mode)
+///   - MeshData<Pressure>: from barrier (MPI mode)
 ///
-/// After solving, sets exchangeRound=1 and emits MeshData back to the
-/// exchange graph for post-solve exchange.
+/// Outputs MeshData<Pressure> with exchangeRound=1 for post-solve exchange.
 ///
 /// Multi-threaded: each clone processes one mesh independently.
 class PressureSolveKernelTask
-    : public hh::AbstractTask<1, SolvePhaseData, MeshData> {
+    : public hh::AbstractTask<2,
+          MeshData<MeshState::SolvePhase>,
+          MeshData<MeshState::Pressure>,
+          MeshData<MeshState::Pressure>> {
 public:
     explicit PressureSolveKernelTask(size_t kernelThreads, int presFlag)
-        : hh::AbstractTask<1, SolvePhaseData, MeshData>(
+        : hh::AbstractTask<2,
+              MeshData<MeshState::SolvePhase>,
+              MeshData<MeshState::Pressure>,
+              MeshData<MeshState::Pressure>>(
               "PressureSolveKernel", kernelThreads),
           presFlag_(presFlag) {}
 
-    void execute(std::shared_ptr<SolvePhaseData> spd) override {
-        auto md = spd->mesh;
-        // match_velocity_flux_kernel: only called when baroclinic term is active
-        // (or first iteration). Guards must match the original Fortran conditional:
-        // IF (ITERATE_BAROCLINIC_TERM .OR. PRESSURE_ITERATIONS==1).
-        // The flag is stable during parallel execution (set/cleared in barriers).
+    void execute(std::shared_ptr<MeshData<MeshState::SolvePhase>> spd) override {
+        doWork(spd->retag<MeshState::Pressure>());
+    }
+
+    void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {
+        doWork(md);
+    }
+
+    std::shared_ptr<hh::AbstractTask<2,
+        MeshData<MeshState::SolvePhase>,
+        MeshData<MeshState::Pressure>,
+        MeshData<MeshState::Pressure>>> copy() override {
+        return std::make_shared<PressureSolveKernelTask>(
+            this->numberThreads(), presFlag_);
+    }
+
+    // PRES_FLAG values from GLOBAL_CONSTANTS (cons.f90)
+    static constexpr int FFT_PRES_FLAG = 0;
+    static constexpr int ULMAT_PRES_FLAG = 3;
+
+private:
+    void doWork(std::shared_ptr<MeshData<MeshState::Pressure>> md) {
         if (fds_pressure_iteration_needs_baroclinic() ||
             fds_get_pressure_iterations() == 1) {
             if (fds_is_cc_ibm()) {
@@ -60,16 +78,6 @@ public:
         this->addResult(md);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, SolvePhaseData, MeshData>> copy() override {
-        return std::make_shared<PressureSolveKernelTask>(
-            this->numberThreads(), presFlag_);
-    }
-
-    // PRES_FLAG values from GLOBAL_CONSTANTS (cons.f90)
-    static constexpr int FFT_PRES_FLAG = 0;
-    static constexpr int ULMAT_PRES_FLAG = 3;
-
-private:
     int presFlag_;
 };
 

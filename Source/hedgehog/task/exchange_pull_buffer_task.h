@@ -10,31 +10,24 @@
 
 /// Parallel task that pulls exchange data from the buffer into OMESH arrays.
 ///
-/// For each source mesh NM that sends to this mesh NOM (same-rank and
-/// cross-rank), copies the buffered data into MESHES(NOM)%OMESH(NM)
-/// using the unified fds_exchange_pull_slab_recv dispatch.
-///
 /// Double-buffered: uses exchangeRound % 2 to select the buffer slot,
 /// matching the slot used by WriteBufferTask for the same round.
 ///
-/// The exchange code is read from md->exchangeCode at runtime.
-/// Buffer structure (offsets, sizes, recvSources) is identical across
-/// both slots for the same code, so recvSources from either slot works.
-///
 /// Thread safety: multiple threads pull for different destination meshes (NOM)
 /// concurrently.  Each writes to non-overlapping OMESH entries.
+template<MeshState S = MeshState::Default>
 class ExchangePullBufferTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<S>, MeshData<S>> {
     using BufferMap = std::unordered_map<int, std::array<std::shared_ptr<ExchangeBuffer>, 2>>;
 public:
     ExchangePullBufferTask(
         size_t numThreads,
         std::shared_ptr<BufferMap> buffers)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<S>, MeshData<S>>(
               "ExchangePull", numThreads),
           buffers_(std::move(buffers)) {}
 
-    void execute(std::shared_ptr<MeshData> md) override {
+    void execute(std::shared_ptr<MeshData<S>> md) override {
         int nom = md->nm;  // this mesh is the receiver
         int code = md->exchangeCode;
         int slot = md->exchangeRound % 2;
@@ -48,8 +41,8 @@ public:
         this->addResult(md);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>> copy() override {
-        return std::make_shared<ExchangePullBufferTask>(
+    std::shared_ptr<hh::AbstractTask<1, MeshData<S>, MeshData<S>>> copy() override {
+        return std::make_shared<ExchangePullBufferTask<S>>(
             this->numberThreads(), buffers_);
     }
 

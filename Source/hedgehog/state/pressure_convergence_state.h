@@ -5,41 +5,46 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
-#include "../data/pressure_iteration_data.h"
 #include "../data/mesh_data.h"
 #include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Pressure iteration convergence check barrier.
 ///
-/// Collects N MeshData tokens (after post-solve exchange and velocity error),
-/// then runs the MPI convergence check.
+/// Collects N MeshData<Pressure> tokens (after post-solve exchange and velocity
+/// error), then runs the MPI convergence check.
 ///
 /// Routes:
-///   - Converged: emit N MeshData tokens (exit subgraph)
-///   - Not converged: call increment(), emit PressureIterMeshData (cycle back)
+///   - Converged, predictor phase:  emit MeshData<PredictorPressure> (exit)
+///   - Converged, corrector phase:  emit MeshData<CorrectorPressure> (exit)
+///   - Not converged:               emit MeshData<Pressure> (cycle back)
+///
+/// Phase is determined from collected_[0]->phase (0=predictor, 1=corrector).
 ///
 /// Also handles ITERATE_PRESSURE=false (always exit after first pass).
 ///
 /// Termination: receives TerminationData from the graph input when the
 /// simulation is complete, setting done_=true so canTerminate() returns true.
 class PressureConvergenceState
-    : public hh::AbstractState<2, MeshData, TerminationData, PressureIterMeshData, MeshData> {
+    : public hh::AbstractState<2,
+          MeshData<MeshState::Pressure>, TerminationData,
+          MeshData<MeshState::Pressure>,
+          MeshData<MeshState::PredictorPressure>,
+          MeshData<MeshState::CorrectorPressure>> {
 public:
     /// @param nmeshes  Number of local meshes
-    /// @param predictor True for predictor phase
-    PressureConvergenceState(int nmeshes, bool predictor)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
-          predictor_(predictor) {
+    PressureConvergenceState(int nmeshes)
+        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<MeshState::Pressure>> data) override {
         collected_[data->nm - nmOffset_] = data;
 
         if (++count_ == nmeshes_) {
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
+            int phase = collected_[0]->phase;
 
             int converged;
             if (fds_iterate_pressure()) {
@@ -56,18 +61,26 @@ public:
             ++invocations_;
 
             if (converged) {
-                if (predictor_) {
+                if (phase == 0) {
                     fds_init_change_time_step(dt);
+                    for (int i = 0; i < nmeshes_; ++i) {
+                        this->addResult(
+                            collected_[i]->retag<MeshState::PredictorPressure>());
+                    }
+                } else {
+                    for (int i = 0; i < nmeshes_; ++i) {
+                        this->addResult(
+                            collected_[i]->retag<MeshState::CorrectorPressure>());
+                    }
                 }
-                this->batchAddResult(collected_);
             } else {
                 // Increment counter for next iteration
                 fds_pressure_iteration_increment();
 
                 for (int i = 0; i < nmeshes_; ++i) {
-                    this->bufferResult(std::make_shared<PressureIterMeshData>(std::move(collected_[i])));
+                    this->bufferResult(std::move(collected_[i]));
                 }
-                this->flushResults<PressureIterMeshData>();
+                this->flushResults<MeshData<MeshState::Pressure>>();
             }
 
             count_ = 0;
@@ -98,8 +111,7 @@ private:
     int nmeshes_;
     int nmOffset_;
     int count_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
-    bool predictor_;
+    std::vector<std::shared_ptr<MeshData<MeshState::Pressure>>> collected_;
     bool done_ = false;
     double convTime_ = 0.0;
     int invocations_ = 0;
@@ -107,12 +119,20 @@ private:
 
 /// Custom state manager for PressureConvergenceState with canTerminate.
 class PressureConvergenceManager
-    : public hh::StateManager<2, MeshData, TerminationData, PressureIterMeshData, MeshData> {
+    : public hh::StateManager<2,
+          MeshData<MeshState::Pressure>, TerminationData,
+          MeshData<MeshState::Pressure>,
+          MeshData<MeshState::PredictorPressure>,
+          MeshData<MeshState::CorrectorPressure>> {
 public:
     PressureConvergenceManager(
         std::shared_ptr<PressureConvergenceState> const& state,
         std::string const& name)
-        : hh::StateManager<2, MeshData, TerminationData, PressureIterMeshData, MeshData>(
+        : hh::StateManager<2,
+              MeshData<MeshState::Pressure>, TerminationData,
+              MeshData<MeshState::Pressure>,
+              MeshData<MeshState::PredictorPressure>,
+              MeshData<MeshState::CorrectorPressure>>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

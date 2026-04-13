@@ -8,10 +8,10 @@
 #include "../state/div_setup_state.h"
 #include "../task/div_setup_kernel_task.h"
 
-/// Build the Fork 1 Branch A sub-graph: MeshData -> VFLUX -> MeshData.
+/// Build the Fork 1 Branch A sub-graph: MeshData<> -> VFLUX -> MeshData<>.
 inline auto buildFork1VFluxSubgraph(int nmeshes, bool ccIBM,
                                      size_t divSetupThreads) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>(
         "Fork1-BranchA-VFlux");
 
     if (ccIBM) {

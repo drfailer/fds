@@ -13,35 +13,29 @@
 #include "../fds_fortran_interface.h"
 
 /// Barrier function signature: takes collected meshes, runs global work.
-using BarrierFn = std::function<void(std::vector<std::shared_ptr<MeshData>>&)>;
+/// Templated on MeshState so barriers can work with any MeshData variant.
+template<MeshState S = MeshState::Default>
+using BarrierFn = std::function<void(std::vector<std::shared_ptr<MeshData<S>>>&)>;
 
 /// Barrier collector task that collects N MeshData tokens, runs a barrier
 /// function, then re-emits N MeshData tokens.
 ///
 /// Runs on a single thread. Accumulates tokens internally, firing the
 /// barrier function only when all expected tokens have arrived.
-///
-/// Timing and routine info are exposed via extraPrintingInformation()
-/// for dot-file diagnostics.
+template<MeshState S = MeshState::Default>
 class BarrierCollectorTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<S>, MeshData<S>> {
 public:
-    /// @param nmeshes Number of unique meshes (determines output count)
-    /// @param name Task name for dot-file display
-    /// @param routines Label for dot-file display
-    /// @param fn Barrier function called when all tokens arrive
-    /// @param totalExpected Total tokens to collect before firing (default: nmeshes).
-    ///        Set to numBranches*nmeshes for fork-join+barrier merges.
     BarrierCollectorTask(int nmeshes, std::string name, std::string routines,
-                         BarrierFn fn, int totalExpected = 0)
-        : hh::AbstractTask<1, MeshData, MeshData>(std::move(name), 1),
+                         BarrierFn<S> fn, int totalExpected = 0)
+        : hh::AbstractTask<1, MeshData<S>, MeshData<S>>(std::move(name), 1),
           nmeshes_(nmeshes), routines_(std::move(routines)), fn_(std::move(fn)),
           totalExpected_(totalExpected > 0 ? totalExpected : nmeshes),
           nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<S>> data) override {
         collected_[data->nm - nmOffset_] = data;
         if (++count_ == totalExpected_) {
             auto t0 = std::chrono::steady_clock::now();
@@ -53,6 +47,11 @@ public:
             this->batchAddResult(collected_);
             for (auto &md : collected_) { md = nullptr; }
         }
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData<S>, MeshData<S>>> copy() override {
+        return std::make_shared<BarrierCollectorTask<S>>(
+            nmeshes_, routines_, routines_, fn_, totalExpected_);
     }
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
@@ -69,28 +68,31 @@ public:
 private:
     int nmeshes_, nmOffset_, count_ = 0, totalExpected_;
     std::string routines_;
-    BarrierFn fn_;
+    BarrierFn<S> fn_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<S>>> collected_;
 };
 
 /// Helper to create a BarrierCollectorTask.
+/// Uses generic Fn parameter so callers can pass auto-lambdas without
+/// breaking template argument deduction on S.
+template<MeshState S = MeshState::Default, typename Fn>
 inline auto makeBarrierSM(int nmeshes, std::string name,
-                           std::string routines, BarrierFn fn,
+                           std::string routines, Fn&& fn,
                            int totalExpected = 0) {
-    return std::make_shared<BarrierCollectorTask>(
-        nmeshes, std::move(name), std::move(routines), std::move(fn),
-        totalExpected);
+    return std::make_shared<BarrierCollectorTask<S>>(
+        nmeshes, std::move(name), std::move(routines),
+        std::forward<Fn>(fn), totalExpected);
 }
 
 /// Task variant: accepts pre-collected BarrierData, runs barrier function,
 /// scatters N MeshData tokens downstream. Used when upstream already holds
 /// collected meshes (e.g. retry loop output).
-class BarrierTask : public hh::AbstractTask<1, BarrierData, MeshData> {
+class BarrierTask : public hh::AbstractTask<1, BarrierData, MeshData<>> {
 public:
-    BarrierTask(std::string name, std::string routines, BarrierFn fn)
-        : hh::AbstractTask<1, BarrierData, MeshData>(std::move(name), 1),
+    BarrierTask(std::string name, std::string routines, BarrierFn<> fn)
+        : hh::AbstractTask<1, BarrierData, MeshData<>>(std::move(name), 1),
           routines_(std::move(routines)), fn_(std::move(fn)) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
@@ -115,13 +117,13 @@ public:
 
 private:
     std::string routines_;
-    BarrierFn fn_;
+    BarrierFn<> fn_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
 };
 
-/// Helper to create a BarrierTask (BarrierData → MeshData).
-inline auto makeBarrierTask(std::string name, std::string routines, BarrierFn fn) {
+/// Helper to create a BarrierTask (BarrierData -> MeshData).
+inline auto makeBarrierTask(std::string name, std::string routines, BarrierFn<> fn) {
     return std::make_shared<BarrierTask>(std::move(name), std::move(routines), std::move(fn));
 }
 

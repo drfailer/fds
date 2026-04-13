@@ -8,18 +8,18 @@
 /// Parallel kernel task for particle momentum transfer.
 /// Calls PARTICLE_MOMENTUM_TRANSFER_KERNEL per mesh (thread-safe).
 class ParticleMomentumKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit ParticleMomentumKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "ParticleMomentumKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_particle_momentum_kernel(data->nm, data->dt);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<ParticleMomentumKernelTask>(
             this->numberThreads());

@@ -53,17 +53,17 @@ private:
 ///
 /// Runs in parallel with DumpGlobalTask (different files).
 /// Receives no data when skipMeshDump=true (idle on non-dump timesteps).
-class DumpMeshOutputsTask : public hh::AbstractTask<1, MeshData, MeshData> {
+class DumpMeshOutputsTask : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit DumpMeshOutputsTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>("DumpMeshOutputs", numThreads) {}
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("DumpMeshOutputs", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_dump_mesh_outputs_ts(data->t, data->dt, data->nm);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<DumpMeshOutputsTask>(this->numberThreads());
     }

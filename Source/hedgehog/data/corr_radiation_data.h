@@ -10,10 +10,10 @@ struct CorrRadiationWork {
     int radIter;
     double radQSumPartial;
     double kfst4SumPartial;
-    std::shared_ptr<MeshData> originalMeshData;
+    std::shared_ptr<MeshData<>> originalMeshData;
 
     CorrRadiationWork(int nm_, double t_, int radIter_,
-                      std::shared_ptr<MeshData> md)
+                      std::shared_ptr<MeshData<>> md)
         : nm(nm_), t(t_), radIter(radIter_),
           radQSumPartial(0.0), kfst4SumPartial(0.0),
           originalMeshData(md) {}

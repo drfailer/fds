@@ -13,11 +13,11 @@
 /// Build the PredFinal sub-graph.
 ///
 /// PhaseTransition converted from state (PredFinalCollector) to task:
-///   CollectorState (N MeshData → 1 BarrierData) + PhaseTransitionTask (BarrierData → N MeshData)
+///   CollectorState (N MeshData<> → 1 BarrierData) + PhaseTransitionTask (BarrierData → N MeshData<>)
 ///
 ///   VelocityBCEdgesTask → CollectorState → PhaseTransitionTask → output
 inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<1, MeshData, MeshData>;
+    using SubGraphType = hh::Graph<1, MeshData<>, MeshData<>>;
     auto subgraph = std::make_shared<SubGraphType>("PredFinal");
 
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(kernelThreads, /*applyToEstimated=*/1);
@@ -40,7 +40,7 @@ inline auto buildPredFinalSubgraph(int nmeshes, size_t kernelThreads) {
 ///
 ///   CollectorState → OrchTask → VelocityBCEdgesTask → CollectorState → CorrFinalDumpTask
 inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<1, MeshData, MeshData, BarrierData>;
+    using SubGraphType = hh::Graph<1, MeshData<>, MeshData<>, BarrierData>;
     auto subgraph = std::make_shared<SubGraphType>("CorrFinal");
 
     bool ccIBM = fds_is_cc_ibm() != 0;

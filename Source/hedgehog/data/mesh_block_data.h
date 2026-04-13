@@ -18,11 +18,11 @@ struct MeshBlockData {
     int phase;           ///< 0 = predictor, 1 = corrector
     int totalBlocks;     ///< Total number of blocks for this mesh (for reassembly)
 
-    std::shared_ptr<MeshData> originalMeshData;  ///< Parent token for reassembly
+    std::shared_ptr<MeshData<>> originalMeshData;  ///< Parent token for reassembly
 
     MeshBlockData() = default;
     MeshBlockData(int nm_, int k1_, int k2_, double t_, double dt_, int phase_,
-                  int totalBlocks_, std::shared_ptr<MeshData> md)
+                  int totalBlocks_, std::shared_ptr<MeshData<>> md)
         : nm(nm_), k1(k1_), k2(k2_), t(t_), dt(dt_), phase(phase_),
           totalBlocks(totalBlocks_), originalMeshData(std::move(md)) {}
 

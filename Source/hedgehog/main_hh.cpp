@@ -117,7 +117,7 @@ int main(int argc, char *argv[]) {
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
 
-    // Step 4: Push initial MeshData tokens (one per LOCAL mesh) into the graph.
+    // Step 4: Push initial MeshData<> tokens (one per LOCAL mesh) into the graph.
     // Set PREDICTOR=TRUE and FIRST_PASS=TRUE for the first time step
     // IMPORTANT: Only push tokens for meshes owned by this MPI process
     fds_set_predictor(1);
@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
     fds_set_icyc(1);
 
     for (int nm = lower_mesh_index; nm <= upper_mesh_index; ++nm) {
-        auto md = std::make_shared<MeshData>(nm, t, dt, 0);  // phase=0 (predictor)
+        auto md = std::make_shared<MeshData<>>(nm, t, dt, 0);  // phase=0 (predictor)
         graph->pushData(md);
     }
 

@@ -25,7 +25,6 @@
 #include "../task/qr_add_copy_kernel_task.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
-#include "pressure_iteration_subgraph.h"
 #include "../task/pipeline_fork2_tasks.h"
 #include "../tool/thread_budget.h"
 
@@ -35,17 +34,20 @@
 ///   - Group A: Split into pre-barrier (soot+hvac) + ParticleOpsKernel + post-barrier (exchange+WallBC)
 ///   - Group B: WallBCFinalize stays in barrier (uses POINT_TO_MESH, not thread-safe)
 ///   - Group C: Split into pre-barrier (MeshExch2) + QRAddCopyKernel + post-barrier (DivExch)
-inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
+template<MeshState PressureTag = MeshState::Default>
+inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                                     std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                                     hh::comm::CommService *commService = nullptr) {
-    auto subgraph = std::make_shared<hh::Graph<2, MeshData, TerminationData, MeshData, BarrierData>>("Corrector");
+    auto subgraph = std::make_shared<hh::Graph<2,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>, BarrierData>>("Corrector");
 
     // --- Kernel tasks (threads from budget) ---
 
     auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(budget.corrStep1);
     auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(budget.corrWallBC);
-    auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask>(budget.corrDivPart2);
-    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask>(budget.velCorrector);
+    auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.corrDivPart2);
+    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask<PressureTag>>(budget.velCorrector);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
 
@@ -63,7 +65,7 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
             fds_mesh_exchange(4);
         });
 
-    bool useParallelPressure = fds_use_pressure_subgraph() != 0;
+    constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
     // --- Group A split: pre-barrier + ParticleOpsKernel + post-barrier ---
     //
@@ -227,19 +229,17 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(fork2DivP1Task, groupCPreSM);
         subgraph->edges(groupCPreSM, qrAddCopyKernelTask);
         subgraph->edges(qrAddCopyKernelTask, groupCPostSM);
-        // Post-barrier emits MeshData to DivP2
+        // Post-barrier emits MeshData<> to DivP2
         subgraph->edges(groupCPostSM, corrDivP2KernelTask);
     }
 
     // --- Common downstream: DivP2 -> Pressure -> VelCorr -> CorrFinal ---
 
-    if (useParallelPressure) {
-        auto corrPressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, budget, false,
-            depGraph, commService, fds_get_pres_flag());
-        subgraph->input<TerminationData>(corrPressureSubgraph);
-        subgraph->edges(corrDivP2KernelTask, corrPressureSubgraph);
-        subgraph->edges(corrPressureSubgraph, velCorrKernelTask);
+    if constexpr (useParallelPressure) {
+        // Pressure handled externally via shared pressure subgraph.
+        // DivP2<PressureTag> exits subgraph, VelCorr<PressureTag> receives from outside.
+        subgraph->outputs(corrDivP2KernelTask);
+        subgraph->template input<MeshData<PressureTag>>(velCorrKernelTask);
     } else {
         auto corrPressureSM = makeBarrierSM(nmeshes, "CorrPressure",
             "PRESSURE_ITERATION",
@@ -248,9 +248,6 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
             });
         subgraph->edges(corrDivP2KernelTask, corrPressureSM);
         subgraph->edges(corrPressureSM, velCorrKernelTask);
-        // Sink for TerminationData when parallel pressure is not used
-        auto termSinkTask = std::make_shared<TerminationDataSink>();
-        subgraph->input<TerminationData>(termSinkTask);
     }
 
     // CorrFinal sub-graph (MeshExch6b in CorrFinalOrch task)
@@ -259,6 +256,18 @@ inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
     subgraph->outputs(corrFinalSubgraph);
 
     return subgraph;
+}
+
+/// Dispatch wrapper: selects the correct template instantiation at runtime.
+inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
+                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
+                                    hh::comm::CommService *commService = nullptr) {
+    if (fds_use_pressure_subgraph()) {
+        return buildCorrectorSubgraphImpl<MeshState::CorrectorPressure>(
+            nmeshes, budget, depGraph, commService);
+    }
+    return buildCorrectorSubgraphImpl<MeshState::Default>(
+        nmeshes, budget, depGraph, commService);
 }
 
 #endif // CORRECTOR_SUBGRAPH_H

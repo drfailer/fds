@@ -8,19 +8,19 @@
 #include "../data/mesh_block_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Decomposes a MeshData token into multiple MeshBlockData tokens along K.
-/// Each MeshData produces ceil(KBAR / blockSize) blocks, dispatched immediately.
+/// Decomposes a MeshData<> token into multiple MeshBlockData tokens along K.
+/// Each MeshData<> produces ceil(KBAR / blockSize) blocks, dispatched immediately.
 ///
 /// Runs on a single thread.
 class MeshBlockDecomposeTask
-    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshBlockData> {
 public:
     /// @param numBlocks Target number of blocks per mesh
     explicit MeshBlockDecomposeTask(int numBlocks, std::string name = "MeshBlockDecompose")
-        : hh::AbstractTask<1, MeshData, MeshBlockData>(std::move(name), 1),
+        : hh::AbstractTask<1, MeshData<>, MeshBlockData>(std::move(name), 1),
           numBlocks_(std::max(1, numBlocks)) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         int kbar = fds_get_kbar(data->nm);
         int bs = std::max(1, (kbar + numBlocks_ - 1) / numBlocks_);
         int total = (kbar + bs - 1) / bs;
@@ -37,16 +37,16 @@ private:
     int numBlocks_;
 };
 
-/// Reassembles MeshBlockData tokens back into MeshData.
+/// Reassembles MeshBlockData tokens back into MeshData<>.
 /// Collects all blocks for a given mesh (identified by nm) and emits
-/// the original MeshData when all blocks have arrived.
+/// the original MeshData<> when all blocks have arrived.
 ///
 /// Runs on a single thread.
 class MeshBlockReassembleTask
-    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
+    : public hh::AbstractTask<1, MeshBlockData, MeshData<>> {
 public:
     explicit MeshBlockReassembleTask(std::string name = "MeshBlockReassemble")
-        : hh::AbstractTask<1, MeshBlockData, MeshData>(std::move(name), 1) {}
+        : hh::AbstractTask<1, MeshBlockData, MeshData<>>(std::move(name), 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;
@@ -66,7 +66,7 @@ private:
     struct Entry {
         int count = 0;
         int expected = 0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     std::unordered_map<int, Entry> entries_;
 };

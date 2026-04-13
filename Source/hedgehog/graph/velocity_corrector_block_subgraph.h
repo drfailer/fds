@@ -12,19 +12,19 @@
 /// Merged pre-decompose kernel for velocity corrector.
 /// CC_PROJECT_VELOCITY store + WALL_VELOCITY_NO_GRADH store.
 class VelCorrPreKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelCorrPreKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "VelCorrPreKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_cc_project_velocity_kernel(data->nm, data->dt, 1, 0);
         fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 1, 0);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<VelCorrPreKernelTask>(this->numberThreads());
     }
@@ -54,20 +54,20 @@ public:
 /// Merged post-reassembly kernel for velocity corrector.
 /// CC_PROJECT_VELOCITY fix + WALL_VELOCITY_NO_GRADH fix + CHECK_DIVERGENCE.
 class VelCorrPostKernelTask
-    : public hh::AbstractTask<1, MeshData, MeshData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit VelCorrPostKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "VelCorrPostKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 0);
         fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 0);
         fds_check_divergence_kernel(data->nm);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<VelCorrPostKernelTask>(this->numberThreads());
     }
@@ -76,13 +76,13 @@ public:
 /// Build the velocity corrector sub-graph with block decomposition.
 ///
 /// Pipeline:
-///   MeshData -> VelCorrPreKernel(CCProjectVelStore + WallVelStore)
+///   MeshData<> -> VelCorrPreKernel(CCProjectVelStore + WallVelStore)
 ///            -> Decompose -> VelCorrBlockKernel(parallel) -> Reassemble
 ///            -> VelCorrPostKernel(CCProjectVelFix + WallVelFix + CheckDiv)
-///            -> MeshData
+///            -> MeshData<>
 inline auto buildVelocityCorrectorBlockSubgraph(size_t blockThreads,
                                                   int numBlocks, int nmeshes) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("VelocityCorrectorBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("VelocityCorrectorBlock");
 
     auto preKernel = std::make_shared<VelCorrPreKernelTask>(static_cast<size_t>(nmeshes));
     auto decomposeTask = std::make_shared<MeshBlockDecomposeTask>(numBlocks, "VelCorrDecompose");

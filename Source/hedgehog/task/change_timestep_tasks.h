@@ -16,15 +16,15 @@
 /// bypasses the kernel via type-based routing to RetryLoopState.
 ///
 /// When retry is needed: runs density, mesh exchange, velocity flux,
-/// HVAC, divergence init, and wall BC, then scatters MeshData tokens
+/// HVAC, divergence init, and wall BC, then scatters MeshData<> tokens
 /// for parallel kernel processing.
 class RetryPreKernelTask
     : public hh::AbstractTask<2, BarrierData, RetrySequenceData,
-                              MeshData, RetrySequenceData> {
+                              MeshData<>, RetrySequenceData> {
 public:
     RetryPreKernelTask()
         : hh::AbstractTask<2, BarrierData, RetrySequenceData,
-                           MeshData, RetrySequenceData>("RetryPreKernel", 1) {}
+                           MeshData<>, RetrySequenceData>("RetryPreKernel", 1) {}
 
     /// Entry from subgraph input: check if retry is needed.
     void execute(std::shared_ptr<BarrierData> barrier) override {
@@ -86,24 +86,24 @@ private:
             fds_wall_bc(data->t, data->dt, md->nm);
         }
 
-        // Scatter MeshData for parallel kernel processing
+        // Scatter MeshData<> for parallel kernel processing
         this->batchAddResult(data->meshes);
     }
 };
 
 /// Parallel kernel for particle momentum + divergence part 1 in retry path.
-class RetryMomentumDivKernelTask : public hh::AbstractTask<1, MeshData, MeshData> {
+class RetryMomentumDivKernelTask : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit RetryMomentumDivKernelTask(size_t kernelThreads)
-        : hh::AbstractTask<1, MeshData, MeshData>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
               "RetryMomentumDivKernel", kernelThreads) {}
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, MeshData>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
         return std::make_shared<RetryMomentumDivKernelTask>(this->numberThreads());
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         fds_particle_momentum_kernel(data->nm, data->dt);
         fds_divergence_part_1_kernel(data->nm, data->t, data->dt);
         this->addResult(data);

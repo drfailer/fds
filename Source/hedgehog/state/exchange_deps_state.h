@@ -15,21 +15,17 @@
 /// Double-buffered dependency gate state for the mesh exchange pipeline.
 ///
 /// Receives two input types:
-///   - MeshData: pending tokens from graph input (one per local mesh per round)
+///   - MeshData<S>: pending tokens from graph input (one per local mesh per round)
 ///   - ExchangeDepSignal: dep satisfaction from WriteBufferTask
-///     (one per (source, dest) pair per round)
 ///
 /// Uses roundId/exchangeRound % 2 to index into one of two RoundSlots,
-/// so concurrent exchange rounds (e.g. pre-solve round 0 and post-solve
-/// round 1) never share state.
+/// so concurrent exchange rounds never share state.
 ///
 /// When all recv deps for a local mesh are satisfied in a slot (or the mesh
-/// has no deps), emits its pending MeshData token downstream to the pull task.
-///
-/// Slot resets automatically after all local meshes have been emitted from
-/// that slot.
+/// has no deps), emits its pending MeshData<S> token downstream to the pull task.
+template<MeshState S = MeshState::Default>
 class ExchangeDepsGateState
-    : public hh::AbstractState<2, MeshData, ExchangeDepSignal, MeshData> {
+    : public hh::AbstractState<2, MeshData<S>, ExchangeDepSignal, MeshData<S>> {
 public:
     ExchangeDepsGateState(std::shared_ptr<MeshDependencyGraph> depGraph)
         : depGraph_(std::move(depGraph)),
@@ -49,7 +45,6 @@ public:
             }
         }
 
-        // Initialize both round slots
         size_t totalPlus1 = static_cast<size_t>(depGraph_->totalMeshes() + 1);
         for (auto &slot : slots_) {
             slot.pendingMeshes.resize(totalPlus1);
@@ -58,8 +53,7 @@ public:
         }
     }
 
-    /// Pending token from graph input broadcast.
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<S>> data) override {
         auto t0 = std::chrono::steady_clock::now();
         int slot = data->exchangeRound % 2;
         slots_[slot].pendingMeshes[static_cast<size_t>(data->nm)] = data;
@@ -69,7 +63,6 @@ public:
         ++invocations_;
     }
 
-    /// Dep arrival: sourceNm wrote data for destNom into buffer.
     void execute(std::shared_ptr<ExchangeDepSignal> signal) override {
         auto t0 = std::chrono::steady_clock::now();
         int slot = signal->roundId % 2;
@@ -98,7 +91,7 @@ public:
 
 private:
     struct RoundSlot {
-        std::vector<std::shared_ptr<MeshData>> pendingMeshes;
+        std::vector<std::shared_ptr<MeshData<S>>> pendingMeshes;
         std::vector<int> arrivalCount;
         int emitCount = 0;
     };
@@ -130,27 +123,26 @@ private:
     int upper_;
     int nmeshes_;
     std::array<RoundSlot, 2> slots_;
-    std::vector<int> totalRecvDeps_;  // read-only, shared across slots
-    std::vector<bool> noDeps_;        // read-only, shared across slots
+    std::vector<int> totalRecvDeps_;
+    std::vector<bool> noDeps_;
     double gateTime_ = 0.0;
     int invocations_ = 0;
 };
 
 /// StateManager wrapper for ExchangeDepsGateState.
-/// No canTerminate needed — the exchange graph has no internal cycle.
-/// Cycle-breaking is handled by the PostExchangeRouter in the parent graph.
+template<MeshState S = MeshState::Default>
 class ExchangeDepsGateManager
-    : public hh::StateManager<2, MeshData, ExchangeDepSignal, MeshData> {
+    : public hh::StateManager<2, MeshData<S>, ExchangeDepSignal, MeshData<S>> {
 public:
     ExchangeDepsGateManager(
-        std::shared_ptr<ExchangeDepsGateState> const &state,
+        std::shared_ptr<ExchangeDepsGateState<S>> const &state,
         std::string const &name)
-        : hh::StateManager<2, MeshData, ExchangeDepSignal, MeshData>(
+        : hh::StateManager<2, MeshData<S>, ExchangeDepSignal, MeshData<S>>(
               state, name) {}
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         this->state()->lock();
-        auto ret = std::dynamic_pointer_cast<ExchangeDepsGateState>(
+        auto ret = std::dynamic_pointer_cast<ExchangeDepsGateState<S>>(
             this->state())->info();
         this->state()->unlock();
         return ret;

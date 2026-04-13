@@ -17,19 +17,20 @@
 ///
 /// MeshData pending tokens flow to the gate via graph-level input broadcast
 /// (the graph input connects to both this task and the gate).
+template<MeshState S = MeshState::Default>
 class ExchangeFanOutTask
-    : public hh::AbstractTask<1, MeshData, ExchangeMeshData> {
+    : public hh::AbstractTask<1, MeshData<S>, ExchangeMeshData> {
     using Pool = hh::comm::tool::MemoryPool<ExchangeMeshData>;
 public:
     ExchangeFanOutTask(size_t numThreads,
                        std::shared_ptr<MeshDependencyGraph> depGraph,
                        std::shared_ptr<Pool> pool)
-        : hh::AbstractTask<1, MeshData, ExchangeMeshData>(
+        : hh::AbstractTask<1, MeshData<S>, ExchangeMeshData>(
               "ExchangeFanOut", numThreads),
           depGraph_(std::move(depGraph)),
           pool_(std::move(pool)) {}
 
-    void execute(std::shared_ptr<MeshData> md) override {
+    void execute(std::shared_ptr<MeshData<S>> md) override {
         int nm = md->nm;
         int code = md->exchangeCode;
         int round = md->exchangeRound;
@@ -43,8 +44,8 @@ public:
         }
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData, ExchangeMeshData>> copy() override {
-        return std::make_shared<ExchangeFanOutTask>(
+    std::shared_ptr<hh::AbstractTask<1, MeshData<S>, ExchangeMeshData>> copy() override {
+        return std::make_shared<ExchangeFanOutTask<S>>(
             this->numberThreads(), depGraph_, pool_);
     }
 

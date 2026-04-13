@@ -12,11 +12,11 @@
 /// The exchange task uses pull-only copies: each mesh pulls from all its
 /// neighbors, writing only to its own OMESH buffers.
 struct MeshExchangeData {
-    std::shared_ptr<MeshData> mesh;   ///< The mesh to exchange
+    std::shared_ptr<MeshData<>> mesh;   ///< The mesh to exchange
     std::vector<int> neighbors;       ///< Same-rank neighbors to pull from (1-based)
 
     MeshExchangeData() = default;
-    MeshExchangeData(std::shared_ptr<MeshData> m, std::vector<int> nbrs)
+    MeshExchangeData(std::shared_ptr<MeshData<>> m, std::vector<int> nbrs)
         : mesh(std::move(m)), neighbors(std::move(nbrs)) {}
 
     friend std::ostream &operator<<(std::ostream &os, const MeshExchangeData &d) {

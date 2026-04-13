@@ -8,20 +8,20 @@
 
 #include <vector>
 
-/// Orchestrator task: collects N MeshData tokens, dispatches parallel radiation work.
+/// Orchestrator task: collects N MeshData<> tokens, dispatches parallel radiation work.
 /// No sequential pre-processing needed (MESH_EXCHANGE(6) already done).
 ///
 /// Runs on a single thread.
 class CorrRadiationOrchestrator
-    : public hh::AbstractTask<1, MeshData, CorrRadiationWork> {
+    : public hh::AbstractTask<1, MeshData<>, CorrRadiationWork> {
 public:
     explicit CorrRadiationOrchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData, CorrRadiationWork>("CorrRadOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, CorrRadiationWork>("CorrRadOrch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             for (auto &md : collected_) {
@@ -36,19 +36,19 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task: gathers N CorrRadiationWork results, accumulates global
-/// RAD_Q_SUM/KFST4_SUM, emits N MeshData tokens downstream.
+/// RAD_Q_SUM/KFST4_SUM, emits N MeshData<> tokens downstream.
 ///
 /// Uses direct indexed placement (nm - offset) to avoid sorting.
 /// Runs on a single thread.
 class CorrRadiationCollector
-    : public hh::AbstractTask<1, CorrRadiationWork, MeshData> {
+    : public hh::AbstractTask<1, CorrRadiationWork, MeshData<>> {
 public:
     explicit CorrRadiationCollector(int nmeshes)
-        : hh::AbstractTask<1, CorrRadiationWork, MeshData>("CorrRadCollector", 1),
+        : hh::AbstractTask<1, CorrRadiationWork, MeshData<>>("CorrRadCollector", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
@@ -65,7 +65,7 @@ public:
             for (auto &w : collected_) {
                 this->bufferResult(w->originalMeshData);
             }
-            this->flushResults<MeshData>();
+            this->flushResults<MeshData<>>();
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;
         }

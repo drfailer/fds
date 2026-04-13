@@ -9,7 +9,7 @@
 
 inline auto buildCorrRadiationSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<
-        hh::Graph<1, MeshData, MeshData>>("CorrRadiation");
+        hh::Graph<1, MeshData<>, MeshData<>>>("CorrRadiation");
 
     auto orchTask = std::make_shared<CorrRadiationOrchestrator>(nmeshes);
     auto kernelTask = std::make_shared<CorrRadiationKernelTask>(

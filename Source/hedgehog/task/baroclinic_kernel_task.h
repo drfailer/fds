@@ -7,29 +7,51 @@
 
 /// Parallel baroclinic correction kernel task.
 ///
-/// Calls fds_baroclinic_correction(t, nm) per mesh. The Fortran routine
-/// internally checks BAROCLINIC/SOLID_PHASE_ONLY/FREEZE_VELOCITY and is
-/// a no-op when correction is not applicable.
+/// Entry point for the pressure iteration subgraph. Accepts three input types:
+///   - MeshData<PredictorPressure>: initial entry from predictor pipeline
+///   - MeshData<CorrectorPressure>: initial entry from corrector pipeline
+///   - MeshData<Pressure>: cycle-back from convergence state
+///
+/// All inputs are converted to MeshData<Pressure> for the internal pipeline.
 ///
 /// Multi-threaded: each clone processes one mesh independently.
 class BaroclinicKernelTask
-    : public hh::AbstractTask<2, PressureIterMeshData, MeshData, MeshData> {
+    : public hh::AbstractTask<3,
+          MeshData<MeshState::PredictorPressure>,
+          MeshData<MeshState::CorrectorPressure>,
+          MeshData<MeshState::Pressure>,
+          MeshData<MeshState::Pressure>> {
 public:
     explicit BaroclinicKernelTask(size_t kernelThreads)
-        : hh::AbstractTask<2, PressureIterMeshData, MeshData, MeshData>(
+        : hh::AbstractTask<3,
+              MeshData<MeshState::PredictorPressure>,
+              MeshData<MeshState::CorrectorPressure>,
+              MeshData<MeshState::Pressure>,
+              MeshData<MeshState::Pressure>>(
               "BaroclinicKernel", kernelThreads) {}
 
-    // simply unwrap the mesh when starting a new iteration
-    void execute(std::shared_ptr<PressureIterMeshData> pimd) override {
-        execute(pimd->mesh);
+    void execute(std::shared_ptr<MeshData<MeshState::PredictorPressure>> md) override {
+        doWork(md->retag<MeshState::Pressure>());
     }
 
-    void execute(std::shared_ptr<MeshData> md) override {
-        // Only apply baroclinic correction when ITERATE_BAROCLINIC_TERM is true.
-        // This flag starts as true (set by init) and is cleared by the
-        // convergence check when pressure error drops below tolerance.
-        // The flag is stable during parallel execution (set/cleared only
-        // in barrier contexts between iterations).
+    void execute(std::shared_ptr<MeshData<MeshState::CorrectorPressure>> md) override {
+        doWork(md->retag<MeshState::Pressure>());
+    }
+
+    void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {
+        doWork(md);
+    }
+
+    std::shared_ptr<hh::AbstractTask<3,
+        MeshData<MeshState::PredictorPressure>,
+        MeshData<MeshState::CorrectorPressure>,
+        MeshData<MeshState::Pressure>,
+        MeshData<MeshState::Pressure>>> copy() override {
+        return std::make_shared<BaroclinicKernelTask>(this->numberThreads());
+    }
+
+private:
+    void doWork(std::shared_ptr<MeshData<MeshState::Pressure>> md) {
         if (fds_pressure_iteration_needs_baroclinic()) {
             fds_baroclinic_correction(md->t, md->nm);
         }
@@ -38,10 +60,6 @@ public:
         }
         md->exchangeRound = 0;  // pre-solve exchange
         this->addResult(md);
-    }
-
-    std::shared_ptr<hh::AbstractTask<2, PressureIterMeshData, MeshData, MeshData>> copy() override {
-        return std::make_shared<BaroclinicKernelTask>(this->numberThreads());
     }
 };
 

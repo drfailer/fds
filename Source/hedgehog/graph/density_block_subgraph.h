@@ -31,15 +31,15 @@ public:
 
 /// Orchestrator task for density block decomposition.
 class DensityBlockOrchestrator
-    : public hh::AbstractTask<1, MeshData, MeshBlockData> {
+    : public hh::AbstractTask<1, MeshData<>, MeshBlockData> {
 public:
     DensityBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractTask<1, MeshData, MeshBlockData>("DensityOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshBlockData>("DensityOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -68,15 +68,15 @@ public:
 private:
     int nmeshes_;
     int numBlocks_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task for density block decomposition.
 class DensityBlockCollector
-    : public hh::AbstractTask<1, MeshBlockData, MeshData> {
+    : public hh::AbstractTask<1, MeshBlockData, MeshData<>> {
 public:
     DensityBlockCollector()
-        : hh::AbstractTask<1, MeshBlockData, MeshData>("DensityCollector", 1) {}
+        : hh::AbstractTask<1, MeshBlockData, MeshData<>>("DensityCollector", 1) {}
 
     void execute(std::shared_ptr<MeshBlockData> block) override {
         int nm = block->nm;
@@ -98,7 +98,7 @@ private:
     struct Entry {
         int count = 0;
         int expected = 0;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     std::unordered_map<int, Entry> entries_;
 };
@@ -106,7 +106,7 @@ private:
 /// Build the density sub-graph with block decomposition.
 inline auto buildDensityBlockSubgraph(int nmeshes, size_t kernelThreads,
                                        int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>("DensityBlock");
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>("DensityBlock");
 
     auto orchestratorTask = std::make_shared<DensityBlockOrchestrator>(nmeshes, numBlocks);
     auto blockKernel = std::make_shared<DensityBlockKernelTask>(kernelThreads);

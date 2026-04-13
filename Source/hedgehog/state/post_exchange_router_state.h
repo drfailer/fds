@@ -4,26 +4,26 @@
 #include <hedgehog/hedgehog.h>
 #include <memory>
 #include "../data/mesh_data.h"
-#include "../data/pressure_iteration_data.h"
 #include "../data/termination_data.h"
 
-/// Pass-through router: dispatches each MeshData immediately (no collection)
-/// based on exchangeRound to SolvePhaseData or VelErrorPhaseData.
+/// Pass-through router: dispatches each MeshData<Pressure> immediately
+/// (no collection) based on exchangeRound to SolvePhase or VelErrorPhase.
 ///
-/// exchangeRound % 2 == 0 -> SolvePhaseData (pre-solve exchange done)
-/// exchangeRound % 2 == 1 -> VelErrorPhaseData (post-solve exchange done)
+/// exchangeRound % 2 == 0 -> MeshData<SolvePhase> (pre-solve exchange done)
+/// exchangeRound % 2 == 1 -> MeshData<VelErrorPhase> (post-solve exchange done)
 ///
 /// Also receives TerminationData so the StateManager's canTerminate()
 /// can break the cycle: Exchange -> Router -> SolveKernel -> Exchange.
 class PostExchangeRouterState
-    : public hh::AbstractState<2, MeshData, TerminationData,
-                               SolvePhaseData, VelErrorPhaseData> {
+    : public hh::AbstractState<2,
+          MeshData<MeshState::Pressure>, TerminationData,
+          MeshData<MeshState::SolvePhase>, MeshData<MeshState::VelErrorPhase>> {
 public:
-    void execute(std::shared_ptr<MeshData> md) override {
+    void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {
         if (md->exchangeRound % 2 == 0) {
-            this->addResult(std::make_shared<SolvePhaseData>(std::move(md)));
+            this->addResult(md->retag<MeshState::SolvePhase>());
         } else {
-            this->addResult(std::make_shared<VelErrorPhaseData>(std::move(md)));
+            this->addResult(md->retag<MeshState::VelErrorPhase>());
         }
     }
 
@@ -39,14 +39,16 @@ private:
 
 /// StateManager for PostExchangeRouterState with canTerminate to break cycle.
 class PostExchangeRouterManager
-    : public hh::StateManager<2, MeshData, TerminationData,
-                              SolvePhaseData, VelErrorPhaseData> {
+    : public hh::StateManager<2,
+          MeshData<MeshState::Pressure>, TerminationData,
+          MeshData<MeshState::SolvePhase>, MeshData<MeshState::VelErrorPhase>> {
 public:
     PostExchangeRouterManager(
         std::shared_ptr<PostExchangeRouterState> const &state,
         std::string const &name)
-        : hh::StateManager<2, MeshData, TerminationData,
-                           SolvePhaseData, VelErrorPhaseData>(
+        : hh::StateManager<2,
+              MeshData<MeshState::Pressure>, TerminationData,
+              MeshData<MeshState::SolvePhase>, MeshData<MeshState::VelErrorPhase>>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

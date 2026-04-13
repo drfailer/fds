@@ -33,15 +33,15 @@ public:
 
 /// Orchestrator task for WallBC block decomposition.
 class WallBCBlockOrchestrator
-    : public hh::AbstractTask<1, MeshData, WallBCBlockWork> {
+    : public hh::AbstractTask<1, MeshData<>, WallBCBlockWork> {
 public:
     WallBCBlockOrchestrator(int nmeshes, int numBlocks)
-        : hh::AbstractTask<1, MeshData, WallBCBlockWork>("WallBCBlockOrch", 1),
+        : hh::AbstractTask<1, MeshData<>, WallBCBlockWork>("WallBCBlockOrch", 1),
           nmeshes_(nmeshes), numBlocks_(std::max(1, numBlocks)) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
 
         if (static_cast<int>(collected_.size()) == nmeshes_) {
@@ -82,15 +82,15 @@ public:
 private:
     int nmeshes_;
     int numBlocks_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Collector task for WallBC block decomposition.
 class WallBCBlockCollector
-    : public hh::AbstractTask<1, WallBCBlockWork, MeshData> {
+    : public hh::AbstractTask<1, WallBCBlockWork, MeshData<>> {
 public:
     explicit WallBCBlockCollector(int nmeshes)
-        : hh::AbstractTask<1, WallBCBlockWork, MeshData>("WallBCBlockColl", 1),
+        : hh::AbstractTask<1, WallBCBlockWork, MeshData<>>("WallBCBlockColl", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {}
 
     void execute(std::shared_ptr<WallBCBlockWork> block) override {
@@ -140,7 +140,7 @@ private:
         double dt_bc = 0.0;
         int call_ht_1d = 0;
         bool isCorrector = false;
-        std::shared_ptr<MeshData> meshData;
+        std::shared_ptr<MeshData<>> meshData;
     };
     int nmeshes_;
     int nmOffset_;
@@ -151,7 +151,7 @@ private:
 /// Build the WallBC sub-graph with intra-mesh K-block decomposition.
 inline auto buildWallBCBlockSubgraph(int nmeshes, size_t kernelThreads,
                                       int numBlocks) {
-    auto subgraph = std::make_shared<hh::Graph<1, MeshData, MeshData>>(
+    auto subgraph = std::make_shared<hh::Graph<1, MeshData<>, MeshData<>>>(
         "WallBCBlock");
 
     auto orchestratorTask = std::make_shared<WallBCBlockOrchestrator>(nmeshes, numBlocks);

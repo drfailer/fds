@@ -14,21 +14,21 @@
 /// Merged dump-join + timestep-loop state.
 ///
 /// Joins the two dump fork branches:
-///   - N MeshData tokens from DumpMeshOutputsTask (per-mesh I/O)
+///   - N MeshData<> tokens from DumpMeshOutputsTask (per-mesh I/O)
 ///   - 1 BarrierData from DumpGlobalTask (global computation + global I/O)
 ///
-/// When skipMeshDump is set on the BarrierData, no MeshData tokens are
+/// When skipMeshDump is set on the BarrierData, no MeshData<> tokens are
 /// expected and the state proceeds immediately (skip-dump optimization).
 ///
 /// After joining, performs STOP_CHECK and the termination decision:
 ///   - If done: emits BarrierData → graph output for clean shutdown
-///   - If not done: adjusts DT, emits MeshData tokens → Predictor (cycle)
-class TimestepState : public hh::AbstractState<2, MeshData, BarrierData, MeshData, BarrierData> {
+///   - If not done: adjusts DT, emits MeshData<> tokens → Predictor (cycle)
+class TimestepState : public hh::AbstractState<2, MeshData<>, BarrierData, MeshData<>, BarrierData> {
 public:
     TimestepState(int nmeshes, double tEnd, std::shared_ptr<int> icyc)
         : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)) {}
 
-    void execute(std::shared_ptr<MeshData> /*data*/) override {
+    void execute(std::shared_ptr<MeshData<>> /*data*/) override {
         ++meshCount_;
         tryFinalize();
     }
@@ -88,7 +88,7 @@ private:
                 md->call_ht_1d = 0;
                 this->bufferResult(md);
             }
-            this->flushResults<MeshData>();
+            this->flushResults<MeshData<>>();
         }
 
         meshCount_ = 0;
@@ -113,11 +113,11 @@ private:
 /// StateManager for TimestepState.
 /// Overrides canTerminate() to break the cycle when the simulation is done.
 class TimestepStateManager
-    : public hh::StateManager<2, MeshData, BarrierData, MeshData, BarrierData> {
+    : public hh::StateManager<2, MeshData<>, BarrierData, MeshData<>, BarrierData> {
 public:
     TimestepStateManager(std::shared_ptr<TimestepState> const &state,
                          std::string const &name)
-        : hh::StateManager<2, MeshData, BarrierData, MeshData, BarrierData>(
+        : hh::StateManager<2, MeshData<>, BarrierData, MeshData<>, BarrierData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

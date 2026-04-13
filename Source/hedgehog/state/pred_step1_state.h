@@ -7,19 +7,19 @@
 #include "../fds_fortran_interface.h"
 
 /// Orchestrator task for PredStep1 sub-graph.
-/// Collects N MeshData tokens, runs sequential INSERT_ALL_PARTICLES for each mesh,
-/// then dispatches MeshData for parallel COMPUTE_VISCOSITY + MASS_FINITE_DIFFERENCES kernels.
+/// Collects N MeshData<> tokens, runs sequential INSERT_ALL_PARTICLES for each mesh,
+/// then dispatches MeshData<> for parallel COMPUTE_VISCOSITY + MASS_FINITE_DIFFERENCES kernels.
 ///
 /// Runs on a single thread.
-class PredStep1Orchestrator : public hh::AbstractTask<1, MeshData, MeshData> {
+class PredStep1Orchestrator : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit PredStep1Orchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData, MeshData>("PredStep1Orch", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>("PredStep1Orch", 1),
           nmeshes_(nmeshes) {
         collected_.reserve(nmeshes);
     }
 
-    void execute(std::shared_ptr<MeshData> data) override {
+    void execute(std::shared_ptr<MeshData<>> data) override {
         collected_.push_back(data);
         if (static_cast<int>(collected_.size()) == nmeshes_) {
             // Sequential pre-processing: INSERT_ALL_PARTICLES (cross-mesh, global state)
@@ -35,7 +35,7 @@ public:
 
 private:
     int nmeshes_;
-    std::vector<std::shared_ptr<MeshData>> collected_;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 #endif // PRED_STEP1_STATE_H
