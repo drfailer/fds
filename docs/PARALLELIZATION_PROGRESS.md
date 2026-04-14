@@ -270,9 +270,14 @@ WALL_BC_FINALIZE already uses `M => MESHES(NM)` (no POINT_TO_MESH). Extracted to
 
 **Location**: corrector_subgraph.h:84-91
 
-Per-mesh particle operations in RemoveMove+MeshExch7+WallBCOrch barrier. Each mesh processes its own particles, but MOVE_PARTICLES may transfer particles to neighbor meshes via OMESH. Needs analysis of whether particle handoff is deferred to mesh_exchange.
+**Analysis result**: Both routines are thread-safe for per-mesh parallelization:
+- REMOVE_PARTICLES (171 lines): writes to `M%OMESH(NOM)%PARTICLE_SEND_BUFFER` which is owned by the source mesh M, not the target — no cross-mesh writes. Array compaction is local.
+- MOVE_PARTICLES (1658 lines): writes only to current mesh M. No cross-mesh writes. No global state.
+- Particle cross-mesh transfer is deferred to MESH_EXCHANGE(7) via OMESH send buffers.
 
-**Status**: Not started
+Merged into ParticleOpsKernelTask (condensation + mass/energy + remove + move + momentum). Barrier reduced to MESH_EXCHANGE(7) + WallBC orchestration only.
+
+**Status**: ✅ COMPLETE — 20/20 custom, 58/58 verification (tol=1e-6)
 
 ### Target 3: DIVERGENCE_PART_2_PREPROCESSING (4 barriers)
 

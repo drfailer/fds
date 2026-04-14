@@ -80,15 +80,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // Extracted: condensation + particle mass/energy (parallel per-mesh)
     auto particleOpsKernelTask = std::make_shared<ParticleOpsKernelTask>(budget.corrParticleOps);
 
-    // Post-barrier (N→N): sequential particle ops + exchange + WallBC orch
-    auto groupAPostSM = makeBarrierSM(nmeshes, "RemoveMove+MeshExch7+WallBCOrch",
-        "REMOVE+MOVE+PARTMOM\\nMESH_EXCHANGE(7)\\nWALLBC_ORCH",
+    // Post-barrier (N→N): exchange + WallBC orch (particle ops moved to kernel)
+    auto groupAPostSM = makeBarrierSM(nmeshes, "MeshExch7+WallBCOrch",
+        "MESH_EXCHANGE(7)\\nWALLBC_ORCH",
         [](auto& meshes) {
-            for (auto &md : meshes) {
-                fds_remove_particles(md->t, md->nm);
-                fds_move_particles(md->t, md->dt, md->nm);
-                fds_particle_momentum_kernel(md->nm, md->dt);
-            }
             fds_mesh_exchange(7);
             // WallBC global state (corrector phase)
             double dt_bc = fds_compute_wall_bc_dt_bc(meshes[0]->t);

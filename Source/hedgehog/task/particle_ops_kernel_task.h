@@ -5,12 +5,11 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Parallel kernel task for condensation + particle mass/energy transfer.
-/// Extracted from groupA barrier to run per-mesh in parallel.
-///
-/// Note: fds_remove_particles and fds_move_particles are NOT included
-/// because they still use POINT_TO_MESH (not thread-safe). Those remain
-/// in the downstream sequential barrier.
+/// Parallel kernel task for all per-mesh corrector particle operations:
+/// condensation, mass/energy transfer, remove, move, and momentum.
+/// All routines write only to the current mesh (no cross-mesh writes).
+/// Particle cross-mesh transfer is buffered into OMESH send buffers
+/// for later MESH_EXCHANGE(7).
 class ParticleOpsKernelTask
     : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
@@ -21,6 +20,9 @@ public:
     void execute(std::shared_ptr<MeshData<>> data) override {
         fds_condensation_kernel(data->nm, data->dt);
         fds_particle_mass_energy_kernel(data->nm, data->t, data->dt);
+        fds_remove_particles(data->t, data->nm);
+        fds_move_particles(data->t, data->dt, data->nm);
+        fds_particle_momentum_kernel(data->nm, data->dt);
         this->addResult(data);
     }
 
