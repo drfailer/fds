@@ -1756,8 +1756,10 @@ END SUBROUTINE DIVERGENCE_PART_2_KERNEL
 
 
 !> \brief Preprocessing for DIVERGENCE_PART_2 block decomposition.
-!> Computes zone operations (USUM_ADD, D_PBAR_DT_P) and R_PBAR.
+!> Computes zone operations (USUM_ADD, D_PBAR_DT) and P_ZONE%DPSTAR.
+!> R_PBAR is computed per-mesh in the block kernel (thread-safe).
 !> Must be called sequentially per mesh BEFORE block kernel dispatch.
+!> For CC_IBM, also calls GET_LINKED_VELOCITIES (cross-mesh writes).
 !> \param M Mesh data structure
 !> \param DT Time step (s)
 !> \param NM Mesh number
@@ -1770,7 +1772,7 @@ USE CC_VELOCITY, ONLY : GET_LINKED_VELOCITIES
 TYPE(MESH_TYPE), INTENT(INOUT), TARGET :: M
 INTEGER, INTENT(IN) :: NM
 REAL(EB), INTENT(IN) :: DT
-REAL(EB) :: USUM_ADD(N_ZONE),RDT,P_EQ,SUM_P_PSUM,SUM_USUM,SUM_DSUM,SUM_PSUM
+REAL(EB) :: USUM_ADD(N_ZONE),P_EQ,SUM_P_PSUM,SUM_USUM,SUM_DSUM,SUM_PSUM
 LOGICAL :: OPEN_ZONE
 REAL(EB), POINTER, DIMENSION(:) :: D_PBAR_DT_P
 REAL(EB), POINTER, DIMENSION(:,:) :: PBAR_P
@@ -1780,16 +1782,12 @@ IF (SOLID_PHASE_ONLY) RETURN
 IF (PERIODIC_TEST==3) RETURN
 IF (PERIODIC_TEST==4) RETURN
 
-RDT = 1._EB/DT
-
 SELECT CASE(PREDICTOR)
    CASE(.TRUE.)
       PBAR_P => M%PBAR_S
    CASE(.FALSE.)
       PBAR_P => M%PBAR
 END SELECT
-
-M%R_PBAR = 1._EB/PBAR_P
 
 ! Adjust volume flows (USUM) of pressure ZONEs that are connected to equalize background pressure
 
@@ -1842,16 +1840,17 @@ IF (N_ZONE>0) THEN
 
 ENDIF
 
-! CC_IBM: compute linked velocities
+! CC_IBM: compute linked velocities (cross-mesh writes, must stay sequential)
 IF (CC_IBM) CALL GET_LINKED_VELOCITIES(M,NM,CORRECTOR,CMP_FLG=.FALSE.)
 
 END SUBROUTINE DIVERGENCE_PART_2_PREPROCESSING
 
 
 !> \brief Block kernel for DIVERGENCE_PART_2 — processes K-range [K1,K2].
-!> Requires DIVERGENCE_PART_2_PREPROCESSING to have been called first.
-!> Computes pressure zone DP contribution, solid cell zeroing, BC_LOOP,
-!> DIV computation, and DDDT for the given K-range.
+!> Requires DIVERGENCE_PART_2_PREPROCESSING to have been called for all meshes
+!> in the preceding barrier (zone ops + D_PBAR_DT).
+!> Computes per-mesh R_PBAR (thread-safe), then pressure zone DP contribution,
+!> solid cell zeroing, BC_LOOP, DIV computation, and DDDT for the given K-range.
 !> \param M Mesh data structure
 !> \param DT Time step (s)
 !> \param NM Mesh number
@@ -1893,6 +1892,9 @@ SELECT CASE(PREDICTOR)
 END SELECT
 
 RTRM => M%WORK1
+
+! Compute R_PBAR (moved from preprocessing for per-mesh parallelism)
+M%R_PBAR = 1._EB/PBAR_P
 
 ! Add pressure derivative to divergence (K-restricted)
 

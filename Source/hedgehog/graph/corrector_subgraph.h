@@ -123,11 +123,11 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
     if (ccIBM) {
-        // Group B (CC_IBM): WallBC kernel includes finalize → reset + MeshExch(6)
-        auto groupBPostSM = makeBarrierSM(nmeshes, "ResetWall+MeshExch6a",
-            "RESET_WALL_COUNTER\\nMESH_EXCHANGE(6)",
+        // Group B (CC_IBM): WallBC kernel includes finalize → MeshExch(6)
+        // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
+        auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a",
+            "MESH_EXCHANGE(6)",
             [](auto& meshes) {
-                fds_reset_wall_counter();
                 fds_mesh_exchange(6);
             });
 
@@ -141,15 +141,16 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
+        // CC_IBM: per-mesh loop kept for GET_LINKED_VELOCITIES (cross-mesh writes)
+        // rte_source_correction moved to CorrFinalOrch barrier
         auto corrDivExchangeSM = makeBarrierSM(nmeshes, "CorrDivExchange",
-            "EXCH_DIV_INFO\\nDIV_P2_PREPROC\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
-                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                // Zone ops + GET_LINKED_VELOCITIES (CC_IBM needs per-mesh for cross-mesh writes)
                 for (auto &md : meshes) {
                     fds_divergence_part_2_preprocessing(md->nm, md->dt);
                 }
-                fds_rte_source_correction();
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
@@ -164,11 +165,11 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
         subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
     } else {
-        // Group B (non-CC_IBM): WallBC kernel includes finalize → reset + MeshExch(6) + InitDiv
-        auto groupBPostSM = makeBarrierSM(nmeshes, "ResetWall+MeshExch6a+InitDiv",
-            "RESET_WALL_COUNTER\\nMESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
+        // Group B (non-CC_IBM): WallBC kernel includes finalize → MeshExch(6) + InitDiv
+        // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
+        auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a+InitDiv",
+            "MESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
             [](auto& meshes) {
-                fds_reset_wall_counter();
                 fds_mesh_exchange(6);
                 fds_initialize_divergence_integrals();
             });
@@ -191,15 +192,15 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         auto qrAddCopyKernelTask = std::make_shared<QRAddCopyKernelTask>(budget.corrQRAddCopy);
 
         // Post-barrier (N→N): divergence exchange + zone ops
-        auto groupCPostSM = makeBarrierSM(nmeshes, "DivExch+DivP2Preproc",
-            "EXCH_DIV_INFO\\nDIV_P2_PREPROC\\nRTE_SOURCE_CORR\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // rte_source_correction moved to CorrFinalOrch barrier
+        // R_PBAR moved to block kernel (per-mesh, thread-safe)
+        auto groupCPostSM = makeBarrierSM(nmeshes, "DivExch+ZoneOps",
+            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
-                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
                 for (auto &md : meshes) {
                     fds_divergence_part_2_preprocessing(md->nm, md->dt);
                 }
-                fds_rte_source_correction();
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();

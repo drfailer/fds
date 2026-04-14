@@ -12,10 +12,9 @@
 /// When OutS != Default, the task retags its output for type-based routing
 /// (e.g. PredictorPressure to route to the shared pressure subgraph).
 ///
-/// IMPORTANT: fds_divergence_part_2_preprocessing must be called sequentially
-/// for all meshes in the preceding barrier BEFORE this task runs.
-/// The preprocessing handles global zone ops (USUM modification, D_PBAR_DT
-/// computation) which are not thread-safe.
+/// The block kernel computes per-mesh R_PBAR internally (thread-safe).
+/// Zone ops (USUM, D_PBAR_DT, P_ZONE%DPSTAR) must be called per-mesh in the
+/// preceding barrier via fds_divergence_part_2_preprocessing.
 template<MeshState OutS = MeshState::Default>
 class DivergencePart2KernelTask
     : public hh::AbstractTask<1, MeshData<>, MeshData<OutS>> {

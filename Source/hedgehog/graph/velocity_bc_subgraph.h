@@ -48,10 +48,14 @@ inline auto buildCorrFinalSubgraph(int nmeshes, size_t kernelThreads) {
     // CorrFinalOrchestrator → CollectorTask + BarrierTask
     auto orchCollectorTask = std::make_shared<CollectorTask>(nmeshes, "CorrFinalOrchCollector");
     auto orchTask = makeBarrierTask("CorrFinalOrch",
-        "CC_END_STEP\\nMESH_EXCHANGE(6)",
+        "RESET_WALL\\nCC_END_STEP\\nMESH_EXCHANGE(6)\\nRTE_SOURCE_CORR",
         [ccIBM](auto& meshes) {
+            // Moved from groupBPostSM — safe here, before next timestep's WallBC
+            fds_reset_wall_counter();
             if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
             fds_mesh_exchange(6);
+            // Moved from DivExch barrier — result only needed next timestep
+            fds_rte_source_correction();
         });
 
     auto kernelTask = std::make_shared<VelocityBCEdgesTask>(

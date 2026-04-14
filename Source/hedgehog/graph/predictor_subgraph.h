@@ -120,12 +120,13 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         // Extracted: DivP1Late per-mesh (parallel)
         auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
 
-        // Smaller barrier: global divergence exchange + zone ops (no per-mesh DivP1Late)
-        auto predDivExchangeSM = makeBarrierSM(nmeshes, "DivExch+DivP2Preproc",
-            "EXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // Smaller barrier: global divergence exchange + zone ops
+        // Per-mesh loop: zone ops are idempotent after first mesh, D_PBAR_DT sets per-mesh copy.
+        // R_PBAR moved to block kernel (per-mesh, thread-safe).
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "DivExch+ZoneOps",
+            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
-                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
                 for (auto &md : meshes) {
                     fds_divergence_part_2_preprocessing(md->nm, md->dt);
                 }
@@ -173,15 +174,16 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         auto predWallBCKernel = std::make_shared<WallBCKernelTask>(budget.standalone(2));
 
         // Barrier: PartMom + DivP1 + DivExchange + PressureInit
+        // CC_IBM: per-mesh loop kept for GET_LINKED_VELOCITIES (cross-mesh writes)
         auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallDiv+DivExch",
-            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 for (auto &md : meshes) {
                     fds_particle_momentum_kernel(md->nm, md->dt);
                     fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
                 }
                 fds_exchange_divergence_info();
-                // Zone ops for DivP2 (modifies global USUM, must run sequentially)
+                // Zone ops + GET_LINKED_VELOCITIES (CC_IBM needs per-mesh for cross-mesh writes)
                 for (auto &md : meshes) {
                     fds_divergence_part_2_preprocessing(md->nm, md->dt);
                 }
