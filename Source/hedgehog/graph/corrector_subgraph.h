@@ -128,14 +128,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
     if (ccIBM) {
-        // Group B (CC_IBM): WallBCFinalize + reset + MeshExch(6)
-        // NOTE: wall_bc_finalize uses POINT_TO_MESH, must stay sequential in barrier
-        auto groupBSM = makeBarrierSM(nmeshes, "WallBCFin+ResetWall+MeshExch6a",
-            "WALLBC_FINALIZE\\nRESET_WALL_COUNTER\\nMESH_EXCHANGE(6)",
+        // Group B (CC_IBM): WallBC kernel includes finalize → reset + MeshExch(6)
+        auto groupBPostSM = makeBarrierSM(nmeshes, "ResetWall+MeshExch6a",
+            "RESET_WALL_COUNTER\\nMESH_EXCHANGE(6)",
             [](auto& meshes) {
-                for (auto &md : meshes) {
-                    fds_wall_bc_finalize(md->nm, md->t, md->dt_bc, md->call_ht_1d);
-                }
                 fds_reset_wall_counter();
                 fds_mesh_exchange(6);
             });
@@ -166,27 +162,23 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        subgraph->edges(wallBCKernelTask, groupBSM);
-        subgraph->edges(groupBSM, corrRadiationSubgraph);
+        subgraph->edges(wallBCKernelTask, groupBPostSM);
+        subgraph->edges(groupBPostSM, corrRadiationSubgraph);
         subgraph->edges(corrRadiationSubgraph, meshExch2SM);
         subgraph->edges(meshExch2SM, corrDivP1KernelTask);
         subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
         subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
     } else {
-        // Group B (non-CC_IBM): WallBCFinalize + reset + MeshExch(6) + InitDiv
-        // NOTE: wall_bc_finalize uses POINT_TO_MESH, must stay sequential in barrier
-        auto groupBSM = makeBarrierSM(nmeshes, "WallBCFin+ResetWall+MeshExch6a+InitDiv",
-            "WALLBC_FINALIZE\\nRESET_WALL_COUNTER\\nMESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
+        // Group B (non-CC_IBM): WallBC kernel includes finalize → reset + MeshExch(6) + InitDiv
+        auto groupBPostSM = makeBarrierSM(nmeshes, "ResetWall+MeshExch6a+InitDiv",
+            "RESET_WALL_COUNTER\\nMESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
             [](auto& meshes) {
-                for (auto &md : meshes) {
-                    fds_wall_bc_finalize(md->nm, md->t, md->dt_bc, md->call_ht_1d);
-                }
                 fds_reset_wall_counter();
                 fds_mesh_exchange(6);
                 fds_initialize_divergence_integrals();
             });
 
-        subgraph->edges(wallBCKernelTask, groupBSM);
+        subgraph->edges(wallBCKernelTask, groupBPostSM);
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
 
@@ -221,8 +213,8 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
             });
 
         // Multicast to both branches (Hedgehog routes by type)
-        subgraph->edges(groupBSM, corrRadiationSubgraph);
-        subgraph->edges(groupBSM, fork2DivP1Task);
+        subgraph->edges(groupBPostSM, corrRadiationSubgraph);
+        subgraph->edges(groupBPostSM, fork2DivP1Task);
         // Group C split: pre → QR kernel → post
         subgraph->edges(corrRadiationSubgraph, groupCPreSM);
         subgraph->edges(fork2DivP1Task, groupCPreSM);

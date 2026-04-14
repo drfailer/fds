@@ -150,6 +150,24 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - Files: mass_kernels.f90, graph/density_block_subgraph.h, fds_c_interface.f90
     - Wired in both predictor (DensityPredKernelTask) and corrector (CorrStep1/MassFDDensity paths)
 
+### Phase 5: CC_IBM Barrier Elimination
+
+21. **CC_DENSITY** (per-mesh species transport for cut-cell meshes)
+    - Created 9 thread-safe _TS routines (~1750 lines) using Pattern 2/3: CC_DENSITY_TS, CC_DENSITY_EXPLICIT_TS, GET_EXPLICIT_ADVDIFFVECTOR_SCALAR_3D_TS, GET_ADVDIFFVECTOR_SCALAR_3D_TS, GET_M_DOT_PPP_SCALAR_3D_TS, GET_RHOZZVECTOR_SCALAR_3D_TS, PUT_RHOZZVECTOR_SCALAR_3D_TS, CC_CHECK_MASS_DENSITY_TS (with CONTAINS CC_CV_RHOZZ_AVERAGE_TS), GET_RHOZZ_CC_3D_TS, GET_SHUNN3_QZ_TS
+    - Key insight: F_Z/RZ_Z module-level arrays have disjoint per-mesh ranges via UNKZ_ILC offsets — no locks needed
+    - Pattern 3 for GET_EXPLICIT_ADVDIFFVECTOR_SCALAR_3D_TS (local TARGET workspace) and CC_CHECK_MASS_DENSITY_TS (CONTAINS inheritance)
+    - Integrated into PredStep1KernelTask, CorrStep1KernelTask, RetryPreKernelTask
+    - Removed CC_DENSITY from predictor MeshExchange(1) and corrector MeshExchange(4) barriers
+    - Files: ccib_density.f90, fds_c_interface.f90, fds_fortran_interface.h, pred_step1_kernel_task.h, corr_step1_kernel_task.h, change_timestep_tasks.h, predictor_subgraph.h, corrector_subgraph.h
+    - Tests: 20/20 custom, 58/58 verification (tol=1e-6)
+
+22. **WallBC Finalize** (parallel per-mesh finalize for remaining ~10% wall cells)
+    - WALL_BC_FINALIZE already thread-safe (uses `M => MESHES(NM)`, no POINT_TO_MESH)
+    - Key insight: all three called routines (SURFACE_HEAT_TRANSFER, SOLID_HEAT_TRANSFER, DEPOSIT_PARTICLE_MASS) only write to local mesh — no cross-mesh writes despite comments claiming OMESH access
+    - Extracted from 4 barriers: pred_fork_div WallBCFinalize barrier, corrector CC_IBM groupBSM, corrector non-CC_IBM groupBSM, predictor CC_IBM WallBCFin+WallDiv+DivExch barrier
+    - Files: pred_fork_div_subgraph.h, corrector_subgraph.h, predictor_subgraph.h (existing wallbc_finalize_kernel_task.h wired in)
+    - Tests: 20/20 custom, 58/58 verification (tol=1e-6)
+
 ## Kernel Extraction Summary
 
 ### Directly Used in Sub-Graphs
@@ -180,6 +198,7 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | COMPUTE_VELOCITY_ERROR_KERNEL | velo.f90 | PressureIteration |
 | COMBUSTION_KERNEL | fire_kernels.f90 | Combustion |
 | PARTICLE_MASS_ENERGY_KERNEL | part.f90 | ParticleMassEnergy |
+| CC_DENSITY_TS | ccib_density.f90 | PredStep1, CorrStep1, ChangeTimeStep |
 
 ### New Extractions for WallBC
 
@@ -217,14 +236,55 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 |------|----------|---------|--------|
 | ~~CombustionHvacTask~~ | ~~COMBUSTION + HVAC_CALC~~ | ~~Combustion is per-mesh; HVAC is global~~ | ✅ Done (Phase 3 Target 1) |
 | ~~CorrParticleOrchestrator~~ | ~~PARTICLE_MASS_ENERGY + MOVE_PARTICLES~~ | ~~MASS_ENERGY is per-mesh; MOVE is cross-mesh~~ | ✅ Done (Phase 3 Target 2) |
+| ~~CC_DENSITY barrier~~ | ~~CC_DENSITY in MeshExch(1) and MeshExch(4)~~ | ~~POINT_TO_MESH, module pointers~~ | ✅ Done (Phase 5, CC_DENSITY_TS) |
 | PredStep1Orchestrator | INSERT_ALL_PARTICLES | RANDOM_NUMBER not thread-safe, global state | Blocked — not viable |
 | SootHvacTask | SOOT_SURFACE_OXIDATION + HVAC_CALC | HVAC is global network solver | None planned |
-| RemoveMoveParticlesTask | REMOVE_PARTICLES + MOVE_PARTICLES | Cross-mesh OMESH writes | None planned |
+| RemoveMoveParticlesTask | REMOVE_PARTICLES + MOVE_PARTICLES | Cross-mesh OMESH writes | Investigate |
 | MeshExchange tasks | MESH_EXCHANGE(1-7) | Inherently global/sequential | None planned |
 | DivergenceExchange tasks | EXCHANGE_DIVERGENCE_INFO | Inherently global/sequential | None planned |
 | PhaseTransitionTask | Phase transition bookkeeping | Inherently global/sequential | None planned |
 
-**Note**: All viable per-mesh kernel tasks have been parallelized (19 sub-graphs). Phase 3 extracted 2 of 3 targets; Target 3 (particle insertion) is blocked by Fortran RANDOM_NUMBER thread-safety and global state modifications. The remaining barrier tasks are inherently global/sequential.
+## TODO: Remaining Per-Mesh Parallelization Targets
+
+Per-mesh loops that still run sequentially inside barrier lambdas. Ordered by impact.
+
+### Target 1: WALL_BC_FINALIZE (3 barriers)
+
+**Location**: pred_fork_div_subgraph.h:24, corrector_subgraph.h:133/178
+
+WALL_BC_FINALIZE processes ~10% of wall cells excluded from the parallel WALL_BC_PROCESS_CELLS_KERNEL:
+- **INTERPOLATED_BC cells**: SURFACE_HEAT_TRANSFER reads OMESH (copies from mesh_exchange) — all writes to local B1 only
+- **HAS_BACK_MESH cells**: SOLID_HEAT_TRANSFER reads B1_BACK/B2_BACK from neighbor mesh (READ-ONLY) — all writes to local ONE_D only
+- **DEPOSIT_PARTICLE_MASS**: despite comment claiming OMESH writes, actually writes only to current mesh M (D_SOURCE, M_DOT_PPP, BOUNDARY_ONE_D)
+
+**Analysis result**: All three routines are safe for parallel execution. No cross-mesh writes:
+- SURFACE_HEAT_TRANSFER: reads OMESH copies, writes only local B1
+- SOLID_HEAT_TRANSFER: reads B1_BACK/B2_BACK (read-only), writes only local ONE_D
+- DEPOSIT_PARTICLE_MASS: writes only to current mesh M (D_SOURCE, M_DOT_PPP); Q_DOT/M_DOT global accumulation is output-only
+
+WALL_BC_FINALIZE already uses `M => MESHES(NM)` (no POINT_TO_MESH). Extracted to parallel WallBCFinalizeKernelTask — no Fortran changes needed.
+
+**Status**: ✅ COMPLETE — 20/20 custom, 58/58 verification (tol=1e-6)
+
+### Target 2: REMOVE_PARTICLES + MOVE_PARTICLES (1 barrier)
+
+**Location**: corrector_subgraph.h:84-91
+
+Per-mesh particle operations in RemoveMove+MeshExch7+WallBCOrch barrier. Each mesh processes its own particles, but MOVE_PARTICLES may transfer particles to neighbor meshes via OMESH. Needs analysis of whether particle handoff is deferred to mesh_exchange.
+
+**Status**: Not started
+
+### Target 3: DIVERGENCE_PART_2_PREPROCESSING (4 barriers)
+
+**Location**: predictor_subgraph.h:124/175, corrector_subgraph.h:153/207
+
+Per-mesh loop calling `fds_divergence_part_2_preprocessing(nm, dt)` which modifies global USUM (pressure zone sums). Currently sequential because USUM accumulates across all meshes.
+
+**Possible approaches**:
+1. **Fork-join with reduction**: Run per-mesh preprocessing in parallel with local partial sums, then reduce into USUM in a sequential collector
+2. **Rewrite as kernel + barrier**: Extract the per-mesh cell loops into a parallel kernel, keep only the USUM reduction sequential
+
+**Status**: Not started
 
 ## Performance Profiling Results
 
@@ -298,7 +358,7 @@ All parallelized sub-graphs include CC_IBM (cut-cell immersed boundary) processi
 All verified byte-identical on CC_IBM test cases.
 
 **CC_IBM barriers** (conditional, only active when CC_IBM=.TRUE.):
-- CC_DENSITY: pre-exchange hook on MeshExchange(1) and MeshExchange(4)
+- ~~CC_DENSITY: pre-exchange hook on MeshExchange(1) and MeshExchange(4)~~ → ✅ Parallelized (CC_DENSITY_TS)
 - CC_END_STEP: pre-exchange hook on MeshExchange(3) and MeshExchange(6b)
 - CC_VELOCITY_BC: in DivSetup orchestrators and PredFinal/CorrFinal collectors
 
@@ -419,13 +479,13 @@ approach for the predictor-corrector scheme.
 
 ## Test Suite
 
-**Custom test runner**: `test_cases/run_tests.py` (12 cases)
-**Verification suite**: `test_cases/run_verification.py` (99 cases at --max-gold-time 30)
+**Custom test runner**: `test_cases/run_tests.py` (20 cases)
+**Verification suite**: `test_cases/run_verification.py` (58 cases at --max-gold-time 30 --no-redundant)
 
 **Build**: `cd build_hh && cmake --build . --target fds_hh -j$(nproc)`
 
-**Custom test cases** (12 total): all pass
-**Verification suite**: 73/99 pass at tol=1e-6
+**Custom test cases** (20 total): all pass
+**Verification suite**: 58/58 pass at tol=1e-6
 
 **Verification failures** (26 cases):
 - 3 run failures (Complex_Geometry/geom_channel* — multi-mesh CC_IBM, known gap)
@@ -484,12 +544,12 @@ kernels everywhere.
 
 ## Summary Statistics
 
-- **Sub-graphs created**: 20 (including parallel pressure iteration with cycle)
+- **Sub-graphs created**: 22 (including parallel pressure iteration with cycle, CC_DENSITY_TS, WallBCFinalize)
 - **Block sub-graphs**: 8 (disabled — code kept for reference)
 - **Graph nodes replaced**: 22 (some tasks appear in both predictor/corrector)
-- **Kernels extracted**: 21 new kernels + utilizing ~30 existing kernels
-- **Thread-safe conversions**: 2900+ lines converted (including ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
-- **Test coverage**: 12 custom cases + 58 verification cases (46 pass at tol=1e-6)
+- **Kernels extracted**: 23 new kernels + utilizing ~30 existing kernels
+- **Thread-safe conversions**: 4650+ lines converted (including ~1750 lines for CC_DENSITY_TS, ~1090 lines for PARTICLE_MASS_ENERGY_KERNEL, ~760 lines for VELOCITY_BC_PROCESS_EDGES_KERNEL)
+- **Test coverage**: 20 custom cases + 58 verification cases (58 pass at tol=1e-6)
 - **Overall speedup**: 5.35x on verification suite
 
 ## Documentation Index

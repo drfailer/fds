@@ -44,8 +44,7 @@ struct ThreadBudget {
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
     size_t velCorrector;        // VelocityCorrectorKernelTask  (LIGHT)
     size_t corrFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
-    size_t corrWallBC;          // WallBCKernelTask             (MEDIUM)
-    size_t corrWallBCFinalize;  // WallBCFinalizeKernelTask     (LIGHT) — split from barrier
+    size_t corrWallBC;          // WallBCKernelTask             (MEDIUM) — includes finalize
     size_t corrQRAddCopy;       // QRAddCopyKernelTask          (LIGHT) — split from barrier
 
     // --- Corrector fork1: {DivSetup} || {Fork1Comb} ---
@@ -120,8 +119,7 @@ struct ThreadBudget {
         b.corrDivPart2      = solo(2);  // 604us/elem
         b.velCorrector      = solo(1);  // 89us/elem
         b.corrFinalVelBC    = solo(2);  // 472us/elem
-        b.corrWallBC        = solo(2);  // 513us/elem
-        b.corrWallBCFinalize = solo(1); // split from barrier (light)
+        b.corrWallBC        = solo(2);  // 513us/elem (includes finalize)
         b.corrQRAddCopy     = solo(1);  // split from barrier (light)
 
         // --- Corrector fork1: A{DivSetup(2)} || B{Fork1Comb(2)} ---
@@ -172,7 +170,6 @@ struct ThreadBudget {
            << " velCorr=" << velCorrector
            << " finalVBC=" << corrFinalVelBC
            << " wallBC=" << corrWallBC
-           << " wallBCFin=" << corrWallBCFinalize
            << " qrAddCopy=" << corrQRAddCopy << "\n"
            << "  Corr fork1: divSetup=" << corrFork1DivSetup
            << " comb=" << corrFork1Comb << "\n"

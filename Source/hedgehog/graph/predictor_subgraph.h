@@ -169,15 +169,13 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
         // WallBC inlined: no orchestrator needed in predictor (dt_bc=0, call_ht_1d=0 defaults)
+        // WallBCKernelTask includes finalize (all per-mesh, thread-safe)
         auto predWallBCKernel = std::make_shared<WallBCKernelTask>(budget.standalone(2));
 
-        // Merged barrier: WallBCFinalize + PredWallDivKernel + PredDivExchange + PressureInit
-        auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallBCFin+WallDiv+DivExch",
-            "WALLBC_FINALIZE\\nPART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // Barrier: PartMom + DivP1 + DivExchange + PressureInit
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallDiv+DivExch",
+            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nDIV_P2_PREPROC\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
-                for (auto &md : meshes) {
-                    fds_wall_bc_finalize(md->nm, md->t, md->dt_bc, md->call_ht_1d);
-                }
                 for (auto &md : meshes) {
                     fds_particle_momentum_kernel(md->nm, md->dt);
                     fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
