@@ -60,14 +60,14 @@ private:
             md->firstPass = false;
         }
 
-        // Density
+        // Density + CC_DENSITY (per-mesh, thread-safe)
         for (auto &md : data->meshes) {
             fds_cc_restore_uvw_unlinked(md->nm);
             fds_density(data->t, data->dt, md->nm);
+            fds_cc_density_ts(md->nm, data->t, data->dt);
         }
 
-        // CC_DENSITY + mesh exchange
-        fds_cc_density(data->t, data->dt);
+        // mesh exchange
         fds_mesh_exchange(1);
 
         // Velocity flux

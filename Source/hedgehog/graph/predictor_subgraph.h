@@ -146,9 +146,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     } else {
         // CC_IBM: MeshExchange(1) only
         auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
-            "CC_DENSITY\\nMESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
+            "MESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
             [](auto& meshes) {
-                fds_cc_density(meshes[0]->t, meshes[0]->dt);
                 fds_mesh_exchange(1);
                 fds_exchange_inserted_particles();
             });

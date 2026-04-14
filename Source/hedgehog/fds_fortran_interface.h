@@ -46,6 +46,7 @@ void fds_compute_viscosity(int nm, int estimated);
 void fds_mass_finite_differences(int nm);
 void fds_density(double t, double dt, int nm);
 void fds_cc_density(double t, double dt);
+void fds_cc_density_ts(int nm, double t, double dt);
 void fds_viscosity_bc(int nm, int estimated);
 void fds_velocity_flux(double t, double dt, int nm, int estimated);
 void fds_wall_bc(double t, double dt, int nm);

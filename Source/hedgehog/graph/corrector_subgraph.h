@@ -59,9 +59,8 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // --- Barrier states ---
 
     auto meshExchange4SM = makeBarrierSM(nmeshes, "MeshExchange(4)",
-        "CC_DENSITY\\nMESH_EXCHANGE(4)",
-        [ccIBM](auto& meshes) {
-            if (ccIBM) { fds_cc_density(meshes[0]->t, meshes[0]->dt); }
+        "MESH_EXCHANGE(4)",
+        [](auto& meshes) {
             fds_mesh_exchange(4);
         });
 

@@ -19,6 +19,7 @@ public:
         fds_compute_viscosity_kernel(data->nm, 0);  // estimated=0 for predictor
         fds_mass_finite_differences_kernel(data->nm);
         fds_density_kernel(data->nm, data->t, data->dt);
+        fds_cc_density_ts(data->nm, data->t, data->dt);
         this->addResult(data);
     }
 
