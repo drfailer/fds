@@ -26,37 +26,17 @@ These opportunities from the original analysis have been implemented:
 4. ~~"Join1+RemoveMove+WallBCOrch" barrier~~ → ✅ Restructured: ParticleOps parallel, Soot||HVAC forked
 5. ~~CC_IBM "WallBCFin+MeshExch6a" barrier~~ → ✅ WallBCFinalize extracted
 
+## Previously Identified — Batch 2 (Complete)
+
+6. ~~Predictor "DivExch+ZoneOps" barrier~~ → ✅ Split into exchange barrier → DivPart2PreprocessingKernelTask (parallel) → global ops barrier
+7. ~~CC_IBM predictor "WallDiv+DivExch" Loop 1~~ → ✅ Extracted to PredCCPartMomDivP1KernelTask (parallel per-mesh)
+8. ~~Corrector "DivExch+ZoneOps" barrier~~ → ✅ Same split as predictor (#6)
+
 ## Remaining Opportunities
-
-### Predictor Subgraph
-
-#### 1. Barrier "DivExch+ZoneOps" (predictor_subgraph.h:109-121)
-- **Current:** Per-mesh loop calling `fds_divergence_part_2_preprocessing(md->nm, md->dt)` inside barrier
-- **Global operations:** `fds_exchange_divergence_info()`, `fds_global_matrix_reassign(0)`, pressure init/increment
-- **Optimization:** Extract per-mesh zone ops to a parallel kernel task, keep global ops sequential
-- **Notes:** Non-CC_IBM path only. No cross-mesh writes — thread-safe.
-- **Impact:** Parallelizes zone operations for each mesh
-
-#### 2. CC_IBM Barrier "WallDiv+DivExch" (predictor_subgraph.h:159-176)
-- **Current:** Two sequential per-mesh loops:
-  * Loop 1: `fds_particle_momentum_kernel()` + `fds_divergence_part_1_kernel()` per mesh
-  * Loop 2: `fds_divergence_part_2_preprocessing()` per mesh (includes GET_LINKED_VELOCITIES)
-- **Global operations:** `fds_exchange_divergence_info()`, `fds_global_matrix_reassign(0)`, pressure init/increment
-- **Optimization:**
-  - Loop 1: Could use existing ParticleMomentumKernelTask + DivP1 kernel in parallel
-  - Loop 2: Contains GET_LINKED_VELOCITIES (cross-mesh writes) — **NOT parallelizable**
-- **Impact:** Partial — only Loop 1 is parallelizable
 
 ### Corrector Subgraph
 
-#### 3. Barrier "DivExch+ZoneOps" (corrector_subgraph.h:217-229)
-- **Current:** Per-mesh loop calling `fds_divergence_part_2_preprocessing(md->nm, md->dt)` inside barrier
-- **Global operations:** Same as predictor (#1)
-- **Optimization:** Same as predictor (#1) — extract to parallel kernel
-- **Notes:** Non-CC_IBM path only. Thread-safe.
-- **Impact:** Same as #1
-
-#### 4. CC_IBM Barrier "CorrDivExchange" (corrector_subgraph.h:162-175)
+#### 1. CC_IBM Barrier "CorrDivExchange" (corrector_subgraph.h:162-175)
 - **Current:** Per-mesh loop calling `fds_divergence_part_2_preprocessing()` (includes GET_LINKED_VELOCITIES)
 - **Status:** **NOT parallelizable** — GET_LINKED_VELOCITIES has cross-mesh writes
 - **Impact:** None
@@ -79,8 +59,7 @@ CC_COMPUTE_VELOCITY_ERROR, FN_OMESH exchange prep, gate removed.
 
 ## Priority Recommendations
 
-**High Impact, Low Effort:**
-1. Extract `divergence_part_2_preprocessing` per-mesh loop from "DivExch+ZoneOps" barriers (#1, #3)
-
 **Not viable:**
-- CC_IBM "CorrDivExchange" GET_LINKED_VELOCITIES loop (#4) — cross-mesh writes
+- CC_IBM "CorrDivExchange" GET_LINKED_VELOCITIES loop (#1) — cross-mesh writes
+
+All high-impact items complete. Only the non-parallelizable CC_IBM corrector barrier remains.

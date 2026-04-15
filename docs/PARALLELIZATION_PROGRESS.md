@@ -282,16 +282,25 @@ Merged into ParticleOpsKernelTask (condensation + mass/energy + remove + move + 
 
 ### Target 3: DIVERGENCE_PART_2_PREPROCESSING (2 barriers, non-CC_IBM only)
 
-**Location**: predictor_subgraph.h:109-121 ("DivExch+ZoneOps"), corrector_subgraph.h:217-229 ("DivExch+ZoneOps")
-**Note**: CC_IBM barriers (predictor:159-176, corrector:162-175) contain GET_LINKED_VELOCITIES which has cross-mesh writes — NOT parallelizable.
+**Location**: predictor_subgraph.h ("DivExchange" + "DivP2PreprocessingKernel" + "GlobalMatrix+PressureInit"), corrector_subgraph.h (same split)
+**Note**: CC_IBM barriers contain GET_LINKED_VELOCITIES which has cross-mesh writes — NOT parallelizable.
 
-Per-mesh loop calling `fds_divergence_part_2_preprocessing(nm, dt)` which modifies global USUM (pressure zone sums). Currently sequential because USUM accumulates across all meshes.
+Split each non-CC_IBM "DivExch+ZoneOps" barrier into 3 nodes:
+1. Barrier: `fds_exchange_divergence_info()` (global MPI exchange)
+2. `DivPart2PreprocessingKernelTask`: parallel per-mesh zone ops + D_PBAR_DT
+3. Barrier: `fds_global_matrix_reassign(0)` + pressure init/increment
 
-**Possible approaches**:
-1. **Fork-join with reduction**: Run per-mesh preprocessing in parallel with local partial sums, then reduce into USUM in a sequential collector
-2. **Rewrite as kernel + barrier**: Extract the per-mesh cell loops into a parallel kernel, keep only the USUM reduction sequential
+**Thread safety**: USUM_ADD is computed identically by all meshes (global USUM/DSUM/PSUM + per-zone-uniform PBAR). After first mesh adjusts USUM, subsequent meshes compute USUM_ADD=0 — idempotent. Concurrent identical writes to USUM are benign (64-bit atomic). D_PBAR_DT is per-mesh. DPSTAR is written identically by all meshes.
 
-**Status**: Not started
+**Status**: ✅ COMPLETE — 20/20 custom, 58/58 verification (tol=1e-6)
+
+### Target 4: CC_IBM Predictor Loop 1 (particle momentum + DivP1)
+
+**Location**: predictor_subgraph.h CC_IBM path ("PredCCPartMomDivP1Kernel" → "DivExch+ZoneOps")
+
+Extracted `fds_particle_momentum_kernel` + `fds_divergence_part_1_kernel` per-mesh loop (Loop 1) from CC_IBM "WallDiv+DivExch" barrier into `PredCCPartMomDivP1KernelTask`. Both operations are per-mesh and thread-safe. Barrier shrunk to exchange + Loop 2 (GET_LINKED_VELOCITIES, not parallelizable) + global ops.
+
+**Status**: ✅ COMPLETE — 20/20 custom, 58/58 verification (tol=1e-6)
 
 ## Performance Profiling Results
 

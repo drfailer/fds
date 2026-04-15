@@ -20,6 +20,8 @@
 #include "../task/velocity_bc_edges_task.h"
 #include "../task/div_p1_late_kernel_task.h"
 #include "../task/barrier_tasks.h"
+#include "../task/div_part2_preprocessing_kernel_task.h"
+#include "../task/pred_cc_partmom_divp1_kernel_task.h"
 #include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
@@ -103,16 +105,20 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         // Extracted: DivP1Late per-mesh (parallel)
         auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
 
-        // Smaller barrier: global divergence exchange + zone ops
-        // Per-mesh loop: zone ops are idempotent after first mesh, D_PBAR_DT sets per-mesh copy.
+        // Split barrier: exchange → parallel preprocessing → global ops
         // R_PBAR moved to block kernel (per-mesh, thread-safe).
-        auto predDivExchangeSM = makeBarrierSM(nmeshes, "DivExch+ZoneOps",
-            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
-            [useParallelPressure](auto& meshes) {
+        auto predDivExchSM = makeBarrierSM(nmeshes, "DivExchange",
+            "EXCH_DIV_INFO",
+            [](auto& meshes) {
                 fds_exchange_divergence_info();
-                for (auto &md : meshes) {
-                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
-                }
+            });
+
+        // Extracted: zone ops + D_PBAR_DT per mesh (parallel, idempotent zone ops)
+        auto predDivP2PreKernelTask = std::make_shared<DivPart2PreprocessingKernelTask>(budget.standalone(1));
+
+        auto predDivPostSM = makeBarrierSM(nmeshes, "GlobalMatrix+PressureInit",
+            "GLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            [useParallelPressure](auto& meshes) {
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
@@ -123,10 +129,12 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(predForkDivSetupPartMomTask, predForkJoinTask);
         subgraph->edges(predForkWallBCDivEarlyTask, predForkJoinTask);
         subgraph->edges(predForkJoinTask, divP1LateKernelTask);
-        subgraph->edges(divP1LateKernelTask, predDivExchangeSM);
+        subgraph->edges(divP1LateKernelTask, predDivExchSM);
+        subgraph->edges(predDivExchSM, predDivP2PreKernelTask);
+        subgraph->edges(predDivP2PreKernelTask, predDivPostSM);
 
         // DivP2 -> Pressure -> VelPred
-        subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
+        subgraph->edges(predDivPostSM, predDivP2KernelTask);
     } else {
         // CC_IBM: MeshExchange(1) only
         auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
@@ -154,15 +162,14 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         // WallBCKernelTask includes finalize (all per-mesh, thread-safe)
         auto predWallBCKernel = std::make_shared<WallBCKernelTask>(budget.standalone(2));
 
-        // Barrier: PartMom + DivP1 + DivExchange + PressureInit
-        // CC_IBM: per-mesh loop kept for GET_LINKED_VELOCITIES (cross-mesh writes)
-        auto predDivExchangeSM = makeBarrierSM(nmeshes, "WallDiv+DivExch",
-            "PART_MOM\\nDIV_P1\\nEXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+        // Extracted: PartMom + DivP1 per mesh (parallel, Loop 1 from original barrier)
+        auto predCCPartMomDivP1Kernel = std::make_shared<PredCCPartMomDivP1KernelTask>(budget.standalone(2));
+
+        // Barrier shrunk: Loop 1 extracted, only exchange + Loop 2 + global ops remain
+        // CC_IBM: Loop 2 per-mesh loop kept for GET_LINKED_VELOCITIES (cross-mesh writes)
+        auto predDivExchangeSM = makeBarrierSM(nmeshes, "DivExch+ZoneOps",
+            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
-                for (auto &md : meshes) {
-                    fds_particle_momentum_kernel(md->nm, md->dt);
-                    fds_divergence_part_1_kernel(md->nm, md->t, md->dt);
-                }
                 fds_exchange_divergence_info();
                 // Zone ops + GET_LINKED_VELOCITIES (CC_IBM needs per-mesh for cross-mesh writes)
                 for (auto &md : meshes) {
@@ -180,7 +187,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
             });
 
         subgraph->edges(hvacInitDivSM, predWallBCKernel);
-        subgraph->edges(predWallBCKernel, predDivExchangeSM);
+        subgraph->edges(predWallBCKernel, predCCPartMomDivP1Kernel);
+        subgraph->edges(predCCPartMomDivP1Kernel, predDivExchangeSM);
 
         // DivP2 -> Pressure -> VelPred
         subgraph->edges(predDivExchangeSM, predDivP2KernelTask);

@@ -21,6 +21,7 @@
 #include "../task/wallbc_kernel_task.h"
 #include "../task/particle_ops_kernel_task.h"
 #include "../task/qr_add_copy_kernel_task.h"
+#include "../task/div_part2_preprocessing_kernel_task.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
 #include "../task/pipeline_fork2_tasks.h"
@@ -215,16 +216,21 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         // Extracted: QR addition + WORK1 copy (parallel per-mesh)
         auto qrAddCopyKernelTask = std::make_shared<QRAddCopyKernelTask>(budget.corrQRAddCopy);
 
-        // Post-barrier (N→N): divergence exchange + zone ops
+        // Split barrier: exchange → parallel preprocessing → global ops
         // rte_source_correction moved to CorrFinalOrch barrier
         // R_PBAR moved to block kernel (per-mesh, thread-safe)
-        auto groupCPostSM = makeBarrierSM(nmeshes, "DivExch+ZoneOps",
-            "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
-            [useParallelPressure](auto& meshes) {
+        auto corrDivExchSM = makeBarrierSM(nmeshes, "DivExchange",
+            "EXCH_DIV_INFO",
+            [](auto& meshes) {
                 fds_exchange_divergence_info();
-                for (auto &md : meshes) {
-                    fds_divergence_part_2_preprocessing(md->nm, md->dt);
-                }
+            });
+
+        // Extracted: zone ops + D_PBAR_DT per mesh (parallel, idempotent zone ops)
+        auto corrDivP2PreKernelTask = std::make_shared<DivPart2PreprocessingKernelTask>(budget.standalone(1));
+
+        auto corrDivPostSM = makeBarrierSM(nmeshes, "GlobalMatrix+PressureInit",
+            "GLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
+            [useParallelPressure](auto& meshes) {
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
@@ -237,13 +243,14 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(wallBCKernelTask, corrRadiationSubgraph);
         subgraph->edges(wallBCKernelTask, groupBPostSM);
         subgraph->edges(groupBPostSM, fork2DivP1Task);
-        // Group C split: pre → QR kernel → post
+        // Group C split: pre → QR kernel → exchange → preprocessing → global ops
         subgraph->edges(corrRadiationSubgraph, groupCPreSM);
         subgraph->edges(fork2DivP1Task, groupCPreSM);
         subgraph->edges(groupCPreSM, qrAddCopyKernelTask);
-        subgraph->edges(qrAddCopyKernelTask, groupCPostSM);
-        // Post-barrier emits MeshData<> to DivP2
-        subgraph->edges(groupCPostSM, corrDivP2KernelTask);
+        subgraph->edges(qrAddCopyKernelTask, corrDivExchSM);
+        subgraph->edges(corrDivExchSM, corrDivP2PreKernelTask);
+        subgraph->edges(corrDivP2PreKernelTask, corrDivPostSM);
+        subgraph->edges(corrDivPostSM, corrDivP2KernelTask);
     }
 
     // --- Common downstream: DivP2 -> Pressure -> VelCorr -> CorrFinal ---
