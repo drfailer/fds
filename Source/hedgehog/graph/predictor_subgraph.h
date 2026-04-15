@@ -10,7 +10,6 @@
 #include "../state/collector_state.h"
 #include "../state/barrier_state.h"
 #include "../state/pred_step1_state.h"
-#include "../state/div_setup_state.h"
 #include "../state/fork_join_state.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
@@ -163,10 +162,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 fds_initialize_divergence_integrals();
             });
 
-        auto predDivSetupOrchTask = std::make_shared<PredDivSetupOrchestrator>(nmeshes);
         auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(budget.standalone(4));
-        subgraph->edges(meshExchange1SM, predDivSetupOrchTask);
-        subgraph->edges(predDivSetupOrchTask, predDivSetupKernelTask);
+        subgraph->edges(meshExchange1SM, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
         // WallBC inlined: no orchestrator needed in predictor (dt_bc=0, call_ht_1d=0 defaults)

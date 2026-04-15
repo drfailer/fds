@@ -127,4 +127,45 @@ inline auto makeBarrierTask(std::string name, std::string routines, BarrierFn<> 
     return std::make_shared<BarrierTask>(std::move(name), std::move(routines), std::move(fn));
 }
 
+/// Chain task: accepts BarrierData, runs barrier function, passes BarrierData
+/// through WITHOUT scattering to MeshData.  Use between sequential barrier
+/// operations to avoid unnecessary scatter-then-collect overhead.
+class BarrierChainTask : public hh::AbstractTask<1, BarrierData, BarrierData> {
+public:
+    BarrierChainTask(std::string name, std::string routines, BarrierFn<> fn)
+        : hh::AbstractTask<1, BarrierData, BarrierData>(std::move(name), 1),
+          routines_(std::move(routines)), fn_(std::move(fn)) {}
+
+    void execute(std::shared_ptr<BarrierData> data) override {
+        auto t0 = std::chrono::steady_clock::now();
+        fn_(data->meshes);
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+        this->addResult(data);
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    std::string routines_;
+    BarrierFn<> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+};
+
+/// Helper to create a BarrierChainTask (BarrierData -> BarrierData).
+inline auto makeBarrierChainTask(std::string name, std::string routines, BarrierFn<> fn) {
+    return std::make_shared<BarrierChainTask>(std::move(name), std::move(routines), std::move(fn));
+}
+
 #endif // BARRIER_STATE_H

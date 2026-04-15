@@ -15,16 +15,24 @@
 /// position using NM as the index, avoiding any sorting overhead.
 class CollectorTask : public hh::AbstractTask<1, MeshData<>, BarrierData> {
 public:
-    explicit CollectorTask(int nmeshes, std::string name = "Collector")
+    /// @param nmeshes    Number of distinct meshes (array size).
+    /// @param name       Task name for graph visualization.
+    /// @param totalExpected  Number of tokens to collect before firing.
+    ///                       Defaults to nmeshes.  Set to 2*nmeshes for
+    ///                       fork-join collection (second token per mesh
+    ///                       overwrites first; count gates the fire).
+    explicit CollectorTask(int nmeshes, std::string name = "Collector",
+                           int totalExpected = 0)
         : hh::AbstractTask<1, MeshData<>, BarrierData>(std::move(name), 1),
-          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
+          totalExpected_(totalExpected > 0 ? totalExpected : nmeshes) {
         collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<MeshData<>> data) override {
         collected_[data->nm - nmOffset_] = data;
         ++count_;
-        if (count_ == nmeshes_) {
+        if (count_ == totalExpected_) {
             auto bd = std::make_shared<BarrierData>();
             bd->meshes = std::move(collected_);
             collected_.resize(nmeshes_, nullptr);
@@ -37,6 +45,7 @@ private:
     int nmeshes_;
     int nmOffset_;
     int count_ = 0;
+    int totalExpected_;
     std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 

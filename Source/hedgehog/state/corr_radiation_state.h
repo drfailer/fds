@@ -9,7 +9,7 @@
 #include <vector>
 
 /// Orchestrator task: collects N MeshData<> tokens, dispatches parallel radiation work.
-/// No sequential pre-processing needed (MESH_EXCHANGE(6) already done).
+/// Radiation doesn't depend on Exchange(6) — uses local temperatures and species.
 ///
 /// Runs on a single thread.
 class CorrRadiationOrchestrator

@@ -34,6 +34,7 @@ int fds_get_kbar(int nm);
 int fds_is_cc_ibm();
 int fds_has_radiation();
 int fds_exchange_radiation();
+int fds_is_ht3d();
 int fds_use_pressure_subgraph();
 int fds_iterate_pressure();
 int fds_get_pres_flag();

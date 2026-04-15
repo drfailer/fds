@@ -8,7 +8,6 @@
 #include "../data/barrier_data.h"
 #include "../data/termination_data.h"
 #include "../state/barrier_state.h"
-#include "../state/div_setup_state.h"
 #include "../state/fork_join_state.h"
 #include "../task/barrier_tasks.h"
 #include "../task/corr_step1_kernel_task.h"
@@ -50,6 +49,7 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask<PressureTag>>(budget.velCorrector);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
+    bool ht3d = fds_is_ht3d() != 0;
 
     // --- Sub-graphs ---
 
@@ -68,14 +68,29 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Group A split: pre-barrier + ParticleOpsKernel + post-barrier ---
     //
-    // Pre-barrier (2N→N): joins fork1 branches, runs soot+hvac (global)
-    auto groupAPreSM = makeBarrierSM(nmeshes, "Join1+Soot+Hvac",
-        "SOOT+HVAC",
+    // Fork1 join (2N MeshData → 1 BarrierData) → fork: soot || hvac (BarrierData chain)
+    // → BarrierJoin → scatter → ParticleOps.
+    // BarrierData flows through the sequential chain — no scatter-collect overhead.
+    // SOOT_OXIDATION and HVAC_CALC are independent: soot modifies ZZ for soot species,
+    // HVAC solves duct network. Neither reads the other's output.
+    auto fork1Collector = std::make_shared<CollectorTask>(
+        nmeshes, "Fork1Collector", 2 * nmeshes);
+
+    auto sootChainTask = makeBarrierChainTask("SootOxidation",
+        "SOOT_OXIDATION",
         [](auto& meshes) {
             fds_soot_oxidation_loop(meshes[0]->dt);
+        });
+
+    auto hvacChainTask = makeBarrierChainTask("HvacCalc",
+        "HVAC_CALC",
+        [](auto& meshes) {
             fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
-        },
-        2 * nmeshes);
+        });
+
+    auto sootHvacJoinTask = std::make_shared<BarrierJoinTask>(2, "SootHvacJoin");
+
+    auto sootHvacScatterTask = makeBarrierTask("SootHvacScatter", "", [](auto&) {});
 
     // Extracted: condensation + particle mass/energy (parallel per-mesh)
     auto particleOpsKernelTask = std::make_shared<ParticleOpsKernelTask>(budget.corrParticleOps);
@@ -112,32 +127,39 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     subgraph->edges(meshExchange4SM, fork1VFluxSubgraph);
     subgraph->edges(meshExchange4SM, fork1CombTask);
 
-    // Group A pre-barrier collects 2N tokens from fork1 branches
-    subgraph->edges(fork1VFluxSubgraph, groupAPreSM);
-    subgraph->edges(fork1CombTask, groupAPreSM);
+    // Fork1 collect (2N MeshData → 1 BarrierData) then fork soot || hvac via BarrierData
+    subgraph->edges(fork1VFluxSubgraph, fork1Collector);
+    subgraph->edges(fork1CombTask, fork1Collector);
+    subgraph->edges(fork1Collector, sootChainTask);
+    subgraph->edges(fork1Collector, hvacChainTask);
+    subgraph->edges(sootChainTask, sootHvacJoinTask);
+    subgraph->edges(hvacChainTask, sootHvacJoinTask);
+    subgraph->edges(sootHvacJoinTask, sootHvacScatterTask);
 
-    // Group A: pre-barrier → ParticleOpsKernel → post-barrier → WallBCKernel
-    subgraph->edges(groupAPreSM, particleOpsKernelTask);
+    // Group A: scatter → ParticleOpsKernel → post-barrier → WallBCKernel
+    subgraph->edges(sootHvacScatterTask, particleOpsKernelTask);
     subgraph->edges(particleOpsKernelTask, groupAPostSM);
     subgraph->edges(groupAPostSM, wallBCKernelTask);
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
     if (ccIBM) {
-        // Group B (CC_IBM): WallBC kernel includes finalize → MeshExch(6)
+        // Group B (CC_IBM): Exchange(6) barrier for back wall data (HT3D only).
+        // Radiation forked from WallBC directly — doesn't need Exchange(6) data.
         // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
         auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a",
-            "MESH_EXCHANGE(6)",
-            [](auto& meshes) {
-                fds_mesh_exchange(6);
+            "MESH_EXCHANGE(6) [HT3D]",
+            [ht3d](auto& meshes) {
+                if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
             });
 
-        // MeshExch(2) + InitDiv barrier
-        auto meshExch2SM = makeBarrierSM(nmeshes, "MeshExchange(2)",
+        // Join (2N→N): collects Radiation + Exchange(6) outputs, then Exch(2) + InitDiv
+        auto meshExch2SM = makeBarrierSM(nmeshes, "Join+MeshExchange(2)",
             "MESH_EXCHANGE(2)\\nINIT_DIV_INTEGRALS",
             [](auto& meshes) {
                 if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
                 fds_initialize_divergence_integrals();
-            });
+            },
+            2 * nmeshes);
 
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
@@ -158,23 +180,28 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
+        // Fork: Radiation starts immediately from WallBC (no Exchange(6) dependency).
+        //        Exchange(6) runs in parallel. Both join at meshExch2SM.
+        subgraph->edges(wallBCKernelTask, corrRadiationSubgraph);
         subgraph->edges(wallBCKernelTask, groupBPostSM);
-        subgraph->edges(groupBPostSM, corrRadiationSubgraph);
         subgraph->edges(corrRadiationSubgraph, meshExch2SM);
+        subgraph->edges(groupBPostSM, meshExch2SM);
         subgraph->edges(meshExch2SM, corrDivP1KernelTask);
         subgraph->edges(corrDivP1KernelTask, corrDivExchangeSM);
         subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
     } else {
-        // Group B (non-CC_IBM): WallBC kernel includes finalize → MeshExch(6) + InitDiv
+        // Group B (non-CC_IBM): Exchange(6) [HT3D only] + InitDiv barrier.
+        // Radiation forked from WallBC directly — doesn't need Exchange(6) data.
+        // DivP1 waits for this barrier (needs InitDiv zeroed arrays).
+        // Exchange(6) conditional: at this point velocities haven't been corrected yet,
+        // so only new data since Exchange(3) is back wall info needed for HT3D.
         // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
         auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a+InitDiv",
-            "MESH_EXCHANGE(6)\\nINIT_DIV_INTEGRALS",
-            [](auto& meshes) {
-                fds_mesh_exchange(6);
+            "MESH_EXCHANGE(6) [HT3D]\\nINIT_DIV_INTEGRALS",
+            [ht3d](auto& meshes) {
+                if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
                 fds_initialize_divergence_integrals();
             });
-
-        subgraph->edges(wallBCKernelTask, groupBPostSM);
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
 
@@ -208,8 +235,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        // Multicast to both branches (Hedgehog routes by type)
-        subgraph->edges(groupBPostSM, corrRadiationSubgraph);
+        // Fork: Radiation starts immediately from WallBC (no Exchange(6) dependency).
+        //        DivP1 waits for Exchange(6) barrier.
+        subgraph->edges(wallBCKernelTask, corrRadiationSubgraph);
+        subgraph->edges(wallBCKernelTask, groupBPostSM);
         subgraph->edges(groupBPostSM, fork2DivP1Task);
         // Group C split: pre → QR kernel → post
         subgraph->edges(corrRadiationSubgraph, groupCPreSM);
