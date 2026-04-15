@@ -54,13 +54,13 @@ private:
 };
 
 /// Join task for fork-join patterns with BarrierData.
-/// Counts arrivals from multiple branches and emits after all arrive.
+/// Counts arrivals from multiple branches and scatters MeshData<> downstream.
 ///
 /// Runs on a single thread.
-class BarrierJoinTask : public hh::AbstractTask<1, BarrierData, BarrierData> {
+class BarrierJoinTask : public hh::AbstractTask<1, BarrierData, MeshData<>> {
 public:
     explicit BarrierJoinTask(int numBranches = 2, std::string name = "BarrierJoin")
-        : hh::AbstractTask<1, BarrierData, BarrierData>(std::move(name), 1),
+        : hh::AbstractTask<1, BarrierData, MeshData<>>(std::move(name), 1),
           numBranches_(numBranches) {}
 
     void execute(std::shared_ptr<BarrierData> data) override {
@@ -68,7 +68,7 @@ public:
         if (!lastData_) lastData_ = data;
         if (count_ == numBranches_) {
             count_ = 0;
-            this->addResult(lastData_);
+            this->batchAddResult(lastData_->meshes);
             lastData_ = nullptr;
         }
     }

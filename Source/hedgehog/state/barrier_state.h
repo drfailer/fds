@@ -168,4 +168,70 @@ inline auto makeBarrierChainTask(std::string name, std::string routines, Barrier
     return std::make_shared<BarrierChainTask>(std::move(name), std::move(routines), std::move(fn));
 }
 
+/// Dual-input barrier: collects N MeshData<> + 1 BarrierData, runs barrier
+/// function on the N meshes, then scatters N MeshData<> downstream.
+/// The BarrierData input is consumed for counting only (meshes discarded).
+/// Used when one fork branch produces BarrierData (e.g. radiation collector)
+/// and the other produces N MeshData tokens.
+class DualInputBarrierTask
+    : public hh::AbstractTask<2, MeshData<>, BarrierData, MeshData<>> {
+public:
+    template<typename Fn>
+    DualInputBarrierTask(int nmeshes, std::string name, std::string routines, Fn&& fn)
+        : hh::AbstractTask<2, MeshData<>, BarrierData, MeshData<>>(
+              std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++count_ == nmeshes_ + 1) fire();
+    }
+
+    void execute(std::shared_ptr<BarrierData>) override {
+        if (++count_ == nmeshes_ + 1) fire();
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    void fire() {
+        auto t0 = std::chrono::steady_clock::now();
+        fn_(collected_);
+        auto t1 = std::chrono::steady_clock::now();
+        totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+        ++invocations_;
+        count_ = 0;
+        this->batchAddResult(collected_);
+        for (auto &md : collected_) { md = nullptr; }
+    }
+
+    int nmeshes_, nmOffset_, count_ = 0;
+    std::string routines_;
+    BarrierFn<> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
+};
+
+/// Helper to create a DualInputBarrierTask.
+template<typename Fn>
+inline auto makeDualInputBarrier(int nmeshes, std::string name,
+                                  std::string routines, Fn&& fn) {
+    return std::make_shared<DualInputBarrierTask>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
 #endif // BARRIER_STATE_H

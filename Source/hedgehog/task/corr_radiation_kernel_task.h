@@ -6,15 +6,14 @@
 #include "../fds_fortran_interface.h"
 
 class CorrRadiationKernelTask
-    : public hh::AbstractTask<1, CorrRadiationWork, CorrRadiationWork> {
+    : public hh::AbstractTask<1, MeshData<>, CorrRadiationWork> {
 public:
     explicit CorrRadiationKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, CorrRadiationWork, CorrRadiationWork>(
+        : hh::AbstractTask<1, MeshData<>, CorrRadiationWork>(
               "CorrRadiationKernel", numThreads) {}
 
-    void execute(std::shared_ptr<CorrRadiationWork> work) override {
-        work->radQSumPartial = 0.0;
-        work->kfst4SumPartial = 0.0;
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        auto work = std::make_shared<CorrRadiationWork>(data->nm, data->t, 1, data);
         fds_compute_radiation_kernel(
             work->nm, work->t, work->radIter,
             &work->radQSumPartial, &work->kfst4SumPartial);
@@ -22,7 +21,7 @@ public:
         this->addResult(work);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, CorrRadiationWork, CorrRadiationWork>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, CorrRadiationWork>>
     copy() override {
         return std::make_shared<CorrRadiationKernelTask>(
             this->numberThreads());

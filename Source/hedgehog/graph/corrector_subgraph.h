@@ -15,7 +15,6 @@
 #include "../task/div_setup_kernel_task.h"
 #include "../task/combustion_kernel_task.h"
 #include "../task/pipeline_fork1_tasks.h"
-#include "pipeline_fork1_vflux_subgraph.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_corrector_kernel_task.h"
@@ -54,7 +53,6 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // --- Sub-graphs ---
 
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, budget.corrFork2Radiation);
-    auto corrFinalSubgraph = buildCorrFinalSubgraph(nmeshes, budget.corrFinalVelBC);
 
     // --- Barrier states ---
 
@@ -69,7 +67,7 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // --- Group A split: pre-barrier + ParticleOpsKernel + post-barrier ---
     //
     // Fork1 join (2N MeshData → 1 BarrierData) → fork: soot || hvac (BarrierData chain)
-    // → BarrierJoin → scatter → ParticleOps.
+    // → BarrierJoin (scatters MeshData) → ParticleOps.
     // BarrierData flows through the sequential chain — no scatter-collect overhead.
     // SOOT_OXIDATION and HVAC_CALC are independent: soot modifies ZZ for soot species,
     // HVAC solves duct network. Neither reads the other's output.
@@ -89,8 +87,6 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         });
 
     auto sootHvacJoinTask = std::make_shared<BarrierJoinTask>(2, "SootHvacJoin");
-
-    auto sootHvacScatterTask = makeBarrierTask("SootHvacScatter", "", [](auto&) {});
 
     // Extracted: condensation + particle mass/energy (parallel per-mesh)
     auto particleOpsKernelTask = std::make_shared<ParticleOpsKernelTask>(budget.corrParticleOps);
@@ -121,23 +117,22 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Fork 1: VFLUX || COMBUSTION → Group A split ---
 
-    auto fork1VFluxSubgraph = buildFork1VFluxSubgraph(nmeshes, ccIBM, budget.corrFork1DivSetup);
+    auto fork1DivSetupTask = std::make_shared<DivSetupKernelTask>(budget.corrFork1DivSetup);
     auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(budget.corrFork1Comb);
 
-    subgraph->edges(meshExchange4SM, fork1VFluxSubgraph);
+    subgraph->edges(meshExchange4SM, fork1DivSetupTask);
     subgraph->edges(meshExchange4SM, fork1CombTask);
 
     // Fork1 collect (2N MeshData → 1 BarrierData) then fork soot || hvac via BarrierData
-    subgraph->edges(fork1VFluxSubgraph, fork1Collector);
+    subgraph->edges(fork1DivSetupTask, fork1Collector);
     subgraph->edges(fork1CombTask, fork1Collector);
     subgraph->edges(fork1Collector, sootChainTask);
     subgraph->edges(fork1Collector, hvacChainTask);
     subgraph->edges(sootChainTask, sootHvacJoinTask);
     subgraph->edges(hvacChainTask, sootHvacJoinTask);
-    subgraph->edges(sootHvacJoinTask, sootHvacScatterTask);
 
-    // Group A: scatter → ParticleOpsKernel → post-barrier → WallBCKernel
-    subgraph->edges(sootHvacScatterTask, particleOpsKernelTask);
+    // Group A: join scatters MeshData → ParticleOpsKernel → post-barrier → WallBCKernel
+    subgraph->edges(sootHvacJoinTask, particleOpsKernelTask);
     subgraph->edges(particleOpsKernelTask, groupAPostSM);
     subgraph->edges(groupAPostSM, wallBCKernelTask);
 
@@ -152,14 +147,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
             });
 
-        // Join (2N→N): collects Radiation + Exchange(6) outputs, then Exch(2) + InitDiv
-        auto meshExch2SM = makeBarrierSM(nmeshes, "Join+MeshExchange(2)",
+        // Join (N MeshData + 1 BarrierData): Radiation(BarrierData) + Exchange(6)(MeshData)
+        auto meshExch2SM = makeDualInputBarrier(nmeshes, "Join+MeshExchange(2)",
             "MESH_EXCHANGE(2)\\nINIT_DIV_INTEGRALS",
             [](auto& meshes) {
                 if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
                 fds_initialize_divergence_integrals();
-            },
-            2 * nmeshes);
+            });
 
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
 
@@ -207,13 +201,12 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
         // Split Group C: pre-barrier(MeshExch2) → QRAddCopyKernel → post-barrier(DivExch)
 
-        // Pre-barrier (2N→N): joins fork2, exchanges radiation data
-        auto groupCPreSM = makeBarrierSM(nmeshes, "Join2+MeshExch2",
+        // Pre-barrier (N MeshData + 1 BarrierData): joins fork2 + radiation
+        auto groupCPreSM = makeDualInputBarrier(nmeshes, "Join2+MeshExch2",
             "MESH_EXCHANGE(2)",
             [](auto& meshes) {
                 if (fds_exchange_radiation()) { fds_mesh_exchange(2); }
-            },
-            2 * nmeshes);
+            });
 
         // Extracted: QR addition + WORK1 copy (parallel per-mesh)
         auto qrAddCopyKernelTask = std::make_shared<QRAddCopyKernelTask>(budget.corrQRAddCopy);
@@ -266,10 +259,30 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(corrPressureSM, velCorrKernelTask);
     }
 
-    // CorrFinal sub-graph (MeshExch6b in CorrFinalOrch task)
-    subgraph->edges(velCorrKernelTask, corrFinalSubgraph);
+    // --- CorrFinal (inlined): Orch → Fork(VelBCEdges || RTE) → Dump ---
 
-    subgraph->outputs(corrFinalSubgraph);
+    auto corrFinalOrchTask = std::make_shared<CorrFinalOrchTask>(nmeshes, ccIBM);
+
+    auto corrFinalVelBCTask = std::make_shared<VelocityBCEdgesTask>(
+        budget.corrFinalVelBC, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*isCorrFinal=*/true);
+
+    auto rteChainTask = makeBarrierChainTask("RTESourceCorr",
+        "RTE_SOURCE_CORR",
+        [](auto& meshes) {
+            fds_rte_source_correction();
+        });
+
+    auto corrFinalDumpTask = std::make_shared<CorrFinalDumpTask>(nmeshes);
+
+    subgraph->edges(velCorrKernelTask, corrFinalOrchTask);
+    // Fork: VelocityBCEdges (MeshData) || RTE_SOURCE_CORRECTION (BarrierData)
+    subgraph->edges(corrFinalOrchTask, corrFinalVelBCTask);
+    subgraph->edges(corrFinalOrchTask, rteChainTask);
+    // Join+dump
+    subgraph->edges(corrFinalVelBCTask, corrFinalDumpTask);
+    subgraph->edges(rteChainTask, corrFinalDumpTask);
+
+    subgraph->outputs(corrFinalDumpTask);
 
     return subgraph;
 }

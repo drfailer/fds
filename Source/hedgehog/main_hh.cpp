@@ -117,15 +117,17 @@ int main(int argc, char *argv[]) {
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
 
-    // Step 4: Push initial MeshData<> tokens (one per LOCAL mesh) into the graph.
-    // Set PREDICTOR=TRUE and FIRST_PASS=TRUE for the first time step
+    // Step 4: Push initial MeshData<Init> tokens (one per LOCAL mesh) into the graph.
+    // Set PREDICTOR=TRUE and FIRST_PASS=TRUE for the first time step.
+    // TimestepState collects these, runs INSERT_ALL_PARTICLES, then emits MeshData<>
+    // to the Predictor subgraph.
     // IMPORTANT: Only push tokens for meshes owned by this MPI process
     fds_set_predictor(1);
     fds_set_first_pass(1);
     fds_set_icyc(1);
 
     for (int nm = lower_mesh_index; nm <= upper_mesh_index; ++nm) {
-        auto md = std::make_shared<MeshData<>>(nm, t, dt, 0);  // phase=0 (predictor)
+        auto md = std::make_shared<MeshData<MeshState::Init>>(nm, t, dt, 0);
         graph->pushData(md);
     }
 

@@ -5,26 +5,6 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// DIV_P1 early task: PHASE=2, WORK_BRANCH=2 (species diffusion, heat, thermal).
-/// Runs per-mesh in parallel in Branch B after WALL_BC.
-class DivP1EarlyTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
-public:
-    explicit DivP1EarlyTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
-              "DivP1EarlyKernel", numThreads) {}
-
-    void execute(std::shared_ptr<MeshData<>> data) override {
-        fds_divergence_part_1_early_b(data->nm, data->t, data->dt);
-        this->addResult(data);
-    }
-
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
-    copy() override {
-        return std::make_shared<DivP1EarlyTask>(this->numberThreads());
-    }
-};
-
 /// DIV_P1 late task: PHASE=3, WORK_BRANCH=2 (advection, RTRM, sources, zone sums).
 /// Runs per-mesh in parallel after the join.
 class DivP1LateTask
@@ -45,22 +25,36 @@ public:
     }
 };
 
-/// Particle momentum kernel task (mesh-level, predictor fork Branch A).
-class PredPartMomKernelTask
+/// Merged predictor fork Branch A task: DivSetup + ParticleMomentum in one kernel.
+/// Eliminates the PredFork-BranchA sub-graph (was DivSetupKernel -> PredPartMomKernel).
+///
+/// Calls (per mesh):
+///   1. SET_BAROCLINIC_FALSE
+///   2. VISCOSITY_BC_KERNEL
+///   3. CC_VELOCITY_BC_TS (DO_IBEDGES=FALSE)
+///   4. VELOCITY_FLUX_KERNEL
+///   5. PARTICLE_MOMENTUM_KERNEL
+class PredDivSetupPartMomTask
     : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
-    explicit PredPartMomKernelTask(size_t numThreads)
+    explicit PredDivSetupPartMomTask(size_t numThreads)
         : hh::AbstractTask<1, MeshData<>, MeshData<>>(
-              "PredPartMomKernel", numThreads) {}
+              "PredDivSetupPartMomKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<>> data) override {
+        // DivSetup: baroclinic + viscosity BC + CC velocity BC + velocity flux
+        fds_set_baroclinic_false(data->nm);
+        fds_viscosity_bc_kernel(data->nm, data->phase);
+        fds_cc_velocity_bc_ts(data->t, data->nm, data->phase, 0);
+        fds_velocity_flux_kernel(data->nm, data->t, data->dt, data->phase);
+        // Particle momentum
         fds_particle_momentum_kernel(data->nm, data->dt);
         this->addResult(data);
     }
 
     std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
     copy() override {
-        return std::make_shared<PredPartMomKernelTask>(this->numberThreads());
+        return std::make_shared<PredDivSetupPartMomTask>(this->numberThreads());
     }
 };
 

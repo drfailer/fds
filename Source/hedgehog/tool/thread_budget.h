@@ -27,16 +27,13 @@ struct ThreadBudget {
     size_t predDivPrefork;      // DivP1PreforkKernelTask       (LIGHT) — split from barrier
     size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT)
     size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
-    size_t predSynTurb;         // SyntheticTurbulenceKernelTask(LIGHT) — split from barrier
-    size_t predFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
+    size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged SynTurb+VelBC
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
     size_t predDivP1Late;       // DivP1LateKernelTask          (LIGHT) — split from barrier
 
     // --- Predictor fork: {DivSetup+PartMom} || {WallBC+DivP1Early} ---
-    size_t predForkDivSetup;    // DivSetupKernelTask     (HEAVY)
-    size_t predForkPartMom;     // PredPartMomKernelTask  (LIGHT)
-    size_t predForkWallBC;      // WallBCKernelTask       (MEDIUM)
-    size_t predForkDivP1Early;  // DivP1EarlyTask         (MEDIUM)
+    size_t predForkDivSetupPartMom; // PredDivSetupPartMomTask   (HEAVY) — merged DivSetup+PartMom
+    size_t predForkWallBCDivEarly;  // PredWallBCDivEarlyTask    (HEAVY) — merged WallBC+DivP1Early
 
     // --- Corrector standalone sections ---
     size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
@@ -99,18 +96,15 @@ struct ThreadBudget {
         b.predDivPrefork = solo(1);  // split from barrier (light)
         b.predDivPart2   = solo(1);  // 283us/elem
         b.velPredictor   = solo(1);  // 90us/elem
-        b.predSynTurb    = solo(1);  // split from barrier (light)
-        b.predFinalVelBC = solo(2);  // 615us/elem
+        b.predSynTurbVelBC = solo(2);  // merged SynTurb(light)+VelBC(medium)
         b.retryMomDiv    = solo(1);  // rarely used
         b.predDivP1Late  = solo(1);  // split from barrier (light)
 
-        // --- Predictor fork: A{DivSetup(4)+PartMom(1)} || B{WallBC(2)+DivP1Early(2)} ---
+        // --- Predictor fork: A{DivSetupPartMom(4)} || B{WallBCDivEarly(4)} ---
         {
-            auto t = distribute({4, 1, 2, 2});
-            b.predForkDivSetup  = t[0];
-            b.predForkPartMom   = t[1];
-            b.predForkWallBC    = t[2];
-            b.predForkDivP1Early = t[3];
+            auto t = distribute({4, 4});
+            b.predForkDivSetupPartMom = t[0];
+            b.predForkWallBCDivEarly  = t[1];
         }
 
         // --- Corrector standalone ---
@@ -156,14 +150,11 @@ struct ThreadBudget {
            << " divPrefork=" << predDivPrefork
            << " divP2=" << predDivPart2
            << " velPred=" << velPredictor
-           << " synTurb=" << predSynTurb
-           << " finalVBC=" << predFinalVelBC
+           << " synTurbVelBC=" << predSynTurbVelBC
            << " retry=" << retryMomDiv
            << " divP1Late=" << predDivP1Late << "\n"
-           << "  Pred fork:  divSetup=" << predForkDivSetup
-           << " partMom=" << predForkPartMom
-           << " wallBC=" << predForkWallBC
-           << " divP1Early=" << predForkDivP1Early << "\n"
+           << "  Pred fork:  divSetupPartMom=" << predForkDivSetupPartMom
+           << " wallBCDivEarly=" << predForkWallBCDivEarly << "\n"
            << "  Corrector:  step1=" << corrStep1
            << " particleOps=" << corrParticleOps
            << " divP2=" << corrDivPart2

@@ -11,39 +11,60 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged dump-join + timestep-loop state.
+/// Merged dump-join + timestep-loop + INSERT_PARTICLES state.
 ///
-/// Joins the two dump fork branches:
-///   - N MeshData<> tokens from DumpMeshOutputsTask (per-mesh I/O)
-///   - 1 BarrierData from DumpGlobalTask (global computation + global I/O)
+/// Three input paths:
+///   1. MeshData<MeshState::Init> — graph initial injection (first iteration only).
+///      Collects N tokens, runs INSERT_ALL_PARTICLES, emits MeshData<> to Predictor.
+///   2. MeshData<> + BarrierData — dump fork-join (subsequent iterations).
+///      Joins N MeshData<> from DumpMeshOutputsTask + 1 BarrierData from DumpGlobalTask.
+///      After joining: STOP_CHECK, adjust DT, INSERT_ALL_PARTICLES, emit MeshData<>.
 ///
-/// When skipMeshDump is set on the BarrierData, no MeshData<> tokens are
-/// expected and the state proceeds immediately (skip-dump optimization).
+/// When skipMeshDump is set on BarrierData, no MeshData<> tokens are expected.
 ///
-/// After joining, performs STOP_CHECK and the termination decision:
-///   - If done: emits BarrierData → graph output for clean shutdown
-///   - If not done: adjusts DT, emits MeshData<> tokens → Predictor (cycle)
-class TimestepState : public hh::AbstractState<2, MeshData<>, BarrierData, MeshData<>, BarrierData> {
+/// Termination: emits BarrierData → graph output for clean shutdown.
+class TimestepState : public hh::AbstractState<3, MeshData<>, BarrierData, MeshData<MeshState::Init>,
+                                                  MeshData<>, BarrierData> {
 public:
     TimestepState(int nmeshes, double tEnd, std::shared_ptr<int> icyc)
-        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)) {}
+        : nmeshes_(nmeshes), tEnd_(tEnd), icyc_(std::move(icyc)) {
+        initCollected_.reserve(nmeshes);
+    }
 
+    /// Collect MeshData<> from DumpMeshOutputsTask (dump fork-join).
     void execute(std::shared_ptr<MeshData<>> /*data*/) override {
         ++meshCount_;
         tryFinalize();
     }
 
+    /// Collect BarrierData from DumpGlobalTask (dump fork-join).
     void execute(std::shared_ptr<BarrierData> data) override {
         globalBarrier_ = data;
         if (data->skipMeshDump) meshCount_ = nmeshes_;
         tryFinalize();
     }
 
+    /// Collect MeshData<Init> from graph input (first iteration).
+    void execute(std::shared_ptr<MeshData<MeshState::Init>> data) override {
+        initCollected_.push_back(data);
+        if (static_cast<int>(initCollected_.size()) == nmeshes_) {
+            // INSERT_ALL_PARTICLES (sequential, cross-mesh)
+            for (auto &md : initCollected_) {
+                fds_insert_particles(md->t, md->nm);
+            }
+            for (auto &md : initCollected_) {
+                this->bufferResult(md->template retag<MeshState::Default>());
+            }
+            this->template flushResults<MeshData<>>();
+            initCollected_.clear();
+        }
+    }
+
     [[nodiscard]] bool isDone() const { return done_; }
 
     [[nodiscard]] std::string info() const {
         std::ostringstream oss;
-        oss << "STOP_CHECK + cycle\\n"
+        oss << "INSERT_PART\\nSTOP_CHECK + cycle\\n"
             << std::fixed << std::setprecision(3) << totalTime_ << "s"
             << " / " << invocations_ << " calls";
         if (invocations_ > 0)
@@ -86,9 +107,17 @@ private:
                 md->firstPass = true;
                 md->dt_bc = 0.0;
                 md->call_ht_1d = 0;
+            }
+
+            // INSERT_ALL_PARTICLES (sequential, cross-mesh)
+            for (auto &md : globalBarrier_->meshes) {
+                fds_insert_particles(md->t, md->nm);
+            }
+
+            for (auto &md : globalBarrier_->meshes) {
                 this->bufferResult(md);
             }
-            this->flushResults<MeshData<>>();
+            this->template flushResults<MeshData<>>();
         }
 
         meshCount_ = 0;
@@ -105,6 +134,7 @@ private:
     bool done_ = false;
     int meshCount_ = 0;
     std::shared_ptr<BarrierData> globalBarrier_ = nullptr;
+    std::vector<std::shared_ptr<MeshData<MeshState::Init>>> initCollected_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
     int skipped_ = 0;
@@ -113,11 +143,13 @@ private:
 /// StateManager for TimestepState.
 /// Overrides canTerminate() to break the cycle when the simulation is done.
 class TimestepStateManager
-    : public hh::StateManager<2, MeshData<>, BarrierData, MeshData<>, BarrierData> {
+    : public hh::StateManager<3, MeshData<>, BarrierData, MeshData<MeshState::Init>,
+                               MeshData<>, BarrierData> {
 public:
     TimestepStateManager(std::shared_ptr<TimestepState> const &state,
                          std::string const &name)
-        : hh::StateManager<2, MeshData<>, BarrierData, MeshData<>, BarrierData>(
+        : hh::StateManager<3, MeshData<>, BarrierData, MeshData<MeshState::Init>,
+                            MeshData<>, BarrierData>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

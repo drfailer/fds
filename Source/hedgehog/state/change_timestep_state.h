@@ -8,20 +8,22 @@
 #include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged collector + retry loop state.
+/// Merged collector + retry loop state + MeshExch3.
 ///
 /// Collects N MeshData<> tokens from the parallel kernel (or receives
 /// RetrySequenceData from the bypass path), runs post-kernel work,
 /// checks for CFL retry, and either cycles back or exits.
+/// On exit, runs CC_END_STEP + MESH_EXCHANGE(3) and scatters MeshData<>.
 ///
 /// Output types (Hedgehog type-based routing):
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
-///   - BarrierData → exits the subgraph (retry complete or no retry needed)
+///   - MeshData<> → exits the subgraph (retry complete or no retry needed)
 class RetryLoopState : public hh::AbstractState<3, MeshData<>, RetrySequenceData, TerminationData,
-                                                  RetrySequenceData, BarrierData> {
+                                                  RetrySequenceData, MeshData<>> {
 public:
-    explicit RetryLoopState(int nmeshes)
-        : nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+    RetryLoopState(int nmeshes, bool ccIBM)
+        : nmeshes_(nmeshes), ccIBM_(ccIBM),
+          nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -37,9 +39,11 @@ public:
     /// Bypass from RetryPreKernel (done=true → no retry needed).
     void execute(std::shared_ptr<RetrySequenceData> data) override {
         if (data->done) {
-            auto bd = std::make_shared<BarrierData>();
-            bd->meshes = data->meshes;
-            this->addResult(bd);
+            if (ccIBM_) { fds_cc_end_step(data->meshes[0]->t, data->meshes[0]->dt, 0); }
+            fds_mesh_exchange(3);
+            for (auto &md : data->meshes) {
+                this->addResult(md);
+            }
         }
     }
 
@@ -94,17 +98,17 @@ private:
     }
 
     void emitExit() {
-        auto bd = std::make_shared<BarrierData>();
-        bd->meshes.reserve(nmeshes_);
+        if (ccIBM_) { fds_cc_end_step(collected_[0]->t, collected_[0]->dt, 0); }
+        fds_mesh_exchange(3);
         for (auto &md : collected_) {
-            bd->meshes.push_back(md);
+            this->addResult(md);
             md = nullptr;
         }
         iteration_ = 0;
-        this->addResult(bd);
     }
 
     int nmeshes_, nmOffset_, count_ = 0, iteration_ = 0;
+    bool ccIBM_;
     bool done_ = false;
     std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
@@ -112,13 +116,13 @@ private:
 /// Custom state manager for the retry loop cycle.
 class RetryLoopStateManager
     : public hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
-                               RetrySequenceData, BarrierData> {
+                               RetrySequenceData, MeshData<>> {
 public:
     RetryLoopStateManager(
         std::shared_ptr<RetryLoopState> const &state,
         std::string const &name)
         : hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
-                            RetrySequenceData, BarrierData>(
+                            RetrySequenceData, MeshData<>>(
               state, name) {}
 
     [[nodiscard]] bool canTerminate() const override {

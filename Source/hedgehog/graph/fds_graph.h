@@ -37,7 +37,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
                           const ThreadBudget &budget,
                           hh::comm::CommService *commService = nullptr) {
 
-    using GraphType = hh::Graph<2, MeshData<>, TerminationData, BarrierData>;
+    using GraphType = hh::Graph<2, MeshData<MeshState::Init>, TerminationData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
     // --- Build mesh dependency graph (once, shared by predictor & corrector) ---
@@ -68,8 +68,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     // --- Wire the graph ---
 
-    // Input: MeshData<> + TerminationData -> Predictor
-    graph->inputs(predictorSubgraph);
+    // Input: MeshData<Init> -> TimestepState (INSERT_PARTICLES, then emit to Predictor)
+    graph->input<MeshData<MeshState::Init>>(timestepSM);
+    // Input: TerminationData -> Predictor (for ChangeTimeStep cycle termination)
+    graph->input<TerminationData>(predictorSubgraph);
 
     // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);

@@ -18,44 +18,44 @@
 ///
 /// RetryLoopSM collects N MeshData<> from the kernel, runs post-kernel work
 /// (divergence exchange, div_p2, pressure iteration, velocity predictor),
-/// and checks for retry.
+/// checks for retry, and on exit runs CC_END_STEP + MESH_EXCHANGE(3).
 ///
 /// Type-specific edges avoid routing MeshData<> from RetryPreKernel to
 /// RetryLoopSM (only RetrySequenceData should take that path).
 ///
 /// Output types (type-based routing):
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
-///   - BarrierData → exits the sub-graph (retry complete or no retry needed)
-inline auto buildChangeTimeStepSubgraph(int nmeshes, size_t kernelThreads) {
-    using SubGraphType = hh::Graph<2, BarrierData, TerminationData, BarrierData>;
+///   - MeshData<> → exits the sub-graph (retry complete or no retry needed)
+inline auto buildChangeTimeStepSubgraph(int nmeshes, size_t kernelThreads, bool ccIBM) {
+    using SubGraphType = hh::Graph<2, MeshData<>, TerminationData, MeshData<>>;
     auto subgraph = std::make_shared<SubGraphType>("ChangeTimeStepSubgraph");
 
-    auto retryPreKernel = std::make_shared<RetryPreKernelTask>();
+    auto retryPreKernel = std::make_shared<RetryPreKernelTask>(nmeshes);
     auto retryMomDivKernel = std::make_shared<RetryMomentumDivKernelTask>(
         kernelThreads);
 
     auto retryLoopSM = std::make_shared<RetryLoopStateManager>(
-        std::make_shared<RetryLoopState>(nmeshes), "RetryLoop");
+        std::make_shared<RetryLoopState>(nmeshes, ccIBM), "RetryLoop");
 
-    // Entry point
-    subgraph->input<BarrierData>(retryPreKernel);
+    // Entry point: MeshData<> from VelocityPredictor → RetryPreKernel (collects N)
+    subgraph->input<MeshData<>>(retryPreKernel);
     subgraph->input<TerminationData>(retryLoopSM);
 
-    // RetryPreKernel → kernel: MeshData<> (all matching types, kernel only accepts MeshData<>)
-    subgraph->edges(retryPreKernel, retryMomDivKernel);
+    // RetryPreKernel → kernel: MeshData<> scatter for parallel processing
+    // Must use edge<MeshData<>> to avoid routing RetrySequenceData to kernel
+    subgraph->template edge<MeshData<>>(retryPreKernel, retryMomDivKernel);
 
     // RetryPreKernel → loop: RetrySequenceData ONLY (bypass path)
-    // Must use edge<T> to avoid routing MeshData<> to the loop state
     subgraph->template edge<RetrySequenceData>(retryPreKernel, retryLoopSM);
 
     // Kernel → loop: MeshData<> (collected internally by merged state)
     subgraph->edges(retryMomDivKernel, retryLoopSM);
 
     // Cycle: loop → pre-kernel: RetrySequenceData ONLY
-    // Must use edge<T> to avoid routing BarrierData back to pre-kernel
+    // Must use edge<T> to avoid routing MeshData<> back to pre-kernel
     subgraph->template edge<RetrySequenceData>(retryLoopSM, retryPreKernel);
 
-    // Exit: RetryLoopState emits BarrierData → subgraph output
+    // Exit: RetryLoopState emits MeshData<> → subgraph output
     subgraph->outputs(retryLoopSM);
 
     return subgraph;

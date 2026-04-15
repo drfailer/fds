@@ -7,9 +7,9 @@
 #include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// All sequential pre-kernel operations for the CFL retry loop.
+/// Merged collector + pre-kernel for the CFL retry loop.
 ///
-/// Accepts BarrierData from the subgraph entry (first check) and
+/// Collects N MeshData<> from VelocityPredictor (first check) and accepts
 /// RetrySequenceData from the cycle (subsequent retries).
 ///
 /// When no retry is needed: emits RetrySequenceData(done=true) which
@@ -19,31 +19,40 @@
 /// HVAC, divergence init, and wall BC, then scatters MeshData<> tokens
 /// for parallel kernel processing.
 class RetryPreKernelTask
-    : public hh::AbstractTask<2, BarrierData, RetrySequenceData,
+    : public hh::AbstractTask<2, MeshData<>, RetrySequenceData,
                               MeshData<>, RetrySequenceData> {
 public:
-    RetryPreKernelTask()
-        : hh::AbstractTask<2, BarrierData, RetrySequenceData,
-                           MeshData<>, RetrySequenceData>("RetryPreKernel", 1) {}
+    explicit RetryPreKernelTask(int nmeshes)
+        : hh::AbstractTask<2, MeshData<>, RetrySequenceData,
+                           MeshData<>, RetrySequenceData>("RetryPreKernel", 1),
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
 
-    /// Entry from subgraph input: check if retry is needed.
-    void execute(std::shared_ptr<BarrierData> barrier) override {
-        fds_stop_check_zero();
+    /// Collect N MeshData<> from VelocityPredictor, then check if retry needed.
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++count_ == nmeshes_) {
+            count_ = 0;
+            fds_stop_check_zero();
 
-        int needRetry = 0;
-        double newDt = 0.0;
-        fds_check_change_time_step(&needRetry, &newDt);
+            int needRetry = 0;
+            double newDt = 0.0;
+            fds_check_change_time_step(&needRetry, &newDt);
 
-        if (!needRetry) {
-            auto retryData = std::make_shared<RetrySequenceData>(
-                barrier->meshes, barrier->t(), barrier->dt(), -1, true);
-            this->addResult(retryData);  // bypass to RetryLoopState
-            return;
+            std::vector<std::shared_ptr<MeshData<>>> meshes(collected_.begin(), collected_.end());
+            std::fill(collected_.begin(), collected_.end(), nullptr);
+
+            if (!needRetry) {
+                auto retryData = std::make_shared<RetrySequenceData>(
+                    meshes, meshes[0]->t, meshes[0]->dt, -1, true);
+                this->addResult(retryData);  // bypass to RetryLoopState
+            } else {
+                auto retryData = std::make_shared<RetrySequenceData>(
+                    meshes, meshes[0]->t, newDt, 0, false);
+                doPreKernelWork(retryData);
+            }
         }
-
-        auto retryData = std::make_shared<RetrySequenceData>(
-            barrier->meshes, barrier->t(), newDt, 0, false);
-        doPreKernelWork(retryData);
     }
 
     /// Entry from cycle: always needs retry (RetryLoopState only cycles when needed).
@@ -89,6 +98,9 @@ private:
         // Scatter MeshData<> for parallel kernel processing
         this->batchAddResult(data->meshes);
     }
+
+    int nmeshes_, nmOffset_, count_ = 0;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
 /// Parallel kernel for particle momentum + divergence part 1 in retry path.

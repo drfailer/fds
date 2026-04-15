@@ -3,21 +3,19 @@
 
 #include <hedgehog/hedgehog.h>
 #include "../data/mesh_data.h"
+#include "../data/barrier_data.h"
 #include "../data/corr_radiation_data.h"
 #include "../state/corr_radiation_state.h"
 #include "../task/corr_radiation_kernel_task.h"
 
 inline auto buildCorrRadiationSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<
-        hh::Graph<1, MeshData<>, MeshData<>>>("CorrRadiation");
+        hh::Graph<1, MeshData<>, BarrierData>>("CorrRadiation");
 
-    auto orchTask = std::make_shared<CorrRadiationOrchestrator>(nmeshes);
-    auto kernelTask = std::make_shared<CorrRadiationKernelTask>(
-        kernelThreads);
+    auto kernelTask = std::make_shared<CorrRadiationKernelTask>(kernelThreads);
     auto collectorTask = std::make_shared<CorrRadiationCollector>(nmeshes);
 
-    subgraph->inputs(orchTask);
-    subgraph->edges(orchTask, kernelTask);
+    subgraph->inputs(kernelTask);
     subgraph->edges(kernelTask, collectorTask);
     subgraph->outputs(collectorTask);
 

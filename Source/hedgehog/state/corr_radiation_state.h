@@ -3,69 +3,40 @@
 
 #include <hedgehog/hedgehog.h>
 #include "../data/mesh_data.h"
+#include "../data/barrier_data.h"
 #include "../data/corr_radiation_data.h"
 #include "../fds_fortran_interface.h"
 
 #include <vector>
 
-/// Orchestrator task: collects N MeshData<> tokens, dispatches parallel radiation work.
-/// Radiation doesn't depend on Exchange(6) — uses local temperatures and species.
-///
-/// Runs on a single thread.
-class CorrRadiationOrchestrator
-    : public hh::AbstractTask<1, MeshData<>, CorrRadiationWork> {
-public:
-    explicit CorrRadiationOrchestrator(int nmeshes)
-        : hh::AbstractTask<1, MeshData<>, CorrRadiationWork>("CorrRadOrch", 1),
-          nmeshes_(nmeshes) {
-        collected_.reserve(nmeshes);
-    }
-
-    void execute(std::shared_ptr<MeshData<>> data) override {
-        collected_.push_back(data);
-        if (static_cast<int>(collected_.size()) == nmeshes_) {
-            for (auto &md : collected_) {
-                this->bufferResult(std::make_shared<CorrRadiationWork>(
-                    md->nm, md->t, 1, md));
-            }
-            this->flushResults<CorrRadiationWork>();
-            collected_.clear();
-            collected_.reserve(nmeshes_);
-        }
-    }
-
-private:
-    int nmeshes_;
-    std::vector<std::shared_ptr<MeshData<>>> collected_;
-};
-
 /// Collector task: gathers N CorrRadiationWork results, accumulates global
-/// RAD_Q_SUM/KFST4_SUM, emits N MeshData<> tokens downstream.
+/// RAD_Q_SUM/KFST4_SUM, emits 1 BarrierData downstream.
 ///
 /// Uses direct indexed placement (nm - offset) to avoid sorting.
 /// Runs on a single thread.
 class CorrRadiationCollector
-    : public hh::AbstractTask<1, CorrRadiationWork, MeshData<>> {
+    : public hh::AbstractTask<1, CorrRadiationWork, BarrierData> {
 public:
     explicit CorrRadiationCollector(int nmeshes)
-        : hh::AbstractTask<1, CorrRadiationWork, MeshData<>>("CorrRadCollector", 1),
+        : hh::AbstractTask<1, CorrRadiationWork, BarrierData>("CorrRadCollector", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
     void execute(std::shared_ptr<CorrRadiationWork> work) override {
         collected_[work->nm - nmOffset_] = work;
-        ++count_;
-        if (count_ == nmeshes_) {
+        if (++count_ == nmeshes_) {
             // Accumulate per-mesh partial sums into global variables
             for (auto &w : collected_) {
                 fds_accumulate_rad_sums(
                     w->radQSumPartial, w->kfst4SumPartial);
             }
+            auto bd = std::make_shared<BarrierData>();
+            bd->meshes.resize(nmeshes_);
             for (auto &w : collected_) {
-                this->bufferResult(w->originalMeshData);
+                bd->meshes[w->nm - nmOffset_] = w->originalMeshData;
             }
-            this->flushResults<MeshData<>>();
+            this->addResult(bd);
             std::fill(collected_.begin(), collected_.end(), nullptr);
             count_ = 0;
         }

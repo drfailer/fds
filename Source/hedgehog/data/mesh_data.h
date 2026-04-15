@@ -9,6 +9,7 @@
 /// The enum grows as more subgraphs are shared between pipeline phases.
 enum class MeshState {
     Default,              ///< Everything outside shared subgraphs
+    Init,                 ///< Graph input: initial injection into TimestepState
     PredictorPressure,    ///< Boundary: predictor -> pressure subgraph
     CorrectorPressure,    ///< Boundary: corrector -> pressure subgraph
     Pressure,             ///< Internal pressure pipeline + cycle-back

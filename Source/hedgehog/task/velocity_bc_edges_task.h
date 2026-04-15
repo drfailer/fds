@@ -57,4 +57,37 @@ private:
     bool isCorrFinal_;
 };
 
+/// Merged predictor-final task: SyntheticTurbulence + VelocityBCEdges.
+/// Eliminates the PredFinal sub-graph and standalone SyntheticTurbulenceKernelTask.
+///
+/// Calls (per mesh):
+///   1. SYNTHETIC_TURBULENCE_IF_ENABLED
+///   2. CC_VELOCITY_CUTFACES_TS (CC_IBM)
+///   3. MATCH_VELOCITY_KERNEL
+///   4. VELOCITY_BC_PREPROCESSING
+///   5. VELOCITY_BC_PROCESS_EDGES_KERNEL
+///   6. CC_VELOCITY_BC_TS (CC_IBM, DO_IBEDGES=TRUE)
+class PredSynTurbVelBCTask
+    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+public:
+    explicit PredSynTurbVelBCTask(size_t numThreads)
+        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
+              "PredSynTurbVelBCKernel", numThreads) {}
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        fds_synthetic_turbulence_if_enabled(data->dt, data->t, data->nm);
+        fds_cc_velocity_cutfaces_ts(data->nm, 1);  // applyToEstimated=1
+        fds_match_velocity_kernel(data->nm, 1);
+        fds_velocity_bc_preprocessing(data->nm, data->t, 1);
+        fds_velocity_bc_process_edges_kernel(data->nm, data->t, 1);
+        fds_cc_velocity_bc_ts(data->t, data->nm, 1, 1);  // applyToEstimated=1, doIBEdges=1
+        this->addResult(data);
+    }
+
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
+    copy() override {
+        return std::make_shared<PredSynTurbVelBCTask>(this->numberThreads());
+    }
+};
+
 #endif // VELOCITY_BC_EDGES_TASK_H
