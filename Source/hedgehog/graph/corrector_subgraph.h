@@ -171,6 +171,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
                     fds_pressure_iteration_increment();
+                    // Pre-loop: link cut-face velocity fluxes before pressure iterations
+                    for (auto &md : meshes) {
+                        fds_get_linked_fv(md->nm, 0); // DO_BAROCLINIC=FALSE
+                    }
                 }
             });
 

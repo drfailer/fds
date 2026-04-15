@@ -118,7 +118,8 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
     - ULMAT kernels: ULMAT_SOLVER_KERNEL (Pattern 3 alias shadowing, ~500 lines), PRESSURE_SOLVER_CHECK_RESIDUALS_U_KERNEL (with inline GRADIENT_WEIGHT)
     - PostLoopSM runs Phase 3: MESH_EXCHANGE(5) + velocity error + convergence check
     - canTerminate() uses `(reachedEnd() && lastConverged()) || isTerminated()` — `lastConverged` prevents premature mid-iteration termination
-    - GLMAT/UGLMAT and CC_IBM cases fall back to sequential PressureIterationTask
+    - GLMAT/UGLMAT cases fall back to sequential PressureIterationTask
+    - CC_IBM fully supported: CC_NO_FLUX, CC_MATCH_VELOCITY_FLUX, CC_COMPUTE_VELOCITY_ERROR integrated into tasks; GET_LINKED_FV pre-loop init and FN_OMESH exchange prep complete
     - Files: data/pressure_iteration_data.h, state/pressure_iteration_state.h, task/pressure_iteration_tasks.h, graph/pressure_iteration_subgraph.h
 
 17. **TerminationSignal** (shared termination mechanism for sub-graph cycles)
@@ -132,17 +133,17 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 18. **Combustion Kernel** (parallel per-mesh chemistry, Phase 3 Target 1)
     - Extracted COMBUSTION_KERNEL from COMBUSTION_GENERAL_LOAD_BALANCED (fire.f90)
     - Kernel handles: zero Q/CHI_R, identify active cells, COMBUSTION_MODEL ODE loop, CC_IBM volume averaging
-    - SOOT_SURFACE_OXIDATION + HVAC_CALC remain sequential in SootHvacTask barrier
+    - SOOT_SURFACE_OXIDATION and HVAC_CALC run as separate BarrierChainTasks in parallel fork (joined by SootHvacJoin)
     - Technique: Pattern 2 (M pointer, `M => MESHES(NM)`)
     - Files: fire_kernels.f90, task/combustion_kernel_task.h
-    - Replaced: CombustionHvacTask → CombustionKernelTask (parallel) + SootHvacTask (barrier)
+    - Replaced: CombustionHvacTask → CombustionKernelTask (parallel) + SootOxidation || HvacCalc (parallel chains)
 
 19. **Particle Mass/Energy Kernel** (parallel per-mesh heat/mass transfer, Phase 3 Target 2)
     - Extracted PARTICLE_MASS_ENERGY_KERNEL from PARTICLE_MASS_ENERGY_TRANSFER (part.f90, ~1090 lines)
     - Technique: Pattern 3 (local pointer alias shadowing, ~35 aliases, RECURSIVE)
-    - REMOVE_PARTICLES + MOVE_PARTICLES remain sequential in RemoveMoveParticlesTask barrier
-    - Files: part.f90, task/particle_mass_energy_kernel_task.h, task/barrier_tasks.h
-    - Replaced: CorrParticleOrchestrator → ParticleMassEnergyKernelTask (parallel) + RemoveMoveParticlesTask (barrier) + CorrParticleKernelTask (parallel)
+    - REMOVE_PARTICLES + MOVE_PARTICLES merged into ParticleOpsKernelTask (per-mesh parallel)
+    - Files: part.f90, task/particle_mass_energy_kernel_task.h, task/particle_ops_kernel_task.h
+    - Replaced: CorrParticleOrchestrator → ParticleMassEnergyKernelTask (parallel) → SootOxidation || HvacCalc → ParticleOpsKernelTask (parallel)
 
 20. **Density Block** (K-block decomposition for DENSITY_KERNEL, Phase 4 Target 3)
     - 3-phase decomposition: Orchestrator (settling vel, work arrays, wall corr) → Block kernel (species density, M_DOT_PPP, RHO sum) → Collector (CHECK_MASS_DENSITY, mass fraction, PBAR, RSUM, TMP)
@@ -239,7 +240,7 @@ All verified byte-identical on 1-mesh through 5-mesh test configurations.
 | ~~CC_DENSITY barrier~~ | ~~CC_DENSITY in MeshExch(1) and MeshExch(4)~~ | ~~POINT_TO_MESH, module pointers~~ | ✅ Done (Phase 5, CC_DENSITY_TS) |
 | PredStep1Orchestrator | INSERT_ALL_PARTICLES | RANDOM_NUMBER not thread-safe, global state | Blocked — not viable |
 | SootHvacTask | SOOT_SURFACE_OXIDATION + HVAC_CALC | HVAC is global network solver | None planned |
-| RemoveMoveParticlesTask | REMOVE_PARTICLES + MOVE_PARTICLES | Cross-mesh OMESH writes | Investigate |
+| ~~RemoveMoveParticlesTask~~ | ~~REMOVE_PARTICLES + MOVE_PARTICLES~~ | ~~Cross-mesh OMESH writes~~ | ✅ Done (merged into ParticleOpsKernelTask) |
 | MeshExchange tasks | MESH_EXCHANGE(1-7) | Inherently global/sequential | None planned |
 | DivergenceExchange tasks | EXCHANGE_DIVERGENCE_INFO | Inherently global/sequential | None planned |
 | PhaseTransitionTask | Phase transition bookkeeping | Inherently global/sequential | None planned |
@@ -279,9 +280,10 @@ Merged into ParticleOpsKernelTask (condensation + mass/energy + remove + move + 
 
 **Status**: ✅ COMPLETE — 20/20 custom, 58/58 verification (tol=1e-6)
 
-### Target 3: DIVERGENCE_PART_2_PREPROCESSING (4 barriers)
+### Target 3: DIVERGENCE_PART_2_PREPROCESSING (2 barriers, non-CC_IBM only)
 
-**Location**: predictor_subgraph.h:124/175, corrector_subgraph.h:153/207
+**Location**: predictor_subgraph.h:109-121 ("DivExch+ZoneOps"), corrector_subgraph.h:217-229 ("DivExch+ZoneOps")
+**Note**: CC_IBM barriers (predictor:159-176, corrector:162-175) contain GET_LINKED_VELOCITIES which has cross-mesh writes — NOT parallelizable.
 
 Per-mesh loop calling `fds_divergence_part_2_preprocessing(nm, dt)` which modifies global USUM (pressure zone sums). Currently sequential because USUM accumulates across all meshes.
 
@@ -367,10 +369,19 @@ All verified byte-identical on CC_IBM test cases.
 - CC_END_STEP: pre-exchange hook on MeshExchange(3) and MeshExchange(6b)
 - CC_VELOCITY_BC: in DivSetup orchestrators and PredFinal/CorrFinal collectors
 
-**CC_IBM test cases** (3 additional tests):
+**CC_IBM pressure subgraph** (see PROGRESS_CCIBM_PRESSURE.md for details):
+- ✅ CC_NO_FLUX integrated into BaroclinicKernelTask (FORCE=TRUE) and PressureSolveKernelTask (FORCE=FALSE)
+- ✅ CC_MATCH_VELOCITY_FLUX integrated into PressureSolveKernelTask (replaces non-CC kernel)
+- ✅ CC_COMPUTE_VELOCITY_ERROR integrated into VelocityErrorTask
+- ✅ CC_IBM gate removed from fds_use_pressure_subgraph()
+- ✅ GET_LINKED_FV pre-loop initialization in predictor/corrector CC_IBM barriers
+- ✅ FN_OMESH exchange prep in BaroclinicKernelTask (same-rank CC exchange for CODE=5)
+
+**CC_IBM test cases** (4 additional tests):
 - shunn3_32_cc: 1-mesh Shunn3 MMS (tolerance 1e-5, HYPRE version difference)
 - two_spheres_cc: 1-mesh Two Spheres (tolerance 1e-4, minor numerical difference)
 - sphere_helium_1mesh_cc: 1-mesh Sphere Helium (byte-identical)
+- sphere_helium_3meshes_cc: 3-mesh Sphere Helium, UGLMAT (tolerance 1e-6)
 
 ## Intra-Mesh Block Decomposition (8 kernels converted)
 

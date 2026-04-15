@@ -57,6 +57,7 @@ private:
         }
         if (fds_is_cc_ibm()) {
             fds_cc_no_flux(md->dt, md->nm, 1); // FORCE_FLG=TRUE
+            fds_cc_exchange_prepare_fn(md->nm); // Set FN_OMESH before exchange
         }
         md->exchangeRound = 0;  // pre-solve exchange
         this->addResult(md);

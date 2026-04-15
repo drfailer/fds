@@ -179,6 +179,8 @@ void fds_match_velocity_flux_kernel(int nm);
 void fds_cc_no_flux(double dt, int nm, int force_flag);
 void fds_cc_match_velocity_flux(int nm);
 void fds_cc_compute_velocity_error(double dt, int nm);
+void fds_get_linked_fv(int nm, int do_baroclinic);
+void fds_cc_exchange_prepare_fn(int nm);
 void fds_pressure_solver_compute_rhs_kernel(int nm, double t, double dt);
 void fds_pressure_solver_fft_kernel(int nm);
 void fds_pressure_check_residuals_kernel(int nm);
