@@ -16,6 +16,7 @@ public:
               "PredStep1Kernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<>> data) override {
+        fds_insert_particles(data->t, data->nm);
         fds_compute_viscosity_kernel(data->nm, 0);  // estimated=0 for predictor
         fds_mass_finite_differences_kernel(data->nm);
         fds_density_kernel(data->nm, data->t, data->dt);

@@ -48,10 +48,7 @@ public:
     void execute(std::shared_ptr<MeshData<MeshState::Init>> data) override {
         initCollected_.push_back(data);
         if (static_cast<int>(initCollected_.size()) == nmeshes_) {
-            // INSERT_ALL_PARTICLES (sequential, cross-mesh)
-            for (auto &md : initCollected_) {
-                fds_insert_particles(md->t, md->nm);
-            }
+            // INSERT_ALL_PARTICLES moved to PredStep1KernelTask (parallel per-mesh)
             for (auto &md : initCollected_) {
                 this->bufferResult(md->template retag<MeshState::Default>());
             }
@@ -109,10 +106,7 @@ private:
                 md->call_ht_1d = 0;
             }
 
-            // INSERT_ALL_PARTICLES (sequential, cross-mesh)
-            for (auto &md : globalBarrier_->meshes) {
-                fds_insert_particles(md->t, md->nm);
-            }
+            // INSERT_ALL_PARTICLES moved to PredStep1KernelTask (parallel per-mesh)
 
             for (auto &md : globalBarrier_->meshes) {
                 this->bufferResult(md);

@@ -55,7 +55,7 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     bool ccIBM = fds_is_cc_ibm() != 0;
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
-    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, budget.retryMomDiv, ccIBM);
+    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, budget, ccIBM);
 
     // --- PredFinal: merged SynTurb+VelBC kernel → PhaseTransition ---
     auto predSynTurbVelBCTask = std::make_shared<PredSynTurbVelBCTask>(budget.predSynTurbVelBC);

@@ -16,6 +16,7 @@ public:
 
     void execute(std::shared_ptr<MeshData<>> data) override {
         fds_combustion_kernel(data->nm, data->t, data->dt);
+        fds_soot_oxidation_kernel(data->nm, data->dt);
         this->addResult(data);
     }
 

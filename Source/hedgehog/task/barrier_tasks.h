@@ -42,6 +42,10 @@ public:
             fds_zero_q_m_dot();
             fds_create_or_remove_obstructions(t, dt);
 
+            // Increment WALL_COUNTER once per corrector step, carry per-mesh
+            fds_increment_wall_counter();
+            int wc = fds_get_wall_counter();
+
             auto t1 = std::chrono::steady_clock::now();
             totalTime_ += std::chrono::duration<double>(t1 - t0).count();
             ++invocations_;
@@ -49,6 +53,7 @@ public:
             for (auto &md : collected_) {
                 md->t = t;
                 md->phase = 1;  // corrector
+                md->wall_counter = wc;
             }
             this->batchAddResult(collected_);
             for (auto &md : collected_) { md = nullptr; }

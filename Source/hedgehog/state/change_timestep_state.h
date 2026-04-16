@@ -8,31 +8,33 @@
 #include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged collector + retry loop state + MeshExch3.
+/// Retry check state: collects VelPred kernel results, checks CFL retry.
 ///
-/// Collects N MeshData<> tokens from the parallel kernel (or receives
-/// RetrySequenceData from the bypass path), runs post-kernel work,
-/// checks for CFL retry, and either cycles back or exits.
-/// On exit, runs CC_END_STEP + MESH_EXCHANGE(3) and scatters MeshData<>.
+/// Three input paths:
+///   1. MeshData<> from VelocityPredictor kernel (N tokens per iteration).
+///      Collects N, runs STOP_CHECK + retry check.
+///   2. RetrySequenceData(done=true) from RetryPreKernel bypass (no retry needed).
+///      Runs CC_END_STEP + MESH_EXCHANGE(3), emits MeshData<>.
+///   3. TerminationData for clean shutdown.
 ///
 /// Output types (Hedgehog type-based routing):
 ///   - RetrySequenceData → cycles back to RetryPreKernel for another retry
 ///   - MeshData<> → exits the subgraph (retry complete or no retry needed)
-class RetryLoopState : public hh::AbstractState<3, MeshData<>, RetrySequenceData, TerminationData,
+class RetryCheckState : public hh::AbstractState<3, MeshData<>, RetrySequenceData, TerminationData,
                                                   RetrySequenceData, MeshData<>> {
 public:
-    RetryLoopState(int nmeshes, bool ccIBM)
+    RetryCheckState(int nmeshes, bool ccIBM)
         : nmeshes_(nmeshes), ccIBM_(ccIBM),
           nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    /// Collect MeshData<> from parallel kernel (N tokens).
+    /// Collect MeshData<> from VelocityPredictor kernel (N tokens).
     void execute(std::shared_ptr<MeshData<>> data) override {
         collected_[data->nm - nmOffset_] = data;
         if (++count_ == nmeshes_) {
             count_ = 0;
-            processPostKernel();
+            processCheck();
         }
     }
 
@@ -55,24 +57,7 @@ public:
     [[nodiscard]] bool isDone() const { return done_; }
 
 private:
-    void processPostKernel() {
-        double t = collected_[0]->t;
-        double dt = collected_[0]->dt;
-
-        // Post-kernel work (was RetryPostKernelTask)
-        fds_exchange_divergence_info();
-
-        for (auto &md : collected_) {
-            fds_divergence_part_2(dt, md->nm);
-        }
-
-        fds_pressure_iteration(t, dt);
-        fds_init_change_time_step(dt);
-
-        for (auto &md : collected_) {
-            fds_velocity_predictor(t + dt, dt, md->nm);
-        }
-
+    void processCheck() {
         fds_stop_check_zero();
 
         // Check if we should stop due to instability
@@ -91,8 +76,10 @@ private:
             emitExit();
         } else {
             ++iteration_;
+            std::vector<std::shared_ptr<MeshData<>>> meshes(collected_.begin(), collected_.end());
+            std::fill(collected_.begin(), collected_.end(), nullptr);
             auto retryData = std::make_shared<RetrySequenceData>(
-                collected_, t, newDt, iteration_, false);
+                meshes, meshes[0]->t, newDt, iteration_, false);
             this->addResult(retryData);
         }
     }
@@ -113,13 +100,13 @@ private:
     std::vector<std::shared_ptr<MeshData<>>> collected_;
 };
 
-/// Custom state manager for the retry loop cycle.
-class RetryLoopStateManager
+/// Custom state manager for the retry check cycle.
+class RetryCheckStateManager
     : public hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
                                RetrySequenceData, MeshData<>> {
 public:
-    RetryLoopStateManager(
-        std::shared_ptr<RetryLoopState> const &state,
+    RetryCheckStateManager(
+        std::shared_ptr<RetryCheckState> const &state,
         std::string const &name)
         : hh::StateManager<3, MeshData<>, RetrySequenceData, TerminationData,
                             RetrySequenceData, MeshData<>>(
@@ -127,7 +114,7 @@ public:
 
     [[nodiscard]] bool canTerminate() const override {
         this->state()->lock();
-        auto s = std::dynamic_pointer_cast<RetryLoopState>(this->state());
+        auto s = std::dynamic_pointer_cast<RetryCheckState>(this->state());
         bool ret = s->isDone();
         this->state()->unlock();
         return ret;

@@ -129,6 +129,7 @@ void fds_combustion_bc(int nm);
 void fds_combustion(double t, double dt);
 void fds_combustion_kernel(int nm, double t, double dt);
 void fds_soot_oxidation_loop(double dt);
+void fds_soot_oxidation_kernel(int nm, double dt);
 void fds_condensation(double dt, int nm);
 void fds_particle_mass_energy(double t, double dt, int nm);
 void fds_particle_mass_energy_kernel(int nm, double t, double dt);
@@ -215,6 +216,11 @@ void fds_increment_wall_counter();
 int fds_check_call_ht_1d();
 void fds_reset_wall_counter();
 void fds_update_bc_clock(double t);
+int fds_get_wall_increment();
+int fds_get_wall_counter();
+void fds_set_wall_counter(int val);
+void fds_wall_bc_orch_per_mesh(int nm, double t, int wall_counter_val,
+                               double *dt_bc_out, int *call_ht_1d_out);
 
 // Per-neighbor flux exchange (CODE 5 decomposition)
 int fds_flux_get_neighbor_count(int nm);
