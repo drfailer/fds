@@ -31,11 +31,11 @@ public:
               "BaroclinicKernel", kernelThreads) {}
 
     void execute(std::shared_ptr<MeshData<MeshState::PredictorPressure>> md) override {
-        doWork(md->retag<MeshState::Pressure>());
+        doWork(retag<MeshState::Pressure>(md));
     }
 
     void execute(std::shared_ptr<MeshData<MeshState::CorrectorPressure>> md) override {
-        doWork(md->retag<MeshState::Pressure>());
+        doWork(retag<MeshState::Pressure>(md));
     }
 
     void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {

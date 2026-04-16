@@ -41,7 +41,7 @@ public:
         if constexpr (InS == MeshState::Default) {
             this->addResult(data);
         } else {
-            this->addResult(data->template retag<MeshState::Default>());
+            this->addResult(retag<MeshState::Default>(data));
         }
     }
 

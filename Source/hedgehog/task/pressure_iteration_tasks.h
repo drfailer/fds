@@ -30,7 +30,7 @@ public:
           presFlag_(presFlag) {}
 
     void execute(std::shared_ptr<MeshData<MeshState::SolvePhase>> spd) override {
-        doWork(spd->retag<MeshState::Pressure>());
+        doWork(retag<MeshState::Pressure>(spd));
     }
 
     void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {

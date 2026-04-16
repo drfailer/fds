@@ -26,7 +26,7 @@ public:
               "VelocityError", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<MeshState::VelErrorPhase>> vepd) override {
-        doWork(vepd->retag<MeshState::Pressure>());
+        doWork(retag<MeshState::Pressure>(vepd));
     }
 
     void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {

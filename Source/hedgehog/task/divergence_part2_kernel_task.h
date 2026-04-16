@@ -29,7 +29,7 @@ public:
         if constexpr (OutS == MeshState::Default) {
             this->addResult(data);
         } else {
-            this->addResult(data->template retag<OutS>());
+            this->addResult(retag<OutS>(data));
         }
     }
 

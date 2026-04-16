@@ -33,23 +33,9 @@ struct MeshData {
     int wall_counter;  ///< Per-mesh copy of global WALL_COUNTER (incremented each corrector step)
     int exchangeCode;   ///< Exchange operation code (5=flux, 3/6=velocity, 1/4=species)
     int exchangeRound;  ///< Exchange round index (for double-buffered state selection)
-
     MeshData() : nm(0), t(0.0), dt(0.0), phase(0), firstPass(true), dt_bc(0.0), call_ht_1d(0), wall_counter(0), exchangeCode(5), exchangeRound(0) {}
     MeshData(int nm_, double t_, double dt_, int phase_)
         : nm(nm_), t(t_), dt(dt_), phase(phase_), firstPass(true), dt_bc(0.0), call_ht_1d(0), wall_counter(0), exchangeCode(5), exchangeRound(0) {}
-
-    /// Converting constructor: copy fields from a MeshData with a different state tag.
-    template<MeshState From>
-    explicit MeshData(const MeshData<From>& o)
-        : nm(o.nm), t(o.t), dt(o.dt), phase(o.phase), firstPass(o.firstPass),
-          dt_bc(o.dt_bc), call_ht_1d(o.call_ht_1d), wall_counter(o.wall_counter),
-          exchangeCode(o.exchangeCode), exchangeRound(o.exchangeRound) {}
-
-    /// Create a shared_ptr<MeshData<To>> with copied fields.
-    template<MeshState To>
-    std::shared_ptr<MeshData<To>> retag() const {
-        return std::make_shared<MeshData<To>>(*this);
-    }
 
     friend std::ostream &operator<<(std::ostream &os, const MeshData &md) {
         os << "MeshData{nm=" << md.nm << ", t=" << md.t
@@ -58,5 +44,12 @@ struct MeshData {
         return os;
     }
 };
+
+/// Zero-cost retag: reinterpret the same MeshData object as a different state tag.
+/// Safe because all MeshData<S> instantiations share identical layout.
+template<MeshState To, MeshState From>
+std::shared_ptr<MeshData<To>> retag(std::shared_ptr<MeshData<From>> p) {
+    return std::reinterpret_pointer_cast<MeshData<To>>(std::move(p));
+}
 
 #endif // MESH_DATA_H

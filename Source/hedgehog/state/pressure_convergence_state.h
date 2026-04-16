@@ -65,12 +65,12 @@ public:
                     fds_init_change_time_step(dt);
                     for (int i = 0; i < nmeshes_; ++i) {
                         this->addResult(
-                            collected_[i]->retag<MeshState::PredictorPressure>());
+                            retag<MeshState::PredictorPressure>(collected_[i]));
                     }
                 } else {
                     for (int i = 0; i < nmeshes_; ++i) {
                         this->addResult(
-                            collected_[i]->retag<MeshState::CorrectorPressure>());
+                            retag<MeshState::CorrectorPressure>(collected_[i]));
                     }
                 }
             } else {

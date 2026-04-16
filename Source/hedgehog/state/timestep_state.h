@@ -50,7 +50,7 @@ public:
         if (static_cast<int>(initCollected_.size()) == nmeshes_) {
             // INSERT_ALL_PARTICLES moved to PredStep1KernelTask (parallel per-mesh)
             for (auto &md : initCollected_) {
-                this->bufferResult(md->template retag<MeshState::Default>());
+                this->bufferResult(retag<MeshState::Default>(md));
             }
             this->template flushResults<MeshData<>>();
             initCollected_.clear();

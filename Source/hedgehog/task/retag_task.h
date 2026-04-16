@@ -20,7 +20,7 @@ public:
               std::move(name), 1) {}
 
     void execute(std::shared_ptr<MeshData<From>> md) override {
-        this->addResult(md->template retag<To>());
+        this->addResult(retag<To>(md));
     }
 
     std::shared_ptr<hh::AbstractTask<1, MeshData<From>, MeshData<To>>>

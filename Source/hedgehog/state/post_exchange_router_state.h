@@ -21,9 +21,9 @@ class PostExchangeRouterState
 public:
     void execute(std::shared_ptr<MeshData<MeshState::Pressure>> md) override {
         if (md->exchangeRound % 2 == 0) {
-            this->addResult(md->retag<MeshState::SolvePhase>());
+            this->addResult(retag<MeshState::SolvePhase>(md));
         } else {
-            this->addResult(md->retag<MeshState::VelErrorPhase>());
+            this->addResult(retag<MeshState::VelErrorPhase>(md));
         }
     }
 
