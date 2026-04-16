@@ -13,11 +13,6 @@ How to extract thread-safe kernels from Fortran modules.
 - Removing module-level state (POINT_TO_MESH)
 - Patterns: index-based, pointer-based, local pointer alias shadowing
 
-### [METHOD_SUBGRAPH.md](METHOD_SUBGRAPH.md)
-Converting sequential tasks into parallel sub-graphs (Pattern A).
-- Pure parallel execution (no cross-mesh dependencies)
-- Examples: VelocityCorrector, VelocityPredictor, DivPart2
-
 ### [METHOD_PATTERN_B_COMPLEX.md](METHOD_PATTERN_B_COMPLEX.md)
 Complex routines with cross-mesh dependencies (Pattern B).
 - Three-phase: preprocessing → parallel kernel → finalization
@@ -26,12 +21,6 @@ Complex routines with cross-mesh dependencies (Pattern B).
 
 ### [METHOD_MODULE_SPLIT.md](METHOD_MODULE_SPLIT.md)
 Decomposing large Fortran modules (>5K lines) into sub-modules.
-
-### [METHOD_MESH_BLOCK.md](METHOD_MESH_BLOCK.md)
-K-block decomposition for intra-mesh parallelism.
-- Splitting mesh computation along K dimension
-- Orchestrator/block-kernel/collector pattern
-- K-safety analysis (ghost cells, face values, wall loops)
 
 ### [METHOD_DEPENDENCY_EXCHANGE.md](METHOD_DEPENDENCY_EXCHANGE.md)
 Replacing global exchange barriers with per-mesh dependency tracking.
@@ -56,10 +45,8 @@ docs/
 ├── PARALLELIZATION_PROGRESS.md         # Current status (START HERE)
 │
 ├── METHOD_KERNEL_EXTRACTION.md         # Kernel extraction patterns
-├── METHOD_SUBGRAPH.md                  # Pattern A (pure kernel)
 ├── METHOD_PATTERN_B_COMPLEX.md         # Pattern B (complex routines)
 ├── METHOD_MODULE_SPLIT.md              # Module decomposition
-├── METHOD_MESH_BLOCK.md               # K-block decomposition
 └── METHOD_DEPENDENCY_EXCHANGE.md      # Dependency-aware exchange
 ```
 
@@ -70,9 +57,7 @@ docs/
    └─→ Check PARALLELIZATION_PROGRESS.md for remaining tasks
 
 2. Determine pattern
-   ├─→ Pure kernel? → METHOD_SUBGRAPH.md (Pattern A)
    ├─→ Cross-mesh deps? → METHOD_PATTERN_B_COMPLEX.md (Pattern B)
-   ├─→ K-block parallel? → METHOD_MESH_BLOCK.md
    └─→ Exchange barrier? → METHOD_DEPENDENCY_EXCHANGE.md
 
 3. Extract/convert kernels
