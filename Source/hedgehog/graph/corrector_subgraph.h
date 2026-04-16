@@ -73,7 +73,8 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // particle data. No data dependency → run in parallel.
     auto fork1JoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, 1, "Fork1Join");
 
-    auto hvacSM = makeBarrierSM(nmeshes, "HvacCalc",
+    // HVAC: global network solve. Collects N MeshData, emits 1 BarrierData.
+    auto hvacBarrier = makeBarrierCollectToOne(nmeshes, "HvacCalc",
         "HVAC_CALC",
         [](auto& meshes) {
             fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
@@ -83,19 +84,15 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     auto particleOpsKernelTask = std::make_shared<ParticleOpsKernelTask>(budget.corrParticleOps);
 
     // MeshExch(7) on ParticleOps branch — only needs particle data, not HVAC.
-    // Overlaps with HVAC instead of waiting for it.
-    auto meshExch7SM = makeBarrierSM(nmeshes, "MeshExchange(7)",
+    // Collects N MeshData, emits 1 BarrierData (carries meshes for downstream).
+    auto meshExch7Barrier = makeBarrierCollectToOne(nmeshes, "MeshExchange(7)",
         "MESH_EXCHANGE(7)",
         [](auto& meshes) {
             fds_mesh_exchange(7);
         });
 
-    // Join HVAC(N) + ParticleOps+MeshExch7(N) → N MeshData
-    auto hvacPartJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, 1, "HvacPartJoin");
-
-    // WallBC orchestration (dt_bc, call_ht_1d, BC_CLOCK) moved into WallBCKernelTask (per-mesh).
-    // WALL_COUNTER incremented at corrector entry (PhaseTransitionTask), carried per-mesh.
-    // No wallBCOrchSM barrier needed.
+    // Join 2 BarrierData (HVAC + MeshExch7), scatter N MeshData
+    auto hvacPartJoinTask = std::make_shared<BarrierJoinTask>(2, "HvacPartJoin");
 
     // --- Wire the sub-graph ---
 
@@ -115,12 +112,12 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     subgraph->edges(fork1DivSetupTask, fork1JoinTask);
     subgraph->edges(fork1CombTask, fork1JoinTask);
 
-    // Fork: HVAC(barrier) || (ParticleOps → MeshExch7) → Join → WallBC
-    subgraph->edges(fork1JoinTask, hvacSM);
+    // Fork: HVAC(→BarrierData) || (ParticleOps → MeshExch7 →BarrierData) → Join → WallBC
+    subgraph->edges(fork1JoinTask, hvacBarrier);
     subgraph->edges(fork1JoinTask, particleOpsKernelTask);
-    subgraph->edges(particleOpsKernelTask, meshExch7SM);
-    subgraph->edges(hvacSM, hvacPartJoinTask);
-    subgraph->edges(meshExch7SM, hvacPartJoinTask);
+    subgraph->edges(particleOpsKernelTask, meshExch7Barrier);
+    subgraph->edges(hvacBarrier, hvacPartJoinTask);
+    subgraph->edges(meshExch7Barrier, hvacPartJoinTask);
     subgraph->edges(hvacPartJoinTask, wallBCKernelTask);
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---

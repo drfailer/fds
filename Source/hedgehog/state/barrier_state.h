@@ -234,4 +234,64 @@ inline auto makeDualInputBarrier(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
+/// Barrier collector that collects N MeshData, runs a barrier function,
+/// and emits a single BarrierData (not N MeshData). Use when the barrier
+/// performs global work and downstream only needs a completion signal.
+/// The meshes are stored in the emitted BarrierData for downstream access.
+class BarrierCollectToOneTask
+    : public hh::AbstractTask<1, MeshData<>, BarrierData> {
+public:
+    template<typename Fn>
+    BarrierCollectToOneTask(int nmeshes, std::string name, std::string routines, Fn&& fn)
+        : hh::AbstractTask<1, MeshData<>, BarrierData>(std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++count_ == nmeshes_) {
+            auto t0 = std::chrono::steady_clock::now();
+            fn_(collected_);
+            auto t1 = std::chrono::steady_clock::now();
+            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+            ++invocations_;
+            count_ = 0;
+            auto bd = std::make_shared<BarrierData>();
+            bd->meshes = std::move(collected_);
+            collected_.resize(nmeshes_, nullptr);
+            this->addResult(bd);
+        }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    int nmeshes_, nmOffset_, count_ = 0;
+    std::string routines_;
+    BarrierFn<> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
+};
+
+/// Helper to create a BarrierCollectToOneTask.
+template<typename Fn>
+inline auto makeBarrierCollectToOne(int nmeshes, std::string name,
+                                     std::string routines, Fn&& fn) {
+    return std::make_shared<BarrierCollectToOneTask>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
 #endif // BARRIER_STATE_H
