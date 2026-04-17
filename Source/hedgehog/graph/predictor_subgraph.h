@@ -8,15 +8,12 @@
 #include "../data/barrier_data.h"
 #include "../data/termination_data.h"
 #include "../state/barrier_state.h"
-#include "../state/fork_join_state.h"
 #include "../task/pred_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
-#include "../task/pred_fork_tasks.h"
-#include "../task/pred_wall_div_kernel_task.h"
+#include "../task/pred_prefork_div_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
-#include "../task/div_p1_prefork_kernel_task.h"
 #include "../task/velocity_bc_edges_task.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_div_parallel_task.h"
@@ -82,31 +79,22 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 fds_initialize_divergence_integrals();
             });
 
-        // Extracted: DivP1Prefork per-mesh (parallel)
-        auto divP1PreforkKernelTask = std::make_shared<DivP1PreforkKernelTask>(budget.predDivPrefork);
+        // Merged prefork + fork: DivP1Prefork + (DivSetup+PartMom || WallBC+DivP1Early)
+        // AsyncWorker handles the fork internally — each Hedgehog thread owns a
+        // worker thread, so real OS thread count = 2 × budget.predPreforkDiv.
+        auto predPreforkDivTask = std::make_shared<PredPreforkDivTask>(budget.predPreforkDiv);
 
         subgraph->edges(predStep1KernelTask, meshExch1SM);
-        subgraph->edges(meshExch1SM, divP1PreforkKernelTask);
+        subgraph->edges(meshExch1SM, predPreforkDivTask);
 
-        // Fork: (DivSetup + PartMom) || (WallBC + DivP1Early) — threads from budget
-        auto predForkDivSetupPartMomTask = std::make_shared<PredDivSetupPartMomTask>(
-            budget.predForkDivSetupPartMom);
-        auto predForkWallBCDivEarlyTask = std::make_shared<PredWallBCDivEarlyTask>(
-            budget.predForkWallBCDivEarly);
-
-        subgraph->edges(divP1PreforkKernelTask, predForkDivSetupPartMomTask);
-        subgraph->edges(divP1PreforkKernelTask, predForkWallBCDivEarlyTask);
-
-        // Divergence pipeline: ForkJoin + packed parallel task + 2 retagging barriers.
+        // Divergence pipeline: packed parallel task + 2 retagging barriers.
         // The 3 parallel kernels (DivP1Late, DivP2Pre, DivPart2) share one
         // thread pool via PredDivParallelTask. Sequential barriers are separate
         // nodes, clearly highlighting the sequential/parallel structure.
         //
-        // Pipeline: ForkJoin(2N→N) → Parallel(DivP1Late) → DivExchange barrier
+        // Pipeline: PredPreforkDiv → Parallel(DivP1Late) → DivExchange barrier
         //   → Parallel(DivP2Pre) → GlobalMatrix barrier → Parallel(DivPart2)
         //   → downstream
-
-        auto forkJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, 1, "PredForkJoin");
 
         auto predDivParallelTask = std::make_shared<PredDivParallelTask<PressureTag>>(
             budget.predDivParallel);
@@ -129,12 +117,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        // Fork branches → ForkJoin
-        subgraph->edges(predForkDivSetupPartMomTask, forkJoinTask);
-        subgraph->edges(predForkWallBCDivEarlyTask, forkJoinTask);
-
-        // ForkJoin → Parallel ↔ DivExchange ↔ Parallel ↔ GlobalMatrix ↔ Parallel
-        subgraph->edges(forkJoinTask, predDivParallelTask);
+        // PredPreforkDiv → Parallel ↔ DivExchange ↔ Parallel ↔ GlobalMatrix ↔ Parallel
+        subgraph->edges(predPreforkDivTask, predDivParallelTask);
         subgraph->edges(predDivParallelTask, divExchangeBarrier);
         subgraph->edges(divExchangeBarrier, predDivParallelTask);
         subgraph->edges(predDivParallelTask, globalMatBarrier);

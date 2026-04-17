@@ -28,6 +28,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(hedgehog hh_communicator)
 
+# Thread utilities (async worker for fork-join within tasks)
+FetchContent_Declare(
+    thread_utils
+    GIT_REPOSITORY https://github.com/drfailer/thread_utils.git
+    GIT_TAG master
+)
+FetchContent_GetProperties(thread_utils)
+if(NOT thread_utils_POPULATED)
+    FetchContent_Populate(thread_utils)
+endif()
+
 # Hedgehog requires threading and TBB
 find_package(Threads REQUIRED)
 find_package(TBB REQUIRED)
@@ -36,6 +47,8 @@ find_package(TBB REQUIRED)
 add_executable(fds_hh
     # C++ sources
     main_hh.cpp
+    # Thread utilities (no CMake target — compiled as part of fds_hh)
+    ${thread_utils_SOURCE_DIR}/src/thread_utils/async_worker.cpp
     # Fortran sources: the driver module and C interface
     fds_driver.f90
     fds_c_interface.f90
@@ -48,6 +61,7 @@ target_include_directories(fds_hh PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}     # For fds_fortran_interface.h and subdirs
     ${CMAKE_SOURCE_DIR}             # For the top-level directory
     ${hedgehog_SOURCE_DIR}          # For <hedgehog/hedgehog.h> style includes
+    ${thread_utils_SOURCE_DIR}/src  # For <thread_utils/async_worker.hpp>
 )
 
 # Link hedgehog communicator (brings hedgehog::hedgehog + MPI::MPI_CXX transitively)

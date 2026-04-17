@@ -24,16 +24,13 @@ struct ThreadBudget {
 
     // --- Predictor standalone sections ---
     size_t predStep1;           // PredStep1KernelTask          (HEAVY)
-    size_t predDivPrefork;      // DivP1PreforkKernelTask       (LIGHT) — split from barrier
+    size_t predPreforkDiv;      // PredPreforkDivTask            (HEAVY) — merged Prefork+Fork(DivSetup+PartMom || WallBC+DivEarly)
+                                //   Real OS threads = 2 × predPreforkDiv (each HH thread owns an AsyncWorker)
     size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT) — CC_IBM path only
     size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
     size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged SynTurb+VelBC
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
     size_t predDivParallel;     // PredDivParallelTask           (LIGHT) — merged DivP1Late+DivP2Pre+DivPart2
-
-    // --- Predictor fork: {DivSetup+PartMom} || {WallBC+DivP1Early} ---
-    size_t predForkDivSetupPartMom; // PredDivSetupPartMomTask   (HEAVY) — merged DivSetup+PartMom
-    size_t predForkWallBCDivEarly;  // PredWallBCDivEarlyTask    (HEAVY) — merged WallBC+DivP1Early
 
     // --- Corrector standalone sections ---
     size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
@@ -91,19 +88,15 @@ struct ThreadBudget {
 
         // --- Predictor standalone ---
         b.predStep1      = solo(4);  // 1.4ms/elem
-        b.predDivPrefork = solo(1);  // split from barrier (light)
+        // Merged prefork+fork: each HH thread owns an AsyncWorker → 2× OS threads.
+        // Allocate cap/2 so real thread count = cap (matches old fork concurrency).
+        b.predPreforkDiv = static_cast<size_t>(
+            std::max(1, std::min(nmeshes, cap / 2)));
         b.predDivPart2   = solo(1);  // 283us/elem
         b.velPredictor   = solo(1);  // 90us/elem
         b.predSynTurbVelBC = solo(2);  // merged SynTurb(light)+VelBC(medium)
         b.retryMomDiv    = solo(1);  // rarely used
         b.predDivParallel = solo(1); // merged DivP1Late+DivP2Pre+DivPart2 thread pool
-
-        // --- Predictor fork: A{DivSetupPartMom(4)} || B{WallBCDivEarly(4)} ---
-        {
-            auto t = distribute({4, 4});
-            b.predForkDivSetupPartMom = t[0];
-            b.predForkWallBCDivEarly  = t[1];
-        }
 
         // --- Corrector standalone ---
         b.corrStep1         = solo(4);  // 1.5ms/elem
@@ -143,14 +136,12 @@ struct ThreadBudget {
     void print(std::ostream &os) const {
         os << "[FDS-HH] Thread budget (cap=" << cap_ << "):\n"
            << "  Predictor:  step1=" << predStep1
-           << " divPrefork=" << predDivPrefork
+           << " preforkDiv=" << predPreforkDiv << "(x2)"
            << " divP2=" << predDivPart2
            << " velPred=" << velPredictor
            << " synTurbVelBC=" << predSynTurbVelBC
            << " retry=" << retryMomDiv
            << " divParallel=" << predDivParallel << "\n"
-           << "  Pred fork:  divSetupPartMom=" << predForkDivSetupPartMom
-           << " wallBCDivEarly=" << predForkWallBCDivEarly << "\n"
            << "  Corrector:  step1=" << corrStep1
            << " particleOps=" << corrParticleOps
            << " divP2=" << corrDivPart2
