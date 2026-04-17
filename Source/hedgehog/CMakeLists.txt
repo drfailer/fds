@@ -49,6 +49,8 @@ add_executable(fds_hh
     main_hh.cpp
     # Thread utilities (no CMake target — compiled as part of fds_hh)
     ${thread_utils_SOURCE_DIR}/src/thread_utils/async_worker.cpp
+    ${thread_utils_SOURCE_DIR}/src/thread_utils/thread_pool.cpp
+    ${thread_utils_SOURCE_DIR}/src/thread_utils/tools.cpp
     # Fortran sources: the driver module and C interface
     fds_driver.f90
     fds_c_interface.f90

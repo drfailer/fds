@@ -17,8 +17,8 @@
 #include "../task/velocity_bc_edges_task.h"
 #include "../task/barrier_tasks.h"
 #include "../task/pred_cc_partmom_divp1_kernel_task.h"
+#include "../task/change_timestep_task.h"
 #include "../tool/thread_budget.h"
-#include "change_timestep_subgraph.h"
 #include "velocity_bc_subgraph.h"
 #include "../task/wallbc_kernel_task.h"
 
@@ -49,7 +49,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     bool ccIBM = fds_is_cc_ibm() != 0;
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
-    auto changeTimeStepSubgraph = buildChangeTimeStepSubgraph(nmeshes, budget, ccIBM);
+    auto changeTimeStepTask = std::make_shared<ChangeTimeStepTask>(
+        nmeshes, budget.retryMomDiv, ccIBM);
 
     // --- PredFinal: merged SynTurb+VelBC kernel → PhaseTransition ---
     auto predSynTurbVelBCTask = std::make_shared<PredSynTurbVelBCTask>(budget.predSynTurbVelBC);
@@ -57,12 +58,10 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Common barrier states ---
 
-    // (ChangeTimeStepCollector removed — RetryPreKernel collects N MeshData<> directly)
-
     // --- Wire the sub-graph ---
 
     subgraph->input<MeshData<>>(predStep1KernelTask);
-    subgraph->input<TerminationData>(changeTimeStepSubgraph);
+    // ChangeTimeStepTask is a single task (no cycle) — no TerminationData needed
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
@@ -209,11 +208,11 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         }
     }
 
-    // VelocityPredictor -> ChangeTimeStep (RetryPreKernel collects N MeshData<> directly)
-    subgraph->edges(velPredKernelTask, changeTimeStepSubgraph);
+    // VelocityPredictor → ChangeTimeStep (collects N, retries internally)
+    subgraph->edges(velPredKernelTask, changeTimeStepTask);
 
-    // ChangeTimeStep scatters MeshData<> → SynTurb+VelBC(parallel) → PhaseTransition(collect+scatter)
-    subgraph->edges(changeTimeStepSubgraph, predSynTurbVelBCTask);
+    // ChangeTimeStep → SynTurb+VelBC(parallel) → PhaseTransition(collect+scatter)
+    subgraph->edges(changeTimeStepTask, predSynTurbVelBCTask);
     subgraph->edges(predSynTurbVelBCTask, phaseTransTask);
 
     subgraph->outputs(phaseTransTask);
