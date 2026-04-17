@@ -5,9 +5,7 @@
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/termination_data.h"
-#include "../task/baroclinic_kernel_task.h"
-#include "../task/pressure_iteration_tasks.h"
-#include "../task/velocity_error_task.h"
+#include "../task/pressure_parallel_task.h"
 #include "../state/pressure_convergence_state.h"
 #include "../state/post_exchange_router_state.h"
 #include "../state/barrier_state.h"
@@ -29,30 +27,22 @@
 ///   - MeshData<PredictorPressure>: converged predictor result
 ///   - MeshData<CorrectorPressure>: converged corrector result
 ///
+/// The 3 per-mesh parallel kernels (Baroclinic, Solve, VelocityError) are
+/// packed into a single PressureParallelTask thread pool. Between phases,
+/// exchange operations route data via distinct MeshState tags:
+///   Baroclinic → PreSolveExch → exchange → SolvePhase → Solve
+///   Solve → PostSolveExch → exchange → VelErrorPhase → VelError
+///   VelError → Pressure → Convergence → cycle or exit
+///
 /// Two wiring modes:
 ///
 /// **Single-process mode** (commService == nullptr):
-/// Single exchange graph, double-buffered, pipeline-parallel with cycle.
-///
-///   BaroclinicKernel(task, 3 inputs: Pred+Corr+Pressure)
-///     -> MeshExchangeGraph<Pressure> (round 0: pre-solve)
-///     -> PostExchangeRouter(SM, pass-through)
-///       -> MeshData<SolvePhase> -> PressureSolveKernel(task, sets exchangeRound=1)
-///                                    -> MeshExchangeGraph (round 1, SAME graph)
-///                                    -> PostExchangeRouter
-///       -> MeshData<VelErrorPhase> -> VelocityErrorTask(task)
-///                                       -> PressureConvergence(barrier)
-///                                         -> MeshData<Pressure> -> BaroclinicKernel (cycle)
-///                                         -> MeshData<Pred|CorrPressure> -> output
+///   PressureParallel → ExchangeInputRetag → MeshExchangeGraph<Pressure>
+///     → PostExchangeRouter → PressureParallel (SolvePhase/VelErrorPhase)
 ///
 /// **MPI mode** (commService != nullptr):
-/// Barrier-based exchange using fds_mesh_exchange(5).
-///
-///   BaroclinicKernel -> PreExchangeBarrier<Pressure>(fds_mesh_exchange(5))
-///     -> SolveKernel -> PostExchangeBarrier<Pressure>(fds_mesh_exchange(5))
-///     -> VelocityError -> Convergence
-///       -> MeshData<Pressure> -> BaroclinicKernel (cycle)
-///       -> MeshData<Pred|CorrPressure> -> output
+///   PressureParallel → RetaggingBarrier<PreSolveExch,SolvePhase> → PressureParallel
+///   PressureParallel → RetaggingBarrier<PostSolveExch,VelErrorPhase> → PressureParallel
 ///
 /// IMPORTANT: fds_pressure_iteration_init() and the first
 /// fds_pressure_iteration_increment() must be called in the upstream
@@ -76,56 +66,44 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
         MeshData<MeshState::CorrectorPressure>>;
     auto subgraph = std::make_shared<SubGraphType>("PressureIteration");
 
-    // --- Parallel kernel tasks (threads from budget) ---
-    auto baroclinicKernel = std::make_shared<BaroclinicKernelTask>(budget.baroclinic);
-    auto solveKernel = std::make_shared<PressureSolveKernelTask>(budget.pressureSolve, presFlag);
-    auto velErrorTask = std::make_shared<VelocityErrorTask>(budget.velError);
+    // --- Packed parallel task (threads from budget) ---
+    auto pressureParallelTask = std::make_shared<PressureParallelTask>(
+        budget.pressureParallel, presFlag);
 
     // --- Convergence barrier (convergence check only) ---
     auto convergenceSM = std::make_shared<PressureConvergenceManager>(
         std::make_shared<PressureConvergenceState>(nmeshes),
         "PressureConvergence");
 
-    // Entry: PredPressure + CorrPressure -> baroclinicKernel
-    subgraph->template input<MeshData<MeshState::PredictorPressure>>(baroclinicKernel);
-    subgraph->template input<MeshData<MeshState::CorrectorPressure>>(baroclinicKernel);
+    // Entry: PredPressure + CorrPressure -> pressureParallelTask (baroclinic phase)
+    subgraph->template input<MeshData<MeshState::PredictorPressure>>(pressureParallelTask);
+    subgraph->template input<MeshData<MeshState::CorrectorPressure>>(pressureParallelTask);
     subgraph->template input<TerminationData>(convergenceSM);
+    subgraph->template input<TerminationData>(pressureParallelTask);
 
     if (commService) {
-        // --- MPI mode: barrier-based exchange, linear pipeline ---
-        // Uses fds_mesh_exchange(5) barriers instead of CommunicatorTask.
-        // CommunicatorTask daemon threads busy-wait on MPI_Iprobe in a tight
-        // loop, consuming 100% CPU and starving compute threads. Barrier-based
-        // exchange avoids this overhead entirely.
-
-        auto preSolveExchange = makeBarrierSM<MeshState::Pressure>(
+        // --- MPI mode: retagging barriers for exchange ---
+        auto preSolveExchange = makeRetaggingBarrier<MeshState::PreSolveExch, MeshState::SolvePhase>(
             nmeshes, "PreSolveExchange",
             "MESH_EXCHANGE(5)",
-            [](std::vector<std::shared_ptr<MeshData<MeshState::Pressure>>> &) {
-                fds_mesh_exchange(5);
-            });
+            [](auto&) { fds_mesh_exchange(5); });
 
-        auto postSolveExchange = makeBarrierSM<MeshState::Pressure>(
+        auto postSolveExchange = makeRetaggingBarrier<MeshState::PostSolveExch, MeshState::VelErrorPhase>(
             nmeshes, "PostSolveExchange",
             "MESH_EXCHANGE(5)",
-            [](std::vector<std::shared_ptr<MeshData<MeshState::Pressure>>> &) {
-                fds_mesh_exchange(5);
-            });
+            [](auto&) { fds_mesh_exchange(5); });
 
-        // BaroclinicKernel -> PreSolveExchange barrier -> SolveKernel
-        subgraph->edges(baroclinicKernel, preSolveExchange);
-        subgraph->edges(preSolveExchange, solveKernel);
+        // PressureParallel ↔ PreSolveExchange ↔ PressureParallel
+        subgraph->edges(pressureParallelTask, preSolveExchange);
+        subgraph->edges(preSolveExchange, pressureParallelTask);
 
-        // SolveKernel -> PostSolveExchange barrier -> VelocityError
-        subgraph->edges(solveKernel, postSolveExchange);
-        subgraph->edges(postSolveExchange, velErrorTask);
-
-        // VelErrorTask -> Convergence
-        subgraph->edges(velErrorTask, convergenceSM);
+        // PressureParallel ↔ PostSolveExchange ↔ PressureParallel
+        subgraph->edges(pressureParallelTask, postSolveExchange);
+        subgraph->edges(postSolveExchange, pressureParallelTask);
 
     } else {
-        // --- Single-process mode: single exchange graph with cycle ---
-        // Pipeline-parallel via double-buffered state.
+        // --- Single-process mode: retag → exchange graph → router ---
+        auto retagTask = std::make_shared<ExchangeInputRetagTask>();
 
         auto exchange = std::make_shared<MeshExchangeGraph<MeshState::Pressure>>(
             depGraph, budget.exchangePush, budget.exchangePull,
@@ -139,29 +117,22 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
         // TerminationData -> router (for canTerminate to break inner cycle)
         subgraph->template input<TerminationData>(routerSM);
 
-        // BaroclinicKernel -> Exchange (round 0)
-        subgraph->edges(baroclinicKernel, exchange);
-
-        // Exchange -> Router
+        // PressureParallel → retag(PreSolveExch+PostSolveExch → Pressure)
+        //   → Exchange → Router(SolvePhase+VelErrorPhase) → PressureParallel
+        subgraph->edges(pressureParallelTask, retagTask);
+        subgraph->edges(retagTask, exchange);
         subgraph->edges(exchange, routerSM);
-
-        // Router dispatches by exchangeRound:
-        //   round 0 -> MeshData<SolvePhase> -> solveKernel
-        //   round 1 -> MeshData<VelErrorPhase> -> velErrorTask
-        subgraph->template edge<MeshData<MeshState::SolvePhase>>(routerSM, solveKernel);
-        subgraph->template edge<MeshData<MeshState::VelErrorPhase>>(routerSM, velErrorTask);
-
-        // SolveKernel -> Exchange (round 1, same graph)
-        subgraph->edges(solveKernel, exchange);
-
-        // VelErrorTask -> Convergence
-        subgraph->edges(velErrorTask, convergenceSM);
+        subgraph->edges(routerSM, pressureParallelTask);
     }
 
-    // Cycle: MeshData<Pressure> -> back to baroclinicKernel
-    subgraph->template edge<MeshData<MeshState::Pressure>>(convergenceSM, baroclinicKernel);
+    // VelError output (Pressure) → Convergence
+    subgraph->edges(pressureParallelTask, convergenceSM);
 
-    // Exit: PredPressure + CorrPressure -> subgraph output
+    // Cycle: MeshData<Pressure> → back to pressureParallelTask (baroclinic phase)
+    // Typed edge: avoid routing PredPressure/CorrPressure back into cycle
+    subgraph->template edge<MeshData<MeshState::Pressure>>(convergenceSM, pressureParallelTask);
+
+    // Exit: PredPressure + CorrPressure → subgraph output
     subgraph->outputs(convergenceSM);
 
     return subgraph;

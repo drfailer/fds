@@ -70,8 +70,9 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     // Input: MeshData<Init> -> TimestepState (INSERT_PARTICLES, then emit to Predictor)
     graph->input<MeshData<MeshState::Init>>(timestepSM);
-    // Input: TerminationData -> Predictor (for ChangeTimeStep cycle termination)
+    // Input: TerminationData -> Predictor + Corrector (for cycle termination)
     graph->input<TerminationData>(predictorSubgraph);
+    graph->input<TerminationData>(correctorSubgraph);
 
     // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);

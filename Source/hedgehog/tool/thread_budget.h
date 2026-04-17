@@ -25,11 +25,11 @@ struct ThreadBudget {
     // --- Predictor standalone sections ---
     size_t predStep1;           // PredStep1KernelTask          (HEAVY)
     size_t predDivPrefork;      // DivP1PreforkKernelTask       (LIGHT) — split from barrier
-    size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT)
+    size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT) — CC_IBM path only
     size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
     size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged SynTurb+VelBC
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
-    size_t predDivP1Late;       // DivP1LateKernelTask          (LIGHT) — split from barrier
+    size_t predDivParallel;     // PredDivParallelTask           (LIGHT) — merged DivP1Late+DivP2Pre+DivPart2
 
     // --- Predictor fork: {DivSetup+PartMom} || {WallBC+DivP1Early} ---
     size_t predForkDivSetupPartMom; // PredDivSetupPartMomTask   (HEAVY) — merged DivSetup+PartMom
@@ -42,7 +42,7 @@ struct ThreadBudget {
     size_t velCorrector;        // VelocityCorrectorKernelTask  (LIGHT)
     size_t corrFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
     size_t corrWallBC;          // WallBCKernelTask             (MEDIUM) — includes finalize
-    size_t corrQRAddCopy;       // QRAddCopyKernelTask          (LIGHT) — split from barrier
+    size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivP2Pre+DivPart2
 
     // --- Corrector fork1: {DivSetup} || {Fork1Comb} ---
     size_t corrFork1DivSetup;   // DivSetupKernelTask     (MEDIUM)
@@ -53,11 +53,9 @@ struct ThreadBudget {
     size_t corrFork2DivP1;      // Fork2DivP1KernelTask    (MEDIUM)
 
     // --- Pressure iteration (shared by pred & corr instances) ---
-    size_t baroclinic;          // BaroclinicKernelTask         (LIGHT)
+    size_t pressureParallel;    // PressureParallelTask          (HEAVY) — merged Baroclinic+Solve+VelError
     size_t exchangePush;        // ExchangePushBufferTask       (LIGHT)
     size_t exchangePull;        // ExchangePullBufferTask       (LIGHT)
-    size_t pressureSolve;       // PressureSolveKernelTask      (MEDIUM)
-    size_t velError;            // VelocityErrorTask            (LIGHT)
 
     /// Compute standalone thread count for a given weight (1-4).
     /// Useful for tasks not in the named fields (e.g., CC_IBM path).
@@ -98,7 +96,7 @@ struct ThreadBudget {
         b.velPredictor   = solo(1);  // 90us/elem
         b.predSynTurbVelBC = solo(2);  // merged SynTurb(light)+VelBC(medium)
         b.retryMomDiv    = solo(1);  // rarely used
-        b.predDivP1Late  = solo(1);  // split from barrier (light)
+        b.predDivParallel = solo(1); // merged DivP1Late+DivP2Pre+DivPart2 thread pool
 
         // --- Predictor fork: A{DivSetupPartMom(4)} || B{WallBCDivEarly(4)} ---
         {
@@ -114,7 +112,7 @@ struct ThreadBudget {
         b.velCorrector      = solo(1);  // 89us/elem
         b.corrFinalVelBC    = solo(2);  // 472us/elem
         b.corrWallBC        = solo(2);  // 513us/elem (includes finalize)
-        b.corrQRAddCopy     = solo(1);  // split from barrier (light)
+        b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivP2Pre+DivPart2 (heaviest is MEDIUM)
 
         // --- Corrector fork1: A{DivSetup(2)} || B{Fork1Comb(2)} ---
         {
@@ -131,14 +129,12 @@ struct ThreadBudget {
         }
 
         // --- Pressure iteration pipeline ---
-        // Baroclinic → Push → Pull → Solve → VelError
+        // PressureParallel ↔ Exchange(Push+Pull) ↔ PressureParallel
         {
-            auto t = distribute({1, 2, 2, 4, 2});
-            b.baroclinic    = t[0];
-            b.exchangePush  = t[1];
-            b.exchangePull  = t[2];
-            b.pressureSolve = t[3];
-            b.velError      = t[4];
+            auto t = distribute({4, 2, 2});
+            b.pressureParallel = t[0];
+            b.exchangePush     = t[1];
+            b.exchangePull     = t[2];
         }
 
         return b;
@@ -152,7 +148,7 @@ struct ThreadBudget {
            << " velPred=" << velPredictor
            << " synTurbVelBC=" << predSynTurbVelBC
            << " retry=" << retryMomDiv
-           << " divP1Late=" << predDivP1Late << "\n"
+           << " divParallel=" << predDivParallel << "\n"
            << "  Pred fork:  divSetupPartMom=" << predForkDivSetupPartMom
            << " wallBCDivEarly=" << predForkWallBCDivEarly << "\n"
            << "  Corrector:  step1=" << corrStep1
@@ -161,16 +157,14 @@ struct ThreadBudget {
            << " velCorr=" << velCorrector
            << " finalVBC=" << corrFinalVelBC
            << " wallBC=" << corrWallBC
-           << " qrAddCopy=" << corrQRAddCopy << "\n"
+           << " divParallel=" << corrDivParallel << "\n"
            << "  Corr fork1: divSetup=" << corrFork1DivSetup
            << " comb=" << corrFork1Comb << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"
-           << "  Pressure:   baroclinic=" << baroclinic
+           << "  Pressure:   parallel=" << pressureParallel
            << " push=" << exchangePush
-           << " pull=" << exchangePull
-           << " solve=" << pressureSolve
-           << " velError=" << velError << std::endl;
+           << " pull=" << exchangePull << std::endl;
     }
 };
 

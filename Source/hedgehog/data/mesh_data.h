@@ -14,7 +14,13 @@ enum class MeshState {
     CorrectorPressure,    ///< Boundary: corrector -> pressure subgraph
     Pressure,             ///< Internal pressure pipeline + cycle-back
     SolvePhase,           ///< Routing to PressureSolveKernel (single-process)
-    VelErrorPhase         ///< Routing to VelocityErrorTask (single-process)
+    VelErrorPhase,        ///< Routing to VelocityErrorTask (single-process)
+    DivExch,              ///< PredDivParallel → DivExchange barrier
+    DivP2Pre,             ///< DivExchange barrier → PredDivParallel
+    GlobalMat,            ///< PredDivParallel → GlobalMatrix barrier
+    DivPart2,             ///< GlobalMatrix barrier → PredDivParallel
+    PreSolveExch,         ///< PressureParallel → pre-solve exchange
+    PostSolveExch         ///< PressureParallel → post-solve exchange
 };
 
 /// Token type flowing through the Hedgehog dataflow graph.

@@ -18,9 +18,8 @@
 #include "../task/velocity_predictor_kernel_task.h"
 #include "../task/div_p1_prefork_kernel_task.h"
 #include "../task/velocity_bc_edges_task.h"
-#include "../task/div_p1_late_kernel_task.h"
 #include "../task/barrier_tasks.h"
-#include "../task/div_part2_preprocessing_kernel_task.h"
+#include "../task/pred_div_parallel_task.h"
 #include "../task/pred_cc_partmom_divp1_kernel_task.h"
 #include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
@@ -49,7 +48,6 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     // --- Kernel tasks (threads from budget) ---
 
     auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
-    auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.predDivPart2);
     auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask<PressureTag>>(budget.velPredictor);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
@@ -99,26 +97,31 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(divP1PreforkKernelTask, predForkDivSetupPartMomTask);
         subgraph->edges(divP1PreforkKernelTask, predForkWallBCDivEarlyTask);
 
-        // Split barrier: ForkJoin(2N→N) → DivP1Late(parallel) → DivExchange(global)
-        auto predForkJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, budget.predDivP1Late, "PredForkJoin");
+        // Divergence pipeline: ForkJoin + packed parallel task + 2 retagging barriers.
+        // The 3 parallel kernels (DivP1Late, DivP2Pre, DivPart2) share one
+        // thread pool via PredDivParallelTask. Sequential barriers are separate
+        // nodes, clearly highlighting the sequential/parallel structure.
+        //
+        // Pipeline: ForkJoin(2N→N) → Parallel(DivP1Late) → DivExchange barrier
+        //   → Parallel(DivP2Pre) → GlobalMatrix barrier → Parallel(DivPart2)
+        //   → downstream
 
-        // Extracted: DivP1Late per-mesh (parallel)
-        auto divP1LateKernelTask = std::make_shared<DivP1LateKernelTask>(budget.predDivP1Late);
+        auto forkJoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, 1, "PredForkJoin");
 
-        // Split barrier: exchange → parallel preprocessing → global ops
-        // R_PBAR moved to block kernel (per-mesh, thread-safe).
-        auto predDivExchSM = makeBarrierSM(nmeshes, "DivExchange",
+        auto predDivParallelTask = std::make_shared<PredDivParallelTask<PressureTag>>(
+            budget.predDivParallel);
+
+        auto divExchangeBarrier = makeRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
+            nmeshes, "DivExchange",
             "EXCH_DIV_INFO",
-            [](auto& meshes) {
+            [](auto&) {
                 fds_exchange_divergence_info();
             });
 
-        // Extracted: zone ops + D_PBAR_DT per mesh (parallel, idempotent zone ops)
-        auto predDivP2PreKernelTask = std::make_shared<DivPart2PreprocessingKernelTask>(budget.standalone(1));
-
-        auto predDivPostSM = makeBarrierSM(nmeshes, "GlobalMatrix+PressureInit",
-            "GLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
-            [useParallelPressure](auto& meshes) {
+        auto globalMatBarrier = makeRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
+            nmeshes, "GlobalMatrix+PressureInit",
+            "GLOBAL_MATRIX_REASSIGN\\nPRESSURE_INIT",
+            [useParallelPressure](auto&) {
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
                     fds_pressure_iteration_init();
@@ -126,15 +129,34 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        subgraph->edges(predForkDivSetupPartMomTask, predForkJoinTask);
-        subgraph->edges(predForkWallBCDivEarlyTask, predForkJoinTask);
-        subgraph->edges(predForkJoinTask, divP1LateKernelTask);
-        subgraph->edges(divP1LateKernelTask, predDivExchSM);
-        subgraph->edges(predDivExchSM, predDivP2PreKernelTask);
-        subgraph->edges(predDivP2PreKernelTask, predDivPostSM);
+        // Fork branches → ForkJoin
+        subgraph->edges(predForkDivSetupPartMomTask, forkJoinTask);
+        subgraph->edges(predForkWallBCDivEarlyTask, forkJoinTask);
 
-        // DivP2 -> Pressure -> VelPred
-        subgraph->edges(predDivPostSM, predDivP2KernelTask);
+        // ForkJoin → Parallel ↔ DivExchange ↔ Parallel ↔ GlobalMatrix ↔ Parallel
+        subgraph->edges(forkJoinTask, predDivParallelTask);
+        subgraph->edges(predDivParallelTask, divExchangeBarrier);
+        subgraph->edges(divExchangeBarrier, predDivParallelTask);
+        subgraph->edges(predDivParallelTask, globalMatBarrier);
+        subgraph->edges(globalMatBarrier, predDivParallelTask);
+
+        // TerminationData breaks structural cycle at shutdown
+        subgraph->template input<TerminationData>(predDivParallelTask);
+
+        // Downstream: final output (MeshData<PressureTag>) → Pressure → VelPred
+        if constexpr (useParallelPressure) {
+            subgraph->template output<MeshData<PressureTag>>(predDivParallelTask);
+            subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
+        } else {
+            auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
+                "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
+                [](auto& meshes) {
+                    fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
+                    fds_init_change_time_step(meshes[0]->dt);
+                });
+            subgraph->edges(predDivParallelTask, predPressureSM);
+            subgraph->edges(predPressureSM, velPredKernelTask);
+        }
     } else {
         // CC_IBM: MeshExchange(1) only
         auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
@@ -190,26 +212,24 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(predWallBCKernel, predCCPartMomDivP1Kernel);
         subgraph->edges(predCCPartMomDivP1Kernel, predDivExchangeSM);
 
-        // DivP2 -> Pressure -> VelPred
+        // CC_IBM keeps standalone DivPart2 kernel (not packed)
+        auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.predDivPart2);
         subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
-    }
 
-    // --- Common downstream: DivP2 -> Pressure -> VelPred -> ... ---
-
-    if constexpr (useParallelPressure) {
-        // Pressure handled externally via shared pressure subgraph.
-        // DivP2<PressureTag> exits subgraph, VelPred<PressureTag> receives from outside.
-        subgraph->outputs(predDivP2KernelTask);
-        subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
-    } else {
-        auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
-            "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
-            [](auto& meshes) {
-                fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
-                fds_init_change_time_step(meshes[0]->dt);
-            });
-        subgraph->edges(predDivP2KernelTask, predPressureSM);
-        subgraph->edges(predPressureSM, velPredKernelTask);
+        // Downstream: DivP2 → Pressure → VelPred
+        if constexpr (useParallelPressure) {
+            subgraph->outputs(predDivP2KernelTask);
+            subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
+        } else {
+            auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
+                "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
+                [](auto& meshes) {
+                    fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
+                    fds_init_change_time_step(meshes[0]->dt);
+                });
+            subgraph->edges(predDivP2KernelTask, predPressureSM);
+            subgraph->edges(predPressureSM, velPredKernelTask);
+        }
     }
 
     // VelocityPredictor -> ChangeTimeStep (RetryPreKernel collects N MeshData<> directly)

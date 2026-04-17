@@ -294,4 +294,64 @@ inline auto makeBarrierCollectToOne(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
+/// Retagging barrier: collects N MeshData<InS>, runs barrier function, emits
+/// N MeshData<OutS>. Used when adjacent pipeline stages use different MeshState
+/// tags for type-based routing (e.g. packed parallel task ↔ sequential barriers).
+template<MeshState InS, MeshState OutS>
+class RetaggingBarrierCollectorTask
+    : public hh::AbstractTask<1, MeshData<InS>, MeshData<OutS>> {
+public:
+    template<typename Fn>
+    RetaggingBarrierCollectorTask(int nmeshes, std::string name,
+                                  std::string routines, Fn&& fn)
+        : hh::AbstractTask<1, MeshData<InS>, MeshData<OutS>>(std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<InS>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++count_ == nmeshes_) {
+            auto t0 = std::chrono::steady_clock::now();
+            fn_(collected_);
+            auto t1 = std::chrono::steady_clock::now();
+            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+            ++invocations_;
+            count_ = 0;
+            for (auto &md : collected_) {
+                this->addResult(retag<OutS>(std::move(md)));
+            }
+        }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    int nmeshes_, nmOffset_, count_ = 0;
+    std::string routines_;
+    BarrierFn<InS> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<InS>>> collected_;
+};
+
+/// Helper to create a RetaggingBarrierCollectorTask.
+template<MeshState InS, MeshState OutS, typename Fn>
+inline auto makeRetaggingBarrier(int nmeshes, std::string name,
+                                  std::string routines, Fn&& fn) {
+    return std::make_shared<RetaggingBarrierCollectorTask<InS, OutS>>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
 #endif // BARRIER_STATE_H
