@@ -234,6 +234,79 @@ inline auto makeDualInputBarrier(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
+/// Eager dual-input barrier: collects N MeshData<> + 1 BarrierData.
+/// Runs barrier function as soon as N MeshData arrive (doesn't wait for BarrierData).
+/// Emits N MeshData only when BOTH the barrier function has run AND BarrierData arrived.
+class EagerDualInputBarrierTask
+    : public hh::AbstractTask<2, MeshData<>, BarrierData, MeshData<>> {
+public:
+    template<typename Fn>
+    EagerDualInputBarrierTask(int nmeshes, std::string name, std::string routines, Fn&& fn)
+        : hh::AbstractTask<2, MeshData<>, BarrierData, MeshData<>>(
+              std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++meshCount_ == nmeshes_) {
+            auto t0 = std::chrono::steady_clock::now();
+            fn_(collected_);
+            auto t1 = std::chrono::steady_clock::now();
+            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+            ++invocations_;
+            fnDone_ = true;
+            tryEmit();
+        }
+    }
+
+    void execute(std::shared_ptr<BarrierData>) override {
+        exchDone_ = true;
+        tryEmit();
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    void tryEmit() {
+        if (fnDone_ && exchDone_) {
+            fnDone_ = false;
+            exchDone_ = false;
+            meshCount_ = 0;
+            this->batchAddResult(collected_);
+            for (auto &md : collected_) { md = nullptr; }
+        }
+    }
+
+    int nmeshes_, nmOffset_, meshCount_ = 0;
+    bool fnDone_ = false, exchDone_ = false;
+    std::string routines_;
+    BarrierFn<> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
+};
+
+/// Helper to create an EagerDualInputBarrierTask.
+template<typename Fn>
+inline auto makeEagerDualInputBarrier(int nmeshes, std::string name,
+                                       std::string routines, Fn&& fn) {
+    return std::make_shared<EagerDualInputBarrierTask>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
 /// Barrier collector that collects N MeshData<S>, runs a barrier function,
 /// and emits a single BarrierData (not N MeshData). Use when the barrier
 /// performs global work and downstream only needs a completion signal.

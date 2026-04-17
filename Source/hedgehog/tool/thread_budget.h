@@ -86,10 +86,9 @@ struct ThreadBudget {
 
         // --- Predictor standalone ---
         b.predStep1      = solo(4);  // 1.4ms/elem
-        // Merged prefork+fork: each HH thread owns an AsyncWorker → 2× OS threads.
-        // Allocate cap/2 so real thread count = cap (matches old fork concurrency).
-        b.predPreforkDiv = static_cast<size_t>(
-            std::max(1, std::min(nmeshes, cap / 2)));
+        // Merged prefork+fork: each HH thread owns an AsyncWorker.
+        // Full cap so sequential parts (prefork, post-join) keep full parallelism.
+        b.predPreforkDiv = solo(4);
         b.predDivPart2   = solo(1);  // 283us/elem
         b.velPredictor   = solo(1);  // 90us/elem
         b.predSynTurbVelBC = solo(2);  // merged SynTurb(light)+VelBC(medium)
@@ -98,9 +97,10 @@ struct ThreadBudget {
 
         // --- Corrector standalone ---
         b.corrStep1         = solo(4);  // 1.5ms/elem
-        // Merged Fork1+ParticleOps: each HH thread owns an AsyncWorker → 2× OS threads.
-        b.corrDivSetupCombPart = static_cast<size_t>(
-            std::max(1, std::min(nmeshes, cap / 2)));
+        // Merged Fork1+ParticleOps: each HH thread owns an AsyncWorker.
+        // Full cap so ParticleOps (sequential after join) keeps full parallelism.
+        // Brief 2× oversubscription during fork phase is acceptable.
+        b.corrDivSetupCombPart = solo(4);
         b.corrDivPart2      = solo(2);  // 604us/elem
         b.velCorrector      = solo(1);  // 89us/elem
         b.corrFinalVelBC    = solo(2);  // 472us/elem
@@ -129,14 +129,14 @@ struct ThreadBudget {
     void print(std::ostream &os) const {
         os << "[FDS-HH] Thread budget (cap=" << cap_ << "):\n"
            << "  Predictor:  step1=" << predStep1
-           << " preforkDiv=" << predPreforkDiv << "(x2)"
+           << " preforkDiv=" << predPreforkDiv << "(+aw)"
            << " divP2=" << predDivPart2
            << " velPred=" << velPredictor
            << " synTurbVelBC=" << predSynTurbVelBC
            << " retry=" << retryMomDiv
            << " divParallel=" << predDivParallel << "\n"
            << "  Corrector:  step1=" << corrStep1
-           << " divSetupCombPart=" << corrDivSetupCombPart << "(x2)"
+           << " divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
            << " divP2=" << corrDivPart2
            << " velCorr=" << velCorrector
            << " finalVBC=" << corrFinalVelBC
