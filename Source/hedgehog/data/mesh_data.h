@@ -20,7 +20,8 @@ enum class MeshState {
     GlobalMat,            ///< PredDivParallel → GlobalMatrix barrier
     DivPart2,             ///< GlobalMatrix barrier → PredDivParallel
     PreSolveExch,         ///< PressureParallel → pre-solve exchange
-    PostSolveExch         ///< PressureParallel → post-solve exchange
+    PostSolveExch,        ///< PressureParallel → post-solve exchange
+    PostParticleOps       ///< CorrDivSetupCombPartTask → MeshExch7 barrier (after ParticleOps)
 };
 
 /// Token type flowing through the Hedgehog dataflow graph.

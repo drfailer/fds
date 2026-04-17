@@ -34,16 +34,14 @@ struct ThreadBudget {
 
     // --- Corrector standalone sections ---
     size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
-    size_t corrParticleOps;     // ParticleOpsKernelTask         (MEDIUM) — split from barrier
+    size_t corrDivSetupCombPart;// CorrDivSetupCombPartTask      (HEAVY) — merged Fork1(DivSetup||Comb)+ParticleOps
+                                //   Real OS threads = 2 × corrDivSetupCombPart (each HH thread owns AsyncWorker)
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
     size_t velCorrector;        // VelocityCorrectorKernelTask  (LIGHT)
     size_t corrFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
     size_t corrWallBC;          // WallBCKernelTask             (MEDIUM) — includes finalize
     size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivP2Pre+DivPart2
 
-    // --- Corrector fork1: {DivSetup} || {Fork1Comb} ---
-    size_t corrFork1DivSetup;   // DivSetupKernelTask     (MEDIUM)
-    size_t corrFork1Comb;       // Fork1CombKernelTask    (MEDIUM)
 
     // --- Corrector fork2: {Radiation} || {Fork2DivP1} ---
     size_t corrFork2Radiation;  // CorrRadiationKernelTask (LIGHT)
@@ -100,19 +98,14 @@ struct ThreadBudget {
 
         // --- Corrector standalone ---
         b.corrStep1         = solo(4);  // 1.5ms/elem
-        b.corrParticleOps   = solo(2);  // split from barrier (medium)
+        // Merged Fork1+ParticleOps: each HH thread owns an AsyncWorker → 2× OS threads.
+        b.corrDivSetupCombPart = static_cast<size_t>(
+            std::max(1, std::min(nmeshes, cap / 2)));
         b.corrDivPart2      = solo(2);  // 604us/elem
         b.velCorrector      = solo(1);  // 89us/elem
         b.corrFinalVelBC    = solo(2);  // 472us/elem
         b.corrWallBC        = solo(2);  // 513us/elem (includes finalize)
         b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivP2Pre+DivPart2 (heaviest is MEDIUM)
-
-        // --- Corrector fork1: A{DivSetup(2)} || B{Fork1Comb(2)} ---
-        {
-            auto t = distribute({2, 2});
-            b.corrFork1DivSetup = t[0];
-            b.corrFork1Comb     = t[1];
-        }
 
         // --- Corrector fork2: A{Radiation(1)} || B{Fork2DivP1(2)} ---
         {
@@ -143,14 +136,12 @@ struct ThreadBudget {
            << " retry=" << retryMomDiv
            << " divParallel=" << predDivParallel << "\n"
            << "  Corrector:  step1=" << corrStep1
-           << " particleOps=" << corrParticleOps
+           << " divSetupCombPart=" << corrDivSetupCombPart << "(x2)"
            << " divP2=" << corrDivPart2
            << " velCorr=" << velCorrector
            << " finalVBC=" << corrFinalVelBC
            << " wallBC=" << corrWallBC
            << " divParallel=" << corrDivParallel << "\n"
-           << "  Corr fork1: divSetup=" << corrFork1DivSetup
-           << " comb=" << corrFork1Comb << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"
            << "  Pressure:   parallel=" << pressureParallel

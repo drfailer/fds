@@ -14,12 +14,11 @@
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/combustion_kernel_task.h"
-#include "../task/pipeline_fork1_tasks.h"
+#include "../task/corr_divsetup_comb_part_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_corrector_kernel_task.h"
 #include "../task/wallbc_kernel_task.h"
-#include "../task/particle_ops_kernel_task.h"
 #include "../task/corr_div_parallel_task.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
@@ -63,13 +62,15 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
-    // --- Group A: ForkJoin(2N→N) → Fork(HVAC || ParticleOps) → ForkJoin ---
+    // --- Group A: Merged DivSetup||Comb + ParticleOps → Fork(HVAC || MeshExch7) → Join ---
     //
-    // Soot oxidation merged into Fork1CombKernelTask (per-mesh, thread-safe).
-    // HVAC_CALC is truly global (network solve) — independent of ParticleOps.
-    // HVAC modifies global DUCT/DUCTNODE arrays; ParticleOps modifies per-mesh
-    // particle data. No data dependency → run in parallel.
-    auto fork1JoinTask = std::make_shared<ForkJoinTask>(nmeshes, 2, 1, "Fork1Join");
+    // CorrDivSetupCombPartTask merges Fork1 (DivSetup||Comb via AsyncWorker)
+    // and ParticleOps into one task. Two output types:
+    //   MeshData<> → HVAC barrier (emitted before ParticleOps)
+    //   MeshData<PostParticleOps> → MeshExch7 barrier (emitted after ParticleOps)
+    // HVAC collects while ParticleOps runs → concurrent.
+    auto corrDivSetupCombPartTask = std::make_shared<CorrDivSetupCombPartTask>(
+        budget.corrDivSetupCombPart);
 
     // HVAC: global network solve. Collects N MeshData, emits 1 BarrierData.
     auto hvacBarrier = makeBarrierCollectToOne(nmeshes, "HvacCalc",
@@ -78,12 +79,9 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
             fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
         });
 
-    // Extracted: condensation + particle mass/energy (parallel per-mesh)
-    auto particleOpsKernelTask = std::make_shared<ParticleOpsKernelTask>(budget.corrParticleOps);
-
-    // MeshExch(7) on ParticleOps branch — only needs particle data, not HVAC.
-    // Collects N MeshData, emits 1 BarrierData (carries meshes for downstream).
-    auto meshExch7Barrier = makeBarrierCollectToOne(nmeshes, "MeshExchange(7)",
+    // MeshExch(7) — collects N MeshData<PostParticleOps>, emits 1 BarrierData.
+    auto meshExch7Barrier = makeBarrierCollectToOne<MeshState::PostParticleOps>(
+        nmeshes, "MeshExchange(7)",
         "MESH_EXCHANGE(7)",
         [](auto& meshes) {
             fds_mesh_exchange(7);
@@ -98,22 +96,14 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     subgraph->inputs(corrStep1KernelTask);
     subgraph->edges(corrStep1KernelTask, meshExchange4SM);
 
-    // --- Fork 1: VFLUX || COMBUSTION → Group A split ---
+    // --- Merged: DivSetup||Comb + ParticleOps → HVAC||MeshExch7 → Join → WallBC ---
 
-    auto fork1DivSetupTask = std::make_shared<DivSetupKernelTask>(budget.corrFork1DivSetup);
-    auto fork1CombTask = std::make_shared<Fork1CombKernelTask>(budget.corrFork1Comb);
+    subgraph->edges(meshExchange4SM, corrDivSetupCombPartTask);
 
-    subgraph->edges(meshExchange4SM, fork1DivSetupTask);
-    subgraph->edges(meshExchange4SM, fork1CombTask);
-
-    // ForkJoin: collects 2N MeshData (DivSetup + Combustion+Soot), emits N
-    subgraph->edges(fork1DivSetupTask, fork1JoinTask);
-    subgraph->edges(fork1CombTask, fork1JoinTask);
-
-    // Fork: HVAC(→BarrierData) || (ParticleOps → MeshExch7 →BarrierData) → Join → WallBC
-    subgraph->edges(fork1JoinTask, hvacBarrier);
-    subgraph->edges(fork1JoinTask, particleOpsKernelTask);
-    subgraph->edges(particleOpsKernelTask, meshExch7Barrier);
+    // MeshData<> output → HVAC barrier (emitted before ParticleOps)
+    subgraph->edges(corrDivSetupCombPartTask, hvacBarrier);
+    // MeshData<PostParticleOps> output → MeshExch7 barrier (emitted after ParticleOps)
+    subgraph->edges(corrDivSetupCombPartTask, meshExch7Barrier);
     subgraph->edges(hvacBarrier, hvacPartJoinTask);
     subgraph->edges(meshExch7Barrier, hvacPartJoinTask);
     subgraph->edges(hvacPartJoinTask, wallBCKernelTask);

@@ -234,24 +234,27 @@ inline auto makeDualInputBarrier(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
-/// Barrier collector that collects N MeshData, runs a barrier function,
+/// Barrier collector that collects N MeshData<S>, runs a barrier function,
 /// and emits a single BarrierData (not N MeshData). Use when the barrier
 /// performs global work and downstream only needs a completion signal.
 /// The meshes are stored in the emitted BarrierData for downstream access.
+/// Templated on MeshState so upstream tasks can use typed routing.
+/// Internally retags to Default for the barrier function and BarrierData storage.
+template<MeshState S = MeshState::Default>
 class BarrierCollectToOneTask
-    : public hh::AbstractTask<1, MeshData<>, BarrierData> {
+    : public hh::AbstractTask<1, MeshData<S>, BarrierData> {
 public:
     template<typename Fn>
     BarrierCollectToOneTask(int nmeshes, std::string name, std::string routines, Fn&& fn)
-        : hh::AbstractTask<1, MeshData<>, BarrierData>(std::move(name), 1),
+        : hh::AbstractTask<1, MeshData<S>, BarrierData>(std::move(name), 1),
           nmeshes_(nmeshes), routines_(std::move(routines)),
           fn_(std::forward<Fn>(fn)),
           nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
-        collected_[data->nm - nmOffset_] = data;
+    void execute(std::shared_ptr<MeshData<S>> data) override {
+        collected_[data->nm - nmOffset_] = retag<MeshState::Default>(data);
         if (++count_ == nmeshes_) {
             auto t0 = std::chrono::steady_clock::now();
             fn_(collected_);
@@ -287,10 +290,10 @@ private:
 };
 
 /// Helper to create a BarrierCollectToOneTask.
-template<typename Fn>
+template<MeshState S = MeshState::Default, typename Fn>
 inline auto makeBarrierCollectToOne(int nmeshes, std::string name,
                                      std::string routines, Fn&& fn) {
-    return std::make_shared<BarrierCollectToOneTask>(
+    return std::make_shared<BarrierCollectToOneTask<S>>(
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
