@@ -16,7 +16,6 @@
 #include "../task/velocity_predictor_kernel_task.h"
 #include "../task/velocity_bc_edges_task.h"
 #include "../task/barrier_tasks.h"
-#include "../task/pred_div_parallel_task.h"
 #include "../task/pred_cc_partmom_divp1_kernel_task.h"
 #include "../tool/thread_budget.h"
 #include "change_timestep_subgraph.h"
@@ -79,25 +78,16 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 fds_initialize_divergence_integrals();
             });
 
-        // Merged prefork + fork: DivP1Prefork + (DivSetup+PartMom || WallBC+DivP1Early)
+        // Merged prefork + fork + divergence pipeline: DivP1Prefork +
+        // (DivSetup+PartMom || WallBC+DivP1Early) + DivP1Late + DivP2Pre + DivPart2.
         // AsyncWorker handles the fork internally — each Hedgehog thread owns a
         // worker thread, so real OS thread count = 2 × budget.predPreforkDiv.
-        auto predPreforkDivTask = std::make_shared<PredPreforkDivTask>(budget.predPreforkDiv);
-
-        subgraph->edges(predStep1KernelTask, meshExch1SM);
-        subgraph->edges(meshExch1SM, predPreforkDivTask);
-
-        // Divergence pipeline: packed parallel task + 2 retagging barriers.
-        // The 3 parallel kernels (DivP1Late, DivP2Pre, DivPart2) share one
-        // thread pool via PredDivParallelTask. Sequential barriers are separate
-        // nodes, clearly highlighting the sequential/parallel structure.
         //
-        // Pipeline: PredPreforkDiv → Parallel(DivP1Late) → DivExchange barrier
-        //   → Parallel(DivP2Pre) → GlobalMatrix barrier → Parallel(DivPart2)
-        //   → downstream
-
-        auto predDivParallelTask = std::make_shared<PredDivParallelTask<PressureTag>>(
-            budget.predDivParallel);
+        // Pipeline: PredPreforkDiv(Phase1) → DivExchange barrier
+        //   → PredPreforkDiv(Phase2) → GlobalMatrix barrier
+        //   → PredPreforkDiv(Phase3) → downstream
+        auto predPreforkDivTask = std::make_shared<PredPreforkDivTask<PressureTag>>(
+            budget.predPreforkDiv);
 
         auto divExchangeBarrier = makeTerminableRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
             nmeshes, "DivExchange",
@@ -117,12 +107,14 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        // PredPreforkDiv → Parallel ↔ DivExchange ↔ Parallel ↔ GlobalMatrix ↔ Parallel
-        subgraph->edges(predPreforkDivTask, predDivParallelTask);
-        subgraph->edges(predDivParallelTask, divExchangeBarrier);
-        subgraph->edges(divExchangeBarrier, predDivParallelTask);
-        subgraph->edges(predDivParallelTask, globalMatBarrier);
-        subgraph->edges(globalMatBarrier, predDivParallelTask);
+        subgraph->edges(predStep1KernelTask, meshExch1SM);
+        subgraph->edges(meshExch1SM, predPreforkDivTask);
+
+        // PredPreforkDiv ↔ DivExchange ↔ PredPreforkDiv ↔ GlobalMatrix ↔ PredPreforkDiv
+        subgraph->edges(predPreforkDivTask, divExchangeBarrier);
+        subgraph->edges(divExchangeBarrier, predPreforkDivTask);
+        subgraph->edges(predPreforkDivTask, globalMatBarrier);
+        subgraph->edges(globalMatBarrier, predPreforkDivTask);
 
         // TerminationData breaks structural cycle at shutdown
         subgraph->template input<TerminationData>(divExchangeBarrier);
@@ -130,7 +122,7 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
         // Downstream: final output (MeshData<PressureTag>) → Pressure → VelPred
         if constexpr (useParallelPressure) {
-            subgraph->template output<MeshData<PressureTag>>(predDivParallelTask);
+            subgraph->template output<MeshData<PressureTag>>(predPreforkDivTask);
             subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
         } else {
             auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
@@ -139,7 +131,7 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                     fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
                     fds_init_change_time_step(meshes[0]->dt);
                 });
-            subgraph->edges(predDivParallelTask, predPressureSM);
+            subgraph->edges(predPreforkDivTask, predPressureSM);
             subgraph->edges(predPressureSM, velPredKernelTask);
         }
     } else {

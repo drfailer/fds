@@ -30,7 +30,6 @@ struct ThreadBudget {
     size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
     size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged SynTurb+VelBC
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
-    size_t predDivParallel;     // PredDivParallelTask           (LIGHT) — merged DivP1Late+DivP2Pre+DivPart2
 
     // --- Corrector standalone sections ---
     size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
@@ -92,7 +91,6 @@ struct ThreadBudget {
         b.velPredictor   = solo(1);  // 90us/elem
         b.predSynTurbVelBC = solo(2);  // merged SynTurb(light)+VelBC(medium)
         b.retryMomDiv    = solo(1);  // rarely used
-        b.predDivParallel = solo(1); // merged DivP1Late+DivP2Pre+DivPart2 thread pool
 
         // --- Corrector standalone ---
         b.corrStep1         = solo(4);  // 1.5ms/elem
@@ -131,8 +129,7 @@ struct ThreadBudget {
            << " divP2=" << predDivPart2
            << " velPred=" << velPredictor
            << " synTurbVelBC=" << predSynTurbVelBC
-           << " retry=" << retryMomDiv
-           << " divParallel=" << predDivParallel << "\n"
+           << " retry=" << retryMomDiv << "\n"
            << "  Corrector:  step1=" << corrStep1
            << " divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
            << " divP2=" << corrDivPart2

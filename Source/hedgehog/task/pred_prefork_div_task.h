@@ -7,22 +7,40 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged predictor task: DivP1Prefork + Fork(DivSetup+PartMom || WallBC+DivP1Early).
+/// Merged predictor task: DivP1Prefork + Fork(DivSetup+PartMom || WallBC+DivP1Early)
+/// + DivP1Late + DivP2Pre + DivPart2.
 ///
-/// Replaces 3 separate tasks (DivP1PreforkKernel, PredDivSetupPartMom,
-/// PredWallBCDivEarly) + ForkJoinTask by using an AsyncWorker for the fork.
-///
-/// Per-mesh execution:
+/// Phase 1 (MeshData<>):
 ///   1. DIV_P1_PREFORK (main thread, sequential)
 ///   2. Fork via AsyncWorker:
 ///      - Worker thread: WALL_BC + DIV_P1_EARLY_B
 ///      - Main thread:   DivSetup + PARTICLE_MOMENTUM
 ///   3. Join: tu_aw_wait
+///   4. DIV_P1_LATE_B → emits MeshData<DivExch>
+///
+/// Phase 2 (MeshData<DivP2Pre>, from DivExchange barrier):
+///   DIV_P2_PREPROCESSING → emits MeshData<GlobalMat>
+///
+/// Phase 3 (MeshData<DivPart2>, from GlobalMatrix barrier):
+///   DIV_P2_BLOCK_KERNEL → emits MeshData<PressureTag>
 ///
 /// Each copy() creates its own AsyncWorker — no sharing between Hedgehog
-/// threads.  Real OS thread count = 2 x numThreads (main + worker per thread).
+/// threads.  Real OS threads = 2 x numThreads (main + worker per thread).
+template<MeshState PressureTag = MeshState::Default>
 class PredPreforkDivTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+    : public hh::AbstractTask<3,
+        MeshData<>,
+        MeshData<MeshState::DivP2Pre>,
+        MeshData<MeshState::DivPart2>,
+        MeshData<MeshState::DivExch>,
+        MeshData<MeshState::GlobalMat>,
+        MeshData<PressureTag>> {
+
+    using TaskBase = hh::AbstractTask<3,
+        MeshData<>, MeshData<MeshState::DivP2Pre>, MeshData<MeshState::DivPart2>,
+        MeshData<MeshState::DivExch>, MeshData<MeshState::GlobalMat>,
+        MeshData<PressureTag>>;
+
     TU_AsyncWorker worker_{};
 
     static void wallBCDivEarlyWork(void *rawData, TU_i64) {
@@ -37,8 +55,7 @@ class PredPreforkDivTask
 
 public:
     explicit PredPreforkDivTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
-              "PredPreforkDiv", numThreads) {
+        : TaskBase("PredPreforkDiv", numThreads) {
         tu_aw_init(&worker_);
     }
 
@@ -47,6 +64,7 @@ public:
     PredPreforkDivTask(PredPreforkDivTask const &) = delete;
     PredPreforkDivTask &operator=(PredPreforkDivTask const &) = delete;
 
+    /// Phase 1: Prefork + Fork + DivP1Late
     void execute(std::shared_ptr<MeshData<>> data) override {
         fds_divergence_part_1_prefork(data->nm, data->t, data->dt);
 
@@ -60,25 +78,40 @@ public:
 
         tu_aw_wait(&worker_);
 
-        this->addResult(data);
+        fds_divergence_part_1_late_b(data->nm, data->t, data->dt);
+        this->addResult(retag<MeshState::DivExch>(data));
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
-    copy() override {
-        return std::make_shared<PredPreforkDivTask>(this->numberThreads());
+    /// Phase 2: DivP2 preprocessing (from DivExchange barrier)
+    void execute(std::shared_ptr<MeshData<MeshState::DivP2Pre>> data) override {
+        fds_divergence_part_2_preprocessing(data->nm, data->dt);
+        this->addResult(retag<MeshState::GlobalMat>(data));
+    }
+
+    /// Phase 3: DivPart2 block (from GlobalMatrix barrier)
+    void execute(std::shared_ptr<MeshData<MeshState::DivPart2>> data) override {
+        int kbar = fds_get_kbar(data->nm);
+        fds_divergence_part_2_block_kernel(data->nm, data->dt, 1, kbar);
+        this->addResult(retag<PressureTag>(data));
+    }
+
+    std::shared_ptr<TaskBase> copy() override {
+        return std::make_shared<PredPreforkDivTask<PressureTag>>(this->numberThreads());
     }
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
-        oss << "DIV_P1_PREFORK\\n"
-            << "Fork(AsyncWorker):\\n"
-            << "  A: SET_BARO_FALSE, VISC_BC\\n"
-            << "     CC_VEL_BC_TS, VEL_FLUX\\n"
-            << "     PARTICLE_MOMENTUM\\n"
-            << "  B: WALL_BC_PREPROC\\n"
-            << "     WALL_BC_CELLS\\n"
-            << "     WALL_BC_FINALIZE\\n"
-            << "     DIV_P1_EARLY_B";
+        oss << "Phase 1 (Prefork+Fork+DivP1Late):\\n"
+            << "  DIV_P1_PREFORK\\n"
+            << "  Fork(AsyncWorker):\\n"
+            << "    A: SET_BARO, VISC_BC, VEL_FLUX\\n"
+            << "       PARTICLE_MOMENTUM\\n"
+            << "    B: WALL_BC, DIV_P1_EARLY_B\\n"
+            << "  DIV_P1_LATE_B\\n"
+            << "Phase 2 (DivP2Pre):\\n"
+            << "  DIV_P2_PREPROCESSING\\n"
+            << "Phase 3 (DivPart2):\\n"
+            << "  DIV_P2_BLOCK_KERNEL";
         return oss.str();
     }
 };
