@@ -37,8 +37,7 @@ struct ThreadBudget {
     size_t corrDivSetupCombPart;// CorrDivSetupCombPartTask      (HEAVY) — merged Fork1(DivSetup||Comb)+ParticleOps
                                 //   Real OS threads = 2 × corrDivSetupCombPart (each HH thread owns AsyncWorker)
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
-    size_t velCorrector;        // VelocityCorrectorKernelTask  (LIGHT)
-    size_t corrFinalVelBC;      // VelocityBCEdgesTask          (MEDIUM)
+    size_t corrFinal;           // CorrFinalKernelTask          (MEDIUM) — merged VelCorr+VelBCEdges+RTE
     size_t corrWallBC;          // WallBCKernelTask             (MEDIUM) — includes finalize
     size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivP2Pre+DivPart2
 
@@ -102,8 +101,7 @@ struct ThreadBudget {
         // Brief 2× oversubscription during fork phase is acceptable.
         b.corrDivSetupCombPart = solo(4);
         b.corrDivPart2      = solo(2);  // 604us/elem
-        b.velCorrector      = solo(1);  // 89us/elem
-        b.corrFinalVelBC    = solo(2);  // 472us/elem
+        b.corrFinal         = solo(2);  // merged VelCorr(light)+VelBCEdges(medium)+RTE
         b.corrWallBC        = solo(2);  // 513us/elem (includes finalize)
         b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivP2Pre+DivPart2 (heaviest is MEDIUM)
 
@@ -138,8 +136,7 @@ struct ThreadBudget {
            << "  Corrector:  step1=" << corrStep1
            << " divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
            << " divP2=" << corrDivPart2
-           << " velCorr=" << velCorrector
-           << " finalVBC=" << corrFinalVelBC
+           << " corrFinal=" << corrFinal
            << " wallBC=" << corrWallBC
            << " divParallel=" << corrDivParallel << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation

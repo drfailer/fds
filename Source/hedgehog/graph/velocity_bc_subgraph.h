@@ -8,29 +8,32 @@
 #include <sstream>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/termination_data.h"
 #include "../task/velocity_bc_edges_task.h"
 #include "../task/barrier_tasks.h"
 #include "../state/barrier_state.h"
 #include "../state/collector_state.h"
 #include "../state/fork_join_state.h"
 
-/// Merged collector + orchestrator for CorrFinal: collects N MeshData<>,
+/// Merged collector + orchestrator for CorrFinal: collects N MeshData<PostVelCorr>,
 /// runs global work (reset wall counter, CC_END_STEP, exchange(6)),
-/// then dual-outputs: N MeshData for VelocityBCEdges + 1 BarrierData for RTE chain.
-/// Replaces separate CollectorTask + CorrFinalOrchDualTask.
+/// then dual-outputs: N MeshData<> for VelocityBCEdges + 1 BarrierData for RTE chain.
+///
+/// Also receives TerminationData to break the CorrFinalKernel ↔ CorrFinalOrch cycle.
+/// Single-threaded, so plain bool suffices for canTerminate().
 class CorrFinalOrchTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>, BarrierData> {
+    : public hh::AbstractTask<2, MeshData<MeshState::PostVelCorr>, TerminationData, MeshData<>, BarrierData> {
 public:
     CorrFinalOrchTask(int nmeshes, bool ccIBM)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>, BarrierData>(
+        : hh::AbstractTask<2, MeshData<MeshState::PostVelCorr>, TerminationData, MeshData<>, BarrierData>(
               "CorrFinalOrch", 1),
           nmeshes_(nmeshes), ccIBM_(ccIBM),
           nmOffset_(fds_get_lower_mesh_index()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
-        collected_[data->nm - nmOffset_] = data;
+    void execute(std::shared_ptr<MeshData<MeshState::PostVelCorr>> data) override {
+        collected_[data->nm - nmOffset_] = retag<MeshState::Default>(data);
         if (++count_ == nmeshes_) {
             auto t0 = std::chrono::steady_clock::now();
             fds_reset_wall_counter();
@@ -64,7 +67,16 @@ public:
         return oss.str();
     }
 
+    void execute(std::shared_ptr<TerminationData>) override {
+        done_ = true;
+    }
+
+    [[nodiscard]] bool canTerminate() const override {
+        return done_;
+    }
+
 private:
+    bool done_ = false;
     int nmeshes_, nmOffset_, count_ = 0;
     bool ccIBM_;
     double totalTime_ = 0.0;

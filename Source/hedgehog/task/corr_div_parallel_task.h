@@ -2,10 +2,8 @@
 #define CORR_DIV_PARALLEL_TASK_H
 
 #include <hedgehog/hedgehog.h>
-#include <atomic>
 #include <memory>
 #include "../data/mesh_data.h"
-#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Packed parallel "thread pool" task for the corrector divergence pipeline.
@@ -17,29 +15,27 @@
 ///
 /// Between these phases, sequential barriers (DivExchange, GlobalMatrix) collect
 /// N tokens, run global operations, and re-emit with the next phase's tag.
-/// TerminationData + canTerminate() break the structural cycle at shutdown.
+/// No canTerminate() needed: the barrier cycle partners receive TerminationData
+/// and terminate first, disconnecting from this task.
 ///
 /// One thread pool serves all 3 phases, saving threads vs. separate tasks.
 template<MeshState PressureTag = MeshState::Default>
-class CorrDivParallelTask : public hh::AbstractTask<4,
+class CorrDivParallelTask : public hh::AbstractTask<3,
     MeshData<>,                        // from Join2+MeshExch2 → QRAddCopy
     MeshData<MeshState::DivP2Pre>,     // from DivExchange → DivP2Pre kernel
     MeshData<MeshState::DivPart2>,     // from GlobalMatrix → DivPart2 kernel
-    TerminationData,                   // termination signal
     MeshData<MeshState::DivExch>,      // → DivExchange barrier
     MeshData<MeshState::GlobalMat>,    // → GlobalMatrix barrier
     MeshData<PressureTag>>             // → downstream (pressure or VelCorr)
 {
-    using TaskBase = hh::AbstractTask<4,
+    using TaskBase = hh::AbstractTask<3,
         MeshData<>, MeshData<MeshState::DivP2Pre>, MeshData<MeshState::DivPart2>,
-        TerminationData,
         MeshData<MeshState::DivExch>, MeshData<MeshState::GlobalMat>,
         MeshData<PressureTag>>;
 
 public:
     explicit CorrDivParallelTask(size_t numThreads)
-        : TaskBase("CorrDivParallel", numThreads),
-          done_(std::make_shared<std::atomic<bool>>(false)) {}
+        : TaskBase("CorrDivParallel", numThreads) {}
 
     /// Phase 1: QR addition + WORK1 copy (from Join2+MeshExch2)
     void execute(std::shared_ptr<MeshData<>> data) override {
@@ -61,24 +57,10 @@ public:
         this->addResult(retag<PressureTag>(data));
     }
 
-    /// Termination signal — sets done flag so canTerminate() returns true.
-    void execute(std::shared_ptr<TerminationData>) override {
-        done_->store(true);
-    }
-
-    /// Break structural cycle at shutdown.
-    [[nodiscard]] bool canTerminate() const override {
-        return done_->load();
-    }
-
     std::shared_ptr<TaskBase> copy() override {
-        auto c = std::make_shared<CorrDivParallelTask<PressureTag>>(
+        return std::make_shared<CorrDivParallelTask<PressureTag>>(
             this->numberThreads());
-        c->done_ = done_;  // share atomic flag across clones
-        return c;
     }
-
-    std::shared_ptr<std::atomic<bool>> done_;
 };
 
 #endif // CORR_DIV_PARALLEL_TASK_H

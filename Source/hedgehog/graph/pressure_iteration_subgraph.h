@@ -79,16 +79,15 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
     subgraph->template input<MeshData<MeshState::PredictorPressure>>(pressureParallelTask);
     subgraph->template input<MeshData<MeshState::CorrectorPressure>>(pressureParallelTask);
     subgraph->template input<TerminationData>(convergenceSM);
-    subgraph->template input<TerminationData>(pressureParallelTask);
 
     if (commService) {
-        // --- MPI mode: retagging barriers for exchange ---
-        auto preSolveExchange = makeRetaggingBarrier<MeshState::PreSolveExch, MeshState::SolvePhase>(
+        // --- MPI mode: terminable retagging barriers for exchange ---
+        auto preSolveExchange = makeTerminableRetaggingBarrier<MeshState::PreSolveExch, MeshState::SolvePhase>(
             nmeshes, "PreSolveExchange",
             "MESH_EXCHANGE(5)",
             [](auto&) { fds_mesh_exchange(5); });
 
-        auto postSolveExchange = makeRetaggingBarrier<MeshState::PostSolveExch, MeshState::VelErrorPhase>(
+        auto postSolveExchange = makeTerminableRetaggingBarrier<MeshState::PostSolveExch, MeshState::VelErrorPhase>(
             nmeshes, "PostSolveExchange",
             "MESH_EXCHANGE(5)",
             [](auto&) { fds_mesh_exchange(5); });
@@ -100,6 +99,10 @@ inline auto buildPressureIterationSubgraph(int nmeshes,
         // PressureParallel ↔ PostSolveExchange ↔ PressureParallel
         subgraph->edges(pressureParallelTask, postSolveExchange);
         subgraph->edges(postSolveExchange, pressureParallelTask);
+
+        // TerminationData breaks exchange cycles at shutdown
+        subgraph->template input<TerminationData>(preSolveExchange);
+        subgraph->template input<TerminationData>(postSolveExchange);
 
     } else {
         // --- Single-process mode: retag → exchange graph → router ---

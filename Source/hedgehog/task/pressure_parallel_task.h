@@ -2,10 +2,8 @@
 #define PRESSURE_PARALLEL_TASK_H
 
 #include <hedgehog/hedgehog.h>
-#include <atomic>
 #include <memory>
 #include "../data/mesh_data.h"
-#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Packed parallel "thread pool" task for the pressure iteration pipeline.
@@ -17,27 +15,26 @@
 ///
 /// Between phases, exchange operations (barriers or exchange graph) collect
 /// N tokens, perform global exchange, and re-emit with the next phase's tag.
-/// TerminationData + canTerminate() break structural cycles at shutdown.
+/// No canTerminate() needed: the sequential cycle partners (convergence state,
+/// exchange barriers/router) receive TerminationData and terminate first.
 ///
 /// One thread pool serves all 3 phases, saving threads vs. separate tasks.
-class PressureParallelTask : public hh::AbstractTask<6,
+class PressureParallelTask : public hh::AbstractTask<5,
     MeshData<MeshState::PredictorPressure>,   // initial entry from predictor
     MeshData<MeshState::CorrectorPressure>,   // initial entry from corrector
     MeshData<MeshState::Pressure>,            // cycle-back from convergence
     MeshData<MeshState::SolvePhase>,          // from exchange → solve phase
     MeshData<MeshState::VelErrorPhase>,       // from exchange → vel error phase
-    TerminationData,                          // termination signal
     MeshData<MeshState::PreSolveExch>,        // → pre-solve exchange
     MeshData<MeshState::PostSolveExch>,       // → post-solve exchange
     MeshData<MeshState::Pressure>>            // → convergence barrier
 {
-    using TaskBase = hh::AbstractTask<6,
+    using TaskBase = hh::AbstractTask<5,
         MeshData<MeshState::PredictorPressure>,
         MeshData<MeshState::CorrectorPressure>,
         MeshData<MeshState::Pressure>,
         MeshData<MeshState::SolvePhase>,
         MeshData<MeshState::VelErrorPhase>,
-        TerminationData,
         MeshData<MeshState::PreSolveExch>,
         MeshData<MeshState::PostSolveExch>,
         MeshData<MeshState::Pressure>>;
@@ -45,7 +42,6 @@ class PressureParallelTask : public hh::AbstractTask<6,
 public:
     explicit PressureParallelTask(size_t numThreads, int presFlag)
         : TaskBase("PressureParallel", numThreads),
-          done_(std::make_shared<std::atomic<bool>>(false)),
           presFlag_(presFlag) {}
 
     /// Phase 1a: Baroclinic from predictor entry
@@ -80,24 +76,10 @@ public:
         this->addResult(md);
     }
 
-    /// Termination signal — sets done flag so canTerminate() returns true.
-    void execute(std::shared_ptr<TerminationData>) override {
-        done_->store(true);
-    }
-
-    /// Break structural cycles at shutdown.
-    [[nodiscard]] bool canTerminate() const override {
-        return done_->load();
-    }
-
     std::shared_ptr<TaskBase> copy() override {
-        auto c = std::make_shared<PressureParallelTask>(
+        return std::make_shared<PressureParallelTask>(
             this->numberThreads(), presFlag_);
-        c->done_ = done_;  // share atomic flag across clones
-        return c;
     }
-
-    std::shared_ptr<std::atomic<bool>> done_;
 
 private:
     void doBaroclinic(std::shared_ptr<MeshData<MeshState::Pressure>> md) {

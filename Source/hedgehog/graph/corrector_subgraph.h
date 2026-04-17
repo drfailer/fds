@@ -17,7 +17,7 @@
 #include "../task/corr_divsetup_comb_part_task.h"
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
-#include "../task/velocity_corrector_kernel_task.h"
+#include "../task/corr_final_kernel_task.h"
 #include "../task/wallbc_kernel_task.h"
 #include "../task/corr_div_parallel_task.h"
 #include "velocity_bc_subgraph.h"
@@ -43,7 +43,7 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(budget.corrStep1);
     auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(budget.corrWallBC);
-    auto velCorrKernelTask = std::make_shared<VelocityCorrectorKernelTask<PressureTag>>(budget.velCorrector);
+    auto corrFinalKernelTask = std::make_shared<CorrFinalKernelTask>(budget.corrFinal);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool ht3d = fds_is_ht3d() != 0;
@@ -161,22 +161,19 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         auto corrDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.corrDivPart2);
         subgraph->edges(corrDivExchangeSM, corrDivP2KernelTask);
 
-        // TerminationData sink (no cycle to break in CC_IBM)
-        auto termSink = std::make_shared<TerminationDataSink>();
-        subgraph->template input<TerminationData>(termSink);
-
-        // Downstream: DivP2 → Pressure → VelCorr
+        // Downstream: DivP2 → Pressure → CorrFinalKernel
         if constexpr (useParallelPressure) {
             subgraph->outputs(corrDivP2KernelTask);
-            subgraph->template input<MeshData<PressureTag>>(velCorrKernelTask);
+            subgraph->template input<MeshData<MeshState::CorrectorPressure>>(corrFinalKernelTask);
         } else {
-            auto corrPressureSM = makeBarrierSM(nmeshes, "CorrPressure",
+            auto corrPressureSM = makeRetaggingBarrier<MeshState::Default, MeshState::CorrectorPressure>(
+                nmeshes, "CorrPressure",
                 "PRESSURE_ITERATION",
                 [](auto& meshes) {
                     fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
                 });
             subgraph->edges(corrDivP2KernelTask, corrPressureSM);
-            subgraph->edges(corrPressureSM, velCorrKernelTask);
+            subgraph->edges(corrPressureSM, corrFinalKernelTask);
         }
     } else {
         // Group B (non-CC_IBM): Exchange(6) [HT3D only] + InitDiv barrier.
@@ -212,14 +209,14 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         auto corrDivParallelTask = std::make_shared<CorrDivParallelTask<PressureTag>>(
             budget.corrDivParallel);
 
-        auto corrDivExchBarrier = makeRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
+        auto corrDivExchBarrier = makeTerminableRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
             nmeshes, "DivExchange",
             "EXCH_DIV_INFO",
             [](auto&) {
                 fds_exchange_divergence_info();
             });
 
-        auto corrGlobalMatBarrier = makeRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
+        auto corrGlobalMatBarrier = makeTerminableRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
             nmeshes, "GlobalMatrix+PressureInit",
             "GLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto&) {
@@ -245,46 +242,44 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(corrDivParallelTask, corrGlobalMatBarrier);
         subgraph->edges(corrGlobalMatBarrier, corrDivParallelTask);
 
-        // TerminationData breaks structural cycle at shutdown
-        subgraph->template input<TerminationData>(corrDivParallelTask);
+        // TerminationData breaks structural cycles at shutdown
+        subgraph->template input<TerminationData>(corrDivExchBarrier);
+        subgraph->template input<TerminationData>(corrGlobalMatBarrier);
 
-        // Downstream: final output (MeshData<PressureTag>) → Pressure → VelCorr
+        // Downstream: final output (MeshData<PressureTag>) → Pressure → CorrFinalKernel
         if constexpr (useParallelPressure) {
             subgraph->template output<MeshData<PressureTag>>(corrDivParallelTask);
-            subgraph->template input<MeshData<PressureTag>>(velCorrKernelTask);
+            subgraph->template input<MeshData<MeshState::CorrectorPressure>>(corrFinalKernelTask);
         } else {
-            auto corrPressureSM = makeBarrierSM(nmeshes, "CorrPressure",
+            auto corrPressureSM = makeRetaggingBarrier<MeshState::Default, MeshState::CorrectorPressure>(
+                nmeshes, "CorrPressure",
                 "PRESSURE_ITERATION",
                 [](auto& meshes) {
                     fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
                 });
             subgraph->edges(corrDivParallelTask, corrPressureSM);
-            subgraph->edges(corrPressureSM, velCorrKernelTask);
+            subgraph->edges(corrPressureSM, corrFinalKernelTask);
         }
     }
 
-    // --- CorrFinal (inlined): Orch → Fork(VelBCEdges || RTE) → Dump ---
+    // --- CorrFinal: CorrFinalKernel ↔ CorrFinalOrch → CorrFinalDump ---
+    //
+    // CorrFinalKernelTask has 3 phases via different input types:
+    //   Phase 1: MeshData<CorrectorPressure> → VelCorr → MeshData<PostVelCorr> → Orch
+    //   Phase 2: MeshData<> (from Orch) → VelBCEdges → MeshData<> → Dump
+    //   Phase 3: BarrierData (from Orch) → RTE → BarrierData → Dump
 
     auto corrFinalOrchTask = std::make_shared<CorrFinalOrchTask>(nmeshes, ccIBM);
-
-    auto corrFinalVelBCTask = std::make_shared<VelocityBCEdgesTask>(
-        budget.corrFinalVelBC, /*applyToEstimated=*/0, /*doIBEdges=*/1, /*isCorrFinal=*/true);
-
-    auto rteChainTask = makeBarrierChainTask("RTESourceCorr",
-        "RTE_SOURCE_CORR",
-        [](auto& meshes) {
-            fds_rte_source_correction();
-        });
-
     auto corrFinalDumpTask = std::make_shared<CorrFinalDumpTask>(nmeshes);
 
-    subgraph->edges(velCorrKernelTask, corrFinalOrchTask);
-    // Fork: VelocityBCEdges (MeshData) || RTE_SOURCE_CORRECTION (BarrierData)
-    subgraph->edges(corrFinalOrchTask, corrFinalVelBCTask);
-    subgraph->edges(corrFinalOrchTask, rteChainTask);
-    // Join+dump
-    subgraph->edges(corrFinalVelBCTask, corrFinalDumpTask);
-    subgraph->edges(rteChainTask, corrFinalDumpTask);
+    // CorrFinalKernel ↔ CorrFinalOrch cycle
+    subgraph->edges(corrFinalKernelTask, corrFinalOrchTask);  // MeshData<PostVelCorr>
+    subgraph->edges(corrFinalOrchTask, corrFinalKernelTask);  // MeshData<> + BarrierData
+    // CorrFinalKernel → CorrFinalDump
+    subgraph->edges(corrFinalKernelTask, corrFinalDumpTask);  // MeshData<> + BarrierData
+
+    // TerminationData breaks CorrFinalKernel ↔ CorrFinalOrch cycle
+    subgraph->template input<TerminationData>(corrFinalOrchTask);
 
     subgraph->outputs(corrFinalDumpTask);
 

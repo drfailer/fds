@@ -10,6 +10,7 @@
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
+#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Barrier function signature: takes collected meshes, runs global work.
@@ -427,6 +428,75 @@ template<MeshState InS, MeshState OutS, typename Fn>
 inline auto makeRetaggingBarrier(int nmeshes, std::string name,
                                   std::string routines, Fn&& fn) {
     return std::make_shared<RetaggingBarrierCollectorTask<InS, OutS>>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
+/// Retagging barrier with TerminationData support for cycle breaking.
+/// Same as RetaggingBarrierCollectorTask but also accepts TerminationData
+/// and overrides canTerminate() to break structural cycles at shutdown.
+template<MeshState InS, MeshState OutS>
+class TerminableRetaggingBarrierTask
+    : public hh::AbstractTask<2, MeshData<InS>, TerminationData, MeshData<OutS>> {
+public:
+    template<typename Fn>
+    TerminableRetaggingBarrierTask(int nmeshes, std::string name,
+                                    std::string routines, Fn&& fn)
+        : hh::AbstractTask<2, MeshData<InS>, TerminationData, MeshData<OutS>>(
+              std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<InS>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++count_ == nmeshes_) {
+            auto t0 = std::chrono::steady_clock::now();
+            fn_(collected_);
+            auto t1 = std::chrono::steady_clock::now();
+            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+            ++invocations_;
+            count_ = 0;
+            for (auto &md : collected_) {
+                this->addResult(retag<OutS>(std::move(md)));
+            }
+        }
+    }
+
+    void execute(std::shared_ptr<TerminationData>) override {
+        done_ = true;
+    }
+
+    [[nodiscard]] bool canTerminate() const override {
+        return done_;
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    bool done_ = false;
+    int nmeshes_, nmOffset_, count_ = 0;
+    std::string routines_;
+    BarrierFn<InS> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<InS>>> collected_;
+};
+
+template<MeshState InS, MeshState OutS, typename Fn>
+inline auto makeTerminableRetaggingBarrier(int nmeshes, std::string name,
+                                            std::string routines, Fn&& fn) {
+    return std::make_shared<TerminableRetaggingBarrierTask<InS, OutS>>(
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 

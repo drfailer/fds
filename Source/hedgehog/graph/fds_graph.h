@@ -47,17 +47,14 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget, depGraph, commService);
     auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget, depGraph, commService);
 
-    // --- Create dump fork-join + timestep loop ---
+    // --- Create dump + timestep loop ---
 
-    // Shared icyc counter between DumpGlobal (SET_DIAGNOSTICS) and TimestepState (SET_ICYC)
+    // Shared icyc counter between DumpTask (SET_DIAGNOSTICS) and TimestepState (SET_ICYC)
     auto icyc = std::make_shared<int>(1);
 
-    // Fork branch 1: global computation + global file I/O (1 thread)
-    auto dumpGlobalTask = std::make_shared<DumpGlobalTask>(icyc);
-
-    // Fork branch 2: parallel per-mesh dump I/O (N threads, idle on non-dump steps)
-    auto dumpMeshTask = std::make_shared<DumpMeshOutputsTask>(
-        static_cast<size_t>(nmeshes));
+    // Merged dump: global I/O (BarrierData) + per-mesh I/O (MeshData<>) in parallel
+    auto dumpTask = std::make_shared<DumpTask>(
+        static_cast<size_t>(nmeshes), icyc);
 
     // Merged join + timestep loop: collects dump results, STOP_CHECK,
     // then cycles MeshData<> back or emits BarrierData for termination.
@@ -77,14 +74,9 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);
 
-    // Fork: Corrector -> DumpGlobal (BarrierData) + DumpMesh (MeshData<>)
-    // CorrFinalDumpTask checks dump schedule and emits MeshData<> only when needed.
-    graph->edges(correctorSubgraph, dumpGlobalTask);
-    graph->edges(correctorSubgraph, dumpMeshTask);
-
-    // Join: DumpGlobal (BarrierData) + DumpMesh (MeshData<>) -> TimestepState
-    graph->edges(dumpGlobalTask, timestepSM);
-    graph->edges(dumpMeshTask, timestepSM);
+    // Corrector -> Dump (BarrierData + MeshData<>) -> TimestepState
+    graph->edges(correctorSubgraph, dumpTask);
+    graph->edges(dumpTask, timestepSM);
 
     // Cycle: TimestepState -> back to Predictor (MeshData<>)
     graph->edges(timestepSM, predictorSubgraph);

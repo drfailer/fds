@@ -99,14 +99,14 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         auto predDivParallelTask = std::make_shared<PredDivParallelTask<PressureTag>>(
             budget.predDivParallel);
 
-        auto divExchangeBarrier = makeRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
+        auto divExchangeBarrier = makeTerminableRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
             nmeshes, "DivExchange",
             "EXCH_DIV_INFO",
             [](auto&) {
                 fds_exchange_divergence_info();
             });
 
-        auto globalMatBarrier = makeRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
+        auto globalMatBarrier = makeTerminableRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
             nmeshes, "GlobalMatrix+PressureInit",
             "GLOBAL_MATRIX_REASSIGN\\nPRESSURE_INIT",
             [useParallelPressure](auto&) {
@@ -125,7 +125,8 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         subgraph->edges(globalMatBarrier, predDivParallelTask);
 
         // TerminationData breaks structural cycle at shutdown
-        subgraph->template input<TerminationData>(predDivParallelTask);
+        subgraph->template input<TerminationData>(divExchangeBarrier);
+        subgraph->template input<TerminationData>(globalMatBarrier);
 
         // Downstream: final output (MeshData<PressureTag>) → Pressure → VelPred
         if constexpr (useParallelPressure) {
