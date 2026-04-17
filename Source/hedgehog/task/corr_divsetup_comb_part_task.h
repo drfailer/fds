@@ -7,12 +7,13 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged corrector task: Fork1(DivSetup || Combustion+Soot) + ParticleOps.
+/// Merged corrector task: CorrStep1 + Fork1(DivSetup || Combustion+Soot) + ParticleOps + WallBC.
 ///
-/// Replaces DivSetupKernelTask + Fork1CombKernelTask + Fork1JoinTask +
-/// ParticleOpsKernelTask (4 graph nodes) by using an AsyncWorker for the fork.
+/// Phase 1 (MeshData<>, from subgraph input):
+///   CorrStep1 kernels: VISCOSITY, MASS_FD, DENSITY, CC_DENSITY
+///   → emits MeshData<PostCorrStep1> to MeshExch4 barrier
 ///
-/// Per-mesh execution:
+/// Phase 2 (MeshData<PostCorrStep1>, from MeshExch4 barrier):
 ///   1. Fork via AsyncWorker:
 ///      - Worker thread: COMBUSTION + SOOT_OXIDATION
 ///      - Main thread:   DivSetup (BAROCLINIC, VISC_BC, CC_VEL_BC, VEL_FLUX, AGGLOM)
@@ -21,13 +22,27 @@
 ///   4. ParticleOps (CONDENSATION, MASS_ENERGY, REMOVE, MOVE, MOMENTUM)
 ///   5. addResult(MeshData<PostParticleOps>) → feeds MeshExch7 barrier
 ///
-/// Two output types enable HVAC to start collecting while ParticleOps runs.
+/// Phase 3 (MeshData<PostHvac>, from HvacCalc barrier):
+///   WallBC: orch_per_mesh + preprocessing + process_cells + finalize
+///   → emits MeshData<PostWallBC> to Fork2 (radiation || DivP1)
+///
 /// Each copy() creates its own AsyncWorker — no sharing between threads.
 /// Real OS thread count = 2 x numThreads (main + worker per thread).
 class CorrDivSetupCombPartTask
-    : public hh::AbstractTask<1, MeshData<>,
+    : public hh::AbstractTask<3,
+        MeshData<>,                              // Phase 1: from subgraph input
+        MeshData<MeshState::PostCorrStep1>,      // Phase 2: from MeshExch4 barrier
+        MeshData<MeshState::PostHvac>,           // Phase 3: from HvacCalc barrier
+        MeshData<MeshState::PostCorrStep1>,      // → MeshExch4 barrier (Phase 1 output)
         MeshData<>,                              // → HVAC barrier (pre-ParticleOps)
-        MeshData<MeshState::PostParticleOps>> {  // → MeshExch7 barrier (post-ParticleOps)
+        MeshData<MeshState::PostParticleOps>,    // → MeshExch7 barrier (post-ParticleOps)
+        MeshData<MeshState::PostWallBC>> {       // → Fork2 (Phase 3 output)
+
+    using TaskBase = hh::AbstractTask<3,
+        MeshData<>, MeshData<MeshState::PostCorrStep1>, MeshData<MeshState::PostHvac>,
+        MeshData<MeshState::PostCorrStep1>, MeshData<>,
+        MeshData<MeshState::PostParticleOps>, MeshData<MeshState::PostWallBC>>;
+
     TU_AsyncWorker worker_{};
 
     static void fork1CombWork(void *rawData, TU_i64) {
@@ -38,9 +53,7 @@ class CorrDivSetupCombPartTask
 
 public:
     explicit CorrDivSetupCombPartTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>,
-              MeshData<>, MeshData<MeshState::PostParticleOps>>(
-              "CorrDivSetupCombPart", numThreads) {
+        : TaskBase("CorrDivSetupCombPart", numThreads) {
         tu_aw_init(&worker_);
     }
 
@@ -49,8 +62,19 @@ public:
     CorrDivSetupCombPartTask(CorrDivSetupCombPartTask const &) = delete;
     CorrDivSetupCombPartTask &operator=(CorrDivSetupCombPartTask const &) = delete;
 
+    /// Phase 1: CorrStep1 kernels → emit to MeshExch4 barrier
     void execute(std::shared_ptr<MeshData<>> data) override {
-        // Fork: worker runs Combustion+Soot, main runs DivSetup
+        fds_compute_viscosity_kernel(data->nm, 1);
+        fds_mass_finite_differences_kernel(data->nm);
+        fds_density_kernel(data->nm, data->t, data->dt);
+        fds_cc_density_ts(data->nm, data->t, data->dt);
+        this->addResult(retag<MeshState::PostCorrStep1>(data));
+    }
+
+    /// Phase 2: DivSetup fork + ParticleOps (from MeshExch4 barrier)
+    void execute(std::shared_ptr<MeshData<MeshState::PostCorrStep1>> tagged) override {
+        auto data = retag<MeshState::Default>(tagged);
+
         tu_aw_exec(&worker_, fork1CombWork, data.get(), data->nm);
 
         fds_set_baroclinic_false(data->nm);
@@ -76,24 +100,47 @@ public:
         this->addResult(retag<MeshState::PostParticleOps>(data));
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>,
-        MeshData<>, MeshData<MeshState::PostParticleOps>>>
-    copy() override {
+    /// Phase 3: WallBC kernels (from HvacCalc barrier)
+    void execute(std::shared_ptr<MeshData<MeshState::PostHvac>> tagged) override {
+        auto data = retag<MeshState::Default>(tagged);
+        double dt_bc = data->dt_bc;
+        int call_ht_1d = data->call_ht_1d;
+        if (data->phase == 1) {
+            fds_wall_bc_orch_per_mesh(data->nm, data->t, data->wall_counter,
+                                      &dt_bc, &call_ht_1d);
+            data->dt_bc = dt_bc;
+            data->call_ht_1d = call_ht_1d;
+        }
+        fds_wall_bc_preprocessing_kernel(data->nm, data->t, dt_bc, call_ht_1d);
+        fds_wall_bc_process_cells_kernel(data->nm, data->t, data->dt, dt_bc, call_ht_1d);
+        fds_wall_bc_finalize(data->nm, data->t, dt_bc, call_ht_1d);
+        this->addResult(retag<MeshState::PostWallBC>(data));
+    }
+
+    std::shared_ptr<TaskBase> copy() override {
         return std::make_shared<CorrDivSetupCombPartTask>(this->numberThreads());
     }
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
-        oss << "Fork(AsyncWorker):\\n"
-            << "  A: SET_BARO_FALSE, VISC_BC\\n"
-            << "     CC_VEL_BC_TS, VEL_FLUX\\n"
-            << "     AGGLOMERATION\\n"
-            << "  B: COMBUSTION, SOOT_OXID\\n"
-            << "-> addResult (HVAC)\\n"
-            << "CONDENSATION\\n"
-            << "PART_MASS_ENERGY\\n"
-            << "REMOVE/MOVE_PARTICLES\\n"
-            << "PARTICLE_MOMENTUM";
+        oss << "Phase 1 (CorrStep1):\\n"
+            << "  VISCOSITY, MASS_FD\\n"
+            << "  DENSITY, CC_DENSITY\\n"
+            << "Phase 2 (DivSetup+Part):\\n"
+            << "  Fork(AsyncWorker):\\n"
+            << "    A: SET_BARO, VISC_BC\\n"
+            << "       VEL_FLUX, AGGLOM\\n"
+            << "    B: COMBUSTION, SOOT_OXID\\n"
+            << "  -> addResult (HVAC)\\n"
+            << "  CONDENSATION\\n"
+            << "  PART_MASS_ENERGY\\n"
+            << "  REMOVE/MOVE_PARTICLES\\n"
+            << "  PARTICLE_MOMENTUM\\n"
+            << "Phase 3 (WallBC):\\n"
+            << "  WALL_BC_ORCH_PER_MESH\\n"
+            << "  PREPROCESSING\\n"
+            << "  PROCESS_CELLS\\n"
+            << "  FINALIZE";
         return oss.str();
     }
 };

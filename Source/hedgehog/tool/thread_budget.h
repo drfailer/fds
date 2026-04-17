@@ -32,12 +32,10 @@ struct ThreadBudget {
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
 
     // --- Corrector standalone sections ---
-    size_t corrStep1;           // CorrStep1KernelTask          (HEAVY)
-    size_t corrDivSetupCombPart;// CorrDivSetupCombPartTask      (HEAVY) — merged Fork1(DivSetup||Comb)+ParticleOps
+    size_t corrDivSetupCombPart;// CorrDivSetupCombPartTask      (HEAVY) — merged CorrStep1+Fork1(DivSetup||Comb)+ParticleOps
                                 //   Real OS threads = 2 × corrDivSetupCombPart (each HH thread owns AsyncWorker)
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
     size_t corrFinal;           // CorrFinalKernelTask          (MEDIUM) — merged VelCorr+VelBCEdges+RTE
-    size_t corrWallBC;          // WallBCKernelTask             (MEDIUM) — includes finalize
     size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivP2Pre+DivPart2
 
 
@@ -93,14 +91,12 @@ struct ThreadBudget {
         b.retryMomDiv    = solo(1);  // rarely used
 
         // --- Corrector standalone ---
-        b.corrStep1         = solo(4);  // 1.5ms/elem
-        // Merged Fork1+ParticleOps: each HH thread owns an AsyncWorker.
+        // Merged CorrStep1+Fork1+ParticleOps: each HH thread owns an AsyncWorker.
         // Full cap so ParticleOps (sequential after join) keeps full parallelism.
         // Brief 2× oversubscription during fork phase is acceptable.
         b.corrDivSetupCombPart = solo(4);
         b.corrDivPart2      = solo(2);  // 604us/elem
         b.corrFinal         = solo(2);  // merged VelCorr(light)+VelBCEdges(medium)+RTE
-        b.corrWallBC        = solo(2);  // 513us/elem (includes finalize)
         b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivP2Pre+DivPart2 (heaviest is MEDIUM)
 
         // --- Corrector fork2: A{Radiation(1)} || B{Fork2DivP1(2)} ---
@@ -130,11 +126,9 @@ struct ThreadBudget {
            << " velPred=" << velPredictor
            << " synTurbVelBC=" << predSynTurbVelBC
            << " retry=" << retryMomDiv << "\n"
-           << "  Corrector:  step1=" << corrStep1
-           << " divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
+           << "  Corrector:  divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
            << " divP2=" << corrDivPart2
            << " corrFinal=" << corrFinal
-           << " wallBC=" << corrWallBC
            << " divParallel=" << corrDivParallel << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"

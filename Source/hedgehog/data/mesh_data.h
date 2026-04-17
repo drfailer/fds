@@ -22,7 +22,10 @@ enum class MeshState {
     PreSolveExch,         ///< PressureParallel → pre-solve exchange
     PostSolveExch,        ///< PressureParallel → post-solve exchange
     PostParticleOps,      ///< CorrDivSetupCombPartTask → MeshExch7 barrier (after ParticleOps)
-    PostVelCorr           ///< CorrFinalKernelTask → CorrFinalOrch (after velocity correction)
+    PostVelCorr,          ///< CorrFinalKernelTask → CorrFinalOrch (after velocity correction)
+    PostCorrStep1,        ///< CorrStep1 phase → MeshExch4 barrier → DivSetupCombPart phase
+    PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
+    PostWallBC            ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
 };
 
 /// Token type flowing through the Hedgehog dataflow graph.

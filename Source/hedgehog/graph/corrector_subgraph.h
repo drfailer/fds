@@ -10,7 +10,6 @@
 #include "../state/barrier_state.h"
 #include "../state/fork_join_state.h"
 #include "../task/barrier_tasks.h"
-#include "../task/corr_step1_kernel_task.h"
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/combustion_kernel_task.h"
@@ -18,7 +17,6 @@
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/corr_final_kernel_task.h"
-#include "../task/wallbc_kernel_task.h"
 #include "../task/corr_div_parallel_task.h"
 #include "velocity_bc_subgraph.h"
 #include "corr_radiation_subgraph.h"
@@ -41,8 +39,6 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Kernel tasks (threads from budget) ---
 
-    auto corrStep1KernelTask = std::make_shared<CorrStep1KernelTask>(budget.corrStep1);
-    auto wallBCKernelTask = std::make_shared<WallBCKernelTask>(budget.corrWallBC);
     auto corrFinalKernelTask = std::make_shared<CorrFinalKernelTask>(budget.corrFinal);
 
     bool ccIBM = fds_is_cc_ibm() != 0;
@@ -50,22 +46,26 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Sub-graphs ---
 
-    auto corrRadiationSubgraph = buildCorrRadiationSubgraph(nmeshes, budget.corrFork2Radiation);
+    auto corrRadiationSubgraph = buildCorrRadiationSubgraph<MeshState::PostWallBC>(
+        nmeshes, budget.corrFork2Radiation);
 
     // --- Barrier states ---
 
-    auto meshExchange4SM = makeBarrierSM(nmeshes, "MeshExchange(4)",
+    // MeshExch4: terminable barrier in cycle with CorrDivSetupCombPart
+    auto meshExchange4SM = makeTerminableRetaggingBarrier<
+        MeshState::PostCorrStep1, MeshState::PostCorrStep1>(
+        nmeshes, "MeshExchange(4)",
         "MESH_EXCHANGE(4)",
-        [](auto& meshes) {
+        [](auto&) {
             fds_mesh_exchange(4);
         });
 
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
-    // --- Group A: Merged DivSetup||Comb + ParticleOps → MeshExch7 → HvacCalc ---
+    // --- CorrStep1 + DivSetup||Comb + ParticleOps → MeshExch7 → HvacCalc ---
     //
-    // CorrDivSetupCombPartTask merges Fork1 (DivSetup||Comb via AsyncWorker)
-    // and ParticleOps into one task. Two output types:
+    // CorrDivSetupCombPartTask merges CorrStep1 + Fork1 (DivSetup||Comb via
+    // AsyncWorker) + ParticleOps. Phase 1 (CorrStep1) → MeshExch4 → Phase 2:
     //   MeshData<> → HvacCalc barrier (emitted before ParticleOps)
     //   MeshData<PostParticleOps> → MeshExch7 barrier (emitted after ParticleOps)
     // HvacCalc collects N MeshData + 1 BarrierData (from MeshExch7), runs
@@ -82,8 +82,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         });
 
     // HvacCalc: collects N MeshData + 1 BarrierData (MeshExch7), runs HVAC_CALC,
-    // emits N MeshData when both HVAC and MeshExch7 are complete.
-    auto hvacBarrier = makeEagerDualInputBarrier(nmeshes, "HvacCalc",
+    // emits N MeshData<PostHvac> when both HVAC and MeshExch7 are complete.
+    // Terminable: in cycle with CorrDivSetupCombPart (Phase 2 → HVAC → Phase 3).
+    auto hvacBarrier = makeTerminableEagerDualInputBarrier<MeshState::PostHvac>(
+        nmeshes, "HvacCalc",
         "HVAC_CALC",
         [](auto& meshes) {
             fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
@@ -91,13 +93,15 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 
     // --- Wire the sub-graph ---
 
-    // CorrStep1 -> MeshExchange(4)
-    subgraph->inputs(corrStep1KernelTask);
-    subgraph->edges(corrStep1KernelTask, meshExchange4SM);
+    // Subgraph input → CorrDivSetupCombPart (Phase 1: CorrStep1)
+    subgraph->inputs(corrDivSetupCombPartTask);
 
-    // --- Merged: DivSetup||Comb + ParticleOps → MeshExch7 + HvacCalc → WallBC ---
-
+    // CorrDivSetupCombPart ↔ MeshExchange(4) cycle
+    subgraph->edges(corrDivSetupCombPartTask, meshExchange4SM);
     subgraph->edges(meshExchange4SM, corrDivSetupCombPartTask);
+
+    // TerminationData breaks CorrDivSetupCombPart ↔ MeshExch4 cycle
+    subgraph->template input<TerminationData>(meshExchange4SM);
 
     // MeshData<> output → HvacCalc barrier (emitted before ParticleOps)
     subgraph->edges(corrDivSetupCombPartTask, hvacBarrier);
@@ -105,14 +109,19 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
     subgraph->edges(corrDivSetupCombPartTask, meshExch7Barrier);
     // MeshExch7 (BarrierData) → HvacCalc (waits for both before emitting)
     subgraph->edges(meshExch7Barrier, hvacBarrier);
-    subgraph->edges(hvacBarrier, wallBCKernelTask);
+    // HvacCalc (MeshData<PostHvac>) → CorrDivSetupCombPart Phase 3 (WallBC)
+    subgraph->edges(hvacBarrier, corrDivSetupCombPartTask);
+
+    // TerminationData breaks CorrDivSetupCombPart ↔ HvacCalc cycle
+    subgraph->template input<TerminationData>(hvacBarrier);
 
     // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
     if (ccIBM) {
         // Group B (CC_IBM): Exchange(6) barrier for back wall data (HT3D only).
-        // Radiation forked from WallBC directly — doesn't need Exchange(6) data.
+        // Radiation forked from CorrDivSetupCombPart — doesn't need Exchange(6) data.
         // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
-        auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a",
+        auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
+            nmeshes, "MeshExch6a",
             "MESH_EXCHANGE(6) [HT3D]",
             [ht3d](auto& meshes) {
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
@@ -149,10 +158,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        // Fork: Radiation starts immediately from WallBC (no Exchange(6) dependency).
+        // Fork: Radiation starts immediately (no Exchange(6) dependency).
         //        Exchange(6) runs in parallel. Both join at meshExch2SM.
-        subgraph->edges(wallBCKernelTask, corrRadiationSubgraph);
-        subgraph->edges(wallBCKernelTask, groupBPostSM);
+        subgraph->edges(corrDivSetupCombPartTask, corrRadiationSubgraph);
+        subgraph->edges(corrDivSetupCombPartTask, groupBPostSM);
         subgraph->edges(corrRadiationSubgraph, meshExch2SM);
         subgraph->edges(groupBPostSM, meshExch2SM);
         subgraph->edges(meshExch2SM, corrDivP1KernelTask);
@@ -177,12 +186,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
         }
     } else {
         // Group B (non-CC_IBM): Exchange(6) [HT3D only] + InitDiv barrier.
-        // Radiation forked from WallBC directly — doesn't need Exchange(6) data.
+        // Radiation forked from CorrDivSetupCombPart — doesn't need Exchange(6) data.
         // DivP1 waits for this barrier (needs InitDiv zeroed arrays).
         // Exchange(6) conditional: at this point velocities haven't been corrected yet,
         // so only new data since Exchange(3) is back wall info needed for HT3D.
         // RESET_WALL_COUNTER moved to CorrFinalOrch barrier
-        auto groupBPostSM = makeBarrierSM(nmeshes, "MeshExch6a+InitDiv",
+        auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
+            nmeshes, "MeshExch6a+InitDiv",
             "MESH_EXCHANGE(6) [HT3D]\\nINIT_DIV_INTEGRALS",
             [ht3d](auto& meshes) {
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
@@ -227,10 +237,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
                 }
             });
 
-        // Fork: Radiation starts immediately from WallBC (no Exchange(6) dependency).
+        // Fork: Radiation starts immediately (no Exchange(6) dependency).
         //        DivP1 waits for Exchange(6) barrier.
-        subgraph->edges(wallBCKernelTask, corrRadiationSubgraph);
-        subgraph->edges(wallBCKernelTask, groupBPostSM);
+        subgraph->edges(corrDivSetupCombPartTask, corrRadiationSubgraph);
+        subgraph->edges(corrDivSetupCombPartTask, groupBPostSM);
         subgraph->edges(groupBPostSM, fork2DivP1Task);
 
         // Group C: Join2 → Parallel ↔ DivExchange ↔ Parallel ↔ GlobalMatrix ↔ Parallel

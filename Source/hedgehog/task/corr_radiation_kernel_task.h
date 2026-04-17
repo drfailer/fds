@@ -5,14 +5,16 @@
 #include "../data/corr_radiation_data.h"
 #include "../fds_fortran_interface.h"
 
+template<MeshState InS = MeshState::Default>
 class CorrRadiationKernelTask
-    : public hh::AbstractTask<1, MeshData<>, CorrRadiationWork> {
+    : public hh::AbstractTask<1, MeshData<InS>, CorrRadiationWork> {
 public:
     explicit CorrRadiationKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>, CorrRadiationWork>(
+        : hh::AbstractTask<1, MeshData<InS>, CorrRadiationWork>(
               "CorrRadiationKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
+    void execute(std::shared_ptr<MeshData<InS>> tagged) override {
+        auto data = retag<MeshState::Default>(tagged);
         auto work = std::make_shared<CorrRadiationWork>(data->nm, data->t, 1, data);
         fds_compute_radiation_kernel(
             work->nm, work->t, work->radIter,
@@ -21,9 +23,9 @@ public:
         this->addResult(work);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>, CorrRadiationWork>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<InS>, CorrRadiationWork>>
     copy() override {
-        return std::make_shared<CorrRadiationKernelTask>(
+        return std::make_shared<CorrRadiationKernelTask<InS>>(
             this->numberThreads());
     }
 };

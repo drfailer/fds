@@ -8,11 +8,12 @@
 #include "../state/corr_radiation_state.h"
 #include "../task/corr_radiation_kernel_task.h"
 
+template<MeshState InS = MeshState::Default>
 inline auto buildCorrRadiationSubgraph(int nmeshes, size_t kernelThreads) {
     auto subgraph = std::make_shared<
-        hh::Graph<1, MeshData<>, BarrierData>>("CorrRadiation");
+        hh::Graph<1, MeshData<InS>, BarrierData>>("CorrRadiation");
 
-    auto kernelTask = std::make_shared<CorrRadiationKernelTask>(kernelThreads);
+    auto kernelTask = std::make_shared<CorrRadiationKernelTask<InS>>(kernelThreads);
     auto collectorTask = std::make_shared<CorrRadiationCollector>(nmeshes);
 
     subgraph->inputs(kernelTask);
