@@ -90,6 +90,12 @@ public:
         for (int nom : depGraph_->sameRankNeighborsList(nm)) {
             tryRelease<K>(nom);
         }
+
+        if (pt.doneCount == nmeshes_) {
+            constexpr MeshState Out = outputTagFor<K>();
+            this->template flushResults<MeshData<Out>>();
+            pt.roundComplete = true;
+        }
     }
 
 private:
@@ -130,11 +136,7 @@ private:
         ++pt.doneCount;
 
         constexpr MeshState Out = outputTagFor<K>();
-        this->addResult(retag<Out>(std::move(pt.pendingMeshes[li])));
-
-        if (pt.doneCount == nmeshes_) {
-            pt.roundComplete = true;
-        }
+        this->bufferResult(retag<Out>(std::move(pt.pendingMeshes[li])));
     }
 
     std::shared_ptr<MeshDependencyGraph> depGraph_;
