@@ -68,6 +68,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // PreSolveExch/PostSolveExch (pressure) edges only wired when parallel pressure is on;
     // unused types sit idle until TerminationData.
     auto exchGraph = std::make_shared<ExchangeGraph<
+        ExchKind<MeshState::MeshExch1, MeshState::PostPredExch>,
         ExchKind<MeshState::MeshExch4, MeshState::PostCorrStep1>,
         ExchKind<MeshState::MeshExch7, MeshState::PostParticleOps>,
         ExchKind<MeshState::PreSolveExch, MeshState::SolvePhase>,
@@ -85,6 +86,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);
+
+    // Predictor ↔ Exchange (MeshExch1 out, PostPredExch back)
+    graph->edges(predictorSubgraph, exchGraph);
+    graph->edges(exchGraph, predictorSubgraph);
 
     // Corrector ↔ Exchange (MeshExch4 out, PostCorrStep1 back)
     graph->edges(correctorSubgraph, exchGraph);

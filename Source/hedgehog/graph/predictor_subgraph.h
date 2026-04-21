@@ -34,9 +34,11 @@
 ///   - predJoinDivExchange: DivP1Late per-mesh loop → ForkJoin + parallel kernel task
 template<MeshState PressureTag = MeshState::Default>
 inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
-    auto subgraph = std::make_shared<hh::Graph<3,
+    auto subgraph = std::make_shared<hh::Graph<4,
         MeshData<>, TerminationData, MeshData<MeshState::PredictorPressure>,
-        MeshData<>, MeshData<MeshState::PredictorPressure>>>("Predictor");
+        MeshData<MeshState::PostPredExch>,
+        MeshData<>, MeshData<MeshState::PredictorPressure>,
+        MeshData<MeshState::MeshExch1>>>("Predictor");
 
     // --- Kernel tasks (threads from budget) ---
 
@@ -63,12 +65,12 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
     if (!ccIBM) {
-        // Split barrier: MeshExchange(1) + Hvac + InitDiv (global only)
-        // DivP1Prefork per-mesh loop extracted to downstream kernel task.
-        auto meshExch1SM = makeBarrierSM(nmeshes, "MeshExch1+Hvac+InitDiv",
-            "MESH_EXCHANGE(1)\\nEXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV",
+        // MeshExchange(1) routed through exchange graph.
+        // Post-exchange barrier handles remaining global ops.
+        auto postPredExchBarrier = makeRetaggingBarrier<MeshState::PostPredExch, MeshState::Default>(
+            nmeshes, "ExchInsPart+Hvac+InitDiv",
+            "EXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV",
             [](auto& meshes) {
-                fds_mesh_exchange(1);
                 fds_exchange_inserted_particles();
                 fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
                 fds_initialize_divergence_integrals();
@@ -103,8 +105,9 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
                 }
             });
 
-        subgraph->edges(predStep1KernelTask, meshExch1SM);
-        subgraph->edges(meshExch1SM, predPreforkDivTask);
+        subgraph->template output<MeshData<MeshState::MeshExch1>>(predStep1KernelTask);
+        subgraph->template input<MeshData<MeshState::PostPredExch>>(postPredExchBarrier);
+        subgraph->edges(postPredExchBarrier, predPreforkDivTask);
 
         // PredPreforkDiv ↔ DivExchange ↔ PredPreforkDiv ↔ GlobalMatrix ↔ PredPreforkDiv
         subgraph->edges(predPreforkDivTask, divExchangeBarrier);
@@ -131,15 +134,17 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             subgraph->edges(predPressureSM, velPredKernelTask);
         }
     } else {
-        // CC_IBM: MeshExchange(1) only
-        auto meshExchange1SM = makeBarrierSM(nmeshes, "MeshExchange(1)",
-            "MESH_EXCHANGE(1)\\nEXCHANGE_INSERTED_PARTICLES",
-            [](auto& meshes) {
-                fds_mesh_exchange(1);
+        // CC_IBM: MeshExchange(1) routed through exchange graph.
+        // Post-exchange barrier handles exchange_inserted_particles only.
+        auto postPredExchBarrier = makeRetaggingBarrier<MeshState::PostPredExch, MeshState::Default>(
+            nmeshes, "ExchInsPart",
+            "EXCH_INS_PART",
+            [](auto&) {
                 fds_exchange_inserted_particles();
             });
 
-        subgraph->edges(predStep1KernelTask, meshExchange1SM);
+        subgraph->template output<MeshData<MeshState::MeshExch1>>(predStep1KernelTask);
+        subgraph->template input<MeshData<MeshState::PostPredExch>>(postPredExchBarrier);
 
         // CC_IBM sequential path
         auto hvacInitDivSM = makeBarrierSM(nmeshes, "Hvac+InitDiv",
@@ -150,7 +155,7 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             });
 
         auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(budget.standalone(4));
-        subgraph->edges(meshExchange1SM, predDivSetupKernelTask);
+        subgraph->edges(postPredExchBarrier, predDivSetupKernelTask);
         subgraph->edges(predDivSetupKernelTask, hvacInitDivSM);
 
         // WallBC inlined: no orchestrator needed in predictor (dt_bc=0, call_ht_1d=0 defaults)

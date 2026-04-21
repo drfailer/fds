@@ -29,6 +29,7 @@ enum class MeshState {
     MeshExch7,            ///< Exchange CODE 7: particles
     PostParticleOps,      ///< CorrDivSetupCombPartTask → MeshExch7 barrier (after ParticleOps)
     PostVelCorr,          ///< CorrFinalKernelTask → CorrFinalOrch (after velocity correction)
+    PostPredExch,         ///< MeshExch1 → exchange graph → predictor post-exchange
     PostCorrStep1,        ///< CorrStep1 phase → MeshExch4 barrier → DivSetupCombPart phase
     PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
     PostWallBC            ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)

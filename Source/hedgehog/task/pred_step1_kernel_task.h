@@ -9,10 +9,10 @@
 /// Calls COMPUTE_VISCOSITY_KERNEL + MASS_FINITE_DIFFERENCES_NEW_KERNEL +
 /// DENSITY_KERNEL per mesh (matches corrector's CorrStep1KernelTask pattern).
 class PredStep1KernelTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch1>> {
 public:
     explicit PredStep1KernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
+        : hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch1>>(
               "PredStep1Kernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<>> data) override {
@@ -21,10 +21,10 @@ public:
         fds_mass_finite_differences_kernel(data->nm);
         fds_density_kernel(data->nm, data->t, data->dt);
         fds_cc_density_ts(data->nm, data->t, data->dt);
-        this->addResult(data);
+        this->addResult(retag<MeshState::MeshExch1>(data));
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch1>>>
     copy() override {
         return std::make_shared<PredStep1KernelTask>(
             this->numberThreads());
