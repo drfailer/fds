@@ -2,7 +2,6 @@
 #define CORRECTOR_SUBGRAPH_H
 
 #include <hedgehog/hedgehog.h>
-#include <service/comm_service.hpp>
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
@@ -30,9 +29,7 @@
 ///   - Group B: WallBCFinalize stays in barrier (uses POINT_TO_MESH, not thread-safe)
 ///   - Group C: Split into pre-barrier (MeshExch2) + QRAddCopyKernel + post-barrier (DivExch)
 template<MeshState PressureTag = MeshState::Default>
-inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
-                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
+inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
     auto subgraph = std::make_shared<hh::Graph<3,
         MeshData<>, MeshData<MeshState::CorrectorPressure>, TerminationData,
         MeshData<>, MeshData<MeshState::CorrectorPressure>, BarrierData>>("Corrector");
@@ -297,15 +294,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 }
 
 /// Dispatch wrapper: selects the correct template instantiation at runtime.
-inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget,
-                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
+inline auto buildCorrectorSubgraph(int nmeshes, const ThreadBudget &budget) {
     if (fds_use_pressure_subgraph()) {
         return buildCorrectorSubgraphImpl<MeshState::CorrectorPressure>(
-            nmeshes, budget, depGraph, commService);
+            nmeshes, budget);
     }
     return buildCorrectorSubgraphImpl<MeshState::Default>(
-        nmeshes, budget, depGraph, commService);
+        nmeshes, budget);
 }
 
 #endif // CORRECTOR_SUBGRAPH_H

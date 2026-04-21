@@ -2,15 +2,17 @@
 #define FDS_GRAPH_H
 
 #include <hedgehog/hedgehog.h>
-#include <service/comm_service.hpp>
+#include <hedgehog_comm.h>
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
 #include "../data/termination_data.h"
 #include "../state/timestep_state.h"
 #include "../task/timestep_tasks.h"
-#include "../tool/mesh_dependency_graph.h"
 #include "../tool/thread_budget.h"
+#include "../exchange/mesh_dependency_graph.h"
+#include "../exchange/exchange_graph.h"
+#include "../exchange/exchange_dispatch.h"
 #include "predictor_subgraph.h"
 #include "corrector_subgraph.h"
 #include "pressure_iteration_subgraph.h"
@@ -35,17 +37,15 @@
 /// @return Shared pointer to the constructed graph
 inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
                           const ThreadBudget &budget,
+                          std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
                           hh::comm::CommService *commService = nullptr) {
 
     using GraphType = hh::Graph<2, MeshData<MeshState::Init>, TerminationData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
-    // --- Build mesh dependency graph (once, shared by predictor & corrector) ---
-    auto depGraph = std::make_shared<MeshDependencyGraph>(
-        fds_get_lower_mesh_index(), fds_get_lower_mesh_index() + nmeshes - 1);
     // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget, depGraph, commService);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget, depGraph, commService);
+    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget);
+    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget);
 
     // --- Create dump + timestep loop ---
 
@@ -84,12 +84,18 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Graph output: TimestepState emits BarrierData when simulation is done
     graph->outputs(timestepSM);
 
-    // --- Shared pressure subgraph (when enabled) ---
+    // --- Pressure subgraph + global exchange graph (when enabled) ---
     if (useParallelPressure) {
         auto pressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, budget, depGraph, commService, fds_get_pres_flag());
+            nmeshes, budget, fds_get_pres_flag());
+
+        auto exchGraph = std::make_shared<ExchangeGraph<
+            ExchKind<MeshState::PreSolveExch, MeshState::SolvePhase>,
+            ExchKind<MeshState::PostSolveExch, MeshState::VelErrorPhase>>>(
+            depGraph, commService, "Exchange");
 
         graph->input<TerminationData>(pressureSubgraph);
+        graph->input<TerminationData>(exchGraph);
 
         // Predictor <-> PressureSubgraph (PredPressure)
         graph->edges(predictorSubgraph, pressureSubgraph);
@@ -98,6 +104,10 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
         // Corrector <-> PressureSubgraph (CorrPressure)
         graph->edges(correctorSubgraph, pressureSubgraph);
         graph->edges(pressureSubgraph, correctorSubgraph);
+
+        // PressureSubgraph <-> ExchangeGraph (PreSolveExch/PostSolveExch <-> SolvePhase/VelErrorPhase)
+        graph->edges(pressureSubgraph, exchGraph);
+        graph->edges(exchGraph, pressureSubgraph);
     }
 
     return graph;

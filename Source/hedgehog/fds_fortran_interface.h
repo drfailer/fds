@@ -229,6 +229,7 @@ int fds_flux_has_send_cells(int nm, int nom);
 int fds_flux_recv_count(int nm);
 void fds_flux_copy_neighbor(int nm, int nom);
 void fds_flux_copy_neighbor_ts(int nm, int nom);
+void fds_exchange_copy_neighbor_ts(int code, int nm, int nom);
 
 // Cross-process flux exchange (pack/unpack for CommunicatorTask)
 void fds_flux_pack(int nm, int nom, double *buf, int bufsize);

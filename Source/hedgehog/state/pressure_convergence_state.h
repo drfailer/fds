@@ -87,10 +87,7 @@ public:
         }
     }
 
-    /// Handle termination signal from graph input.
-    void execute(std::shared_ptr<TerminationData>) override {
-        done_ = true;
-    }
+    void execute(std::shared_ptr<TerminationData>) override { done_ = true; }
 
     [[nodiscard]] bool isDone() const { return done_; }
 

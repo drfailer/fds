@@ -464,9 +464,7 @@ public:
         }
     }
 
-    void execute(std::shared_ptr<TerminationData>) override {
-        done_ = true;
-    }
+    void execute(std::shared_ptr<TerminationData>) override { done_ = true; }
 
     [[nodiscard]] bool canTerminate() const override {
         return done_;
@@ -536,9 +534,7 @@ public:
         tryEmit();
     }
 
-    void execute(std::shared_ptr<TerminationData>) override {
-        done_ = true;
-    }
+    void execute(std::shared_ptr<TerminationData>) override { done_ = true; }
 
     [[nodiscard]] bool canTerminate() const override {
         return done_;

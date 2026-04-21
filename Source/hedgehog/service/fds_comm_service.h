@@ -35,18 +35,15 @@ private:
         int         flag;
     };
 
-    // Header encoding: matches MPIService's HEADER_FIELDS layout
     static constexpr hh::comm::Header::FieldInfo HEADER_FIELDS[]{
         {.offset = 32, .mask = 0b1111111111111111111111111111111111111111111111111000000000000000}, // source
         {.offset = 32, .mask = 0b1111111111111111111111111111111111111111111111111000000000000000}, // channel
-        {.offset = 14, .mask = 0b0000000000000000000000000000000000000000000000000100000000000000}, // signal
-        {.offset = 11, .mask = 0b0000000000000000000000000000000000000000000000000011100000000000}, // typeid
+        {.offset = 11, .mask = 0b0000000000000000000000000000000000000000000000000111100000000000}, // typeid
         {.offset = 0,  .mask = 0b0000000000000000000000000000000000000000000000000000000000000011}, // buffer id
     };
 
     static int headerToTag(hh::comm::Header const &header) {
         std::uint64_t tag = 0;
-        tag |= header.signal   << HEADER_FIELDS[hh::comm::Header::SIGNAL].offset;
         tag |= header.typeId   << HEADER_FIELDS[hh::comm::Header::TYPE_ID].offset;
         tag |= header.bufferId << HEADER_FIELDS[hh::comm::Header::BUFFER_ID].offset;
         assert((tag & HEADER_FIELDS[0].mask) == 0);
@@ -55,8 +52,8 @@ private:
 
     static hh::comm::Header tagToHeader(int tag) {
         assert(tag >= 0);
+        assert((tag & HEADER_FIELDS[0].mask) == 0);
         hh::comm::Header header;
-        header.signal   = (tag & HEADER_FIELDS[hh::comm::Header::SIGNAL].mask) >> HEADER_FIELDS[hh::comm::Header::SIGNAL].offset;
         header.typeId   = (tag & HEADER_FIELDS[hh::comm::Header::TYPE_ID].mask) >> HEADER_FIELDS[hh::comm::Header::TYPE_ID].offset;
         header.bufferId = (tag & HEADER_FIELDS[hh::comm::Header::BUFFER_ID].mask) >> HEADER_FIELDS[hh::comm::Header::BUFFER_ID].offset;
         return header;

@@ -45,8 +45,6 @@ struct ThreadBudget {
 
     // --- Pressure iteration (shared by pred & corr instances) ---
     size_t pressureParallel;    // PressureParallelTask          (HEAVY) — merged Baroclinic+Solve+VelError
-    size_t exchangePush;        // ExchangePushBufferTask       (LIGHT)
-    size_t exchangePull;        // ExchangePullBufferTask       (LIGHT)
 
     /// Compute standalone thread count for a given weight (1-4).
     /// Useful for tasks not in the named fields (e.g., CC_IBM path).
@@ -106,14 +104,8 @@ struct ThreadBudget {
             b.corrFork2DivP1     = t[1];
         }
 
-        // --- Pressure iteration pipeline ---
-        // PressureParallel ↔ Exchange(Push+Pull) ↔ PressureParallel
-        {
-            auto t = distribute({4, 2, 2});
-            b.pressureParallel = t[0];
-            b.exchangePush     = t[1];
-            b.exchangePull     = t[2];
-        }
+        // --- Pressure iteration ---
+        b.pressureParallel = solo(4);
 
         return b;
     }
@@ -132,9 +124,7 @@ struct ThreadBudget {
            << " divParallel=" << corrDivParallel << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"
-           << "  Pressure:   parallel=" << pressureParallel
-           << " push=" << exchangePush
-           << " pull=" << exchangePull << std::endl;
+           << "  Pressure:   parallel=" << pressureParallel << std::endl;
     }
 };
 

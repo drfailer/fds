@@ -2,7 +2,6 @@
 #define PREDICTOR_SUBGRAPH_H
 
 #include <hedgehog/hedgehog.h>
-#include <service/comm_service.hpp>
 #include <memory>
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
@@ -34,9 +33,7 @@
 ///   - meshExch3SynTurb: SyntheticTurbulence per-mesh loop → parallel kernel task
 ///   - predJoinDivExchange: DivP1Late per-mesh loop → ForkJoin + parallel kernel task
 template<MeshState PressureTag = MeshState::Default>
-inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
-                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
+inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
     auto subgraph = std::make_shared<hh::Graph<3,
         MeshData<>, TerminationData, MeshData<MeshState::PredictorPressure>,
         MeshData<>, MeshData<MeshState::PredictorPressure>>>("Predictor");
@@ -221,15 +218,13 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget,
 }
 
 /// Dispatch wrapper: selects the correct template instantiation at runtime.
-inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget,
-                                    std::shared_ptr<MeshDependencyGraph> depGraph = nullptr,
-                                    hh::comm::CommService *commService = nullptr) {
+inline auto buildPredictorSubgraph(int nmeshes, const ThreadBudget &budget) {
     if (fds_use_pressure_subgraph()) {
         return buildPredictorSubgraphImpl<MeshState::PredictorPressure>(
-            nmeshes, budget, depGraph, commService);
+            nmeshes, budget);
     }
     return buildPredictorSubgraphImpl<MeshState::Default>(
-        nmeshes, budget, depGraph, commService);
+        nmeshes, budget);
 }
 
 #endif // PREDICTOR_SUBGRAPH_H

@@ -2,8 +2,10 @@
 #define PRESSURE_PARALLEL_TASK_H
 
 #include <hedgehog/hedgehog.h>
+#include <atomic>
 #include <memory>
 #include "../data/mesh_data.h"
+#include "../data/termination_data.h"
 #include "../fds_fortran_interface.h"
 
 /// Packed parallel "thread pool" task for the pressure iteration pipeline.
@@ -15,26 +17,29 @@
 ///
 /// Between phases, exchange operations (barriers or exchange graph) collect
 /// N tokens, perform global exchange, and re-emit with the next phase's tag.
-/// No canTerminate() needed: the sequential cycle partners (convergence state,
-/// exchange barriers/router) receive TerminationData and terminate first.
+///
+/// Receives TerminationData to break the cross-subgraph cycle with the
+/// exchange graph (canTerminate without waiting for predecessor disconnection).
 ///
 /// One thread pool serves all 3 phases, saving threads vs. separate tasks.
-class PressureParallelTask : public hh::AbstractTask<5,
+class PressureParallelTask : public hh::AbstractTask<6,
     MeshData<MeshState::PredictorPressure>,   // initial entry from predictor
     MeshData<MeshState::CorrectorPressure>,   // initial entry from corrector
     MeshData<MeshState::Pressure>,            // cycle-back from convergence
     MeshData<MeshState::SolvePhase>,          // from exchange → solve phase
     MeshData<MeshState::VelErrorPhase>,       // from exchange → vel error phase
+    TerminationData,                          // for cycle termination
     MeshData<MeshState::PreSolveExch>,        // → pre-solve exchange
     MeshData<MeshState::PostSolveExch>,       // → post-solve exchange
     MeshData<MeshState::Pressure>>            // → convergence barrier
 {
-    using TaskBase = hh::AbstractTask<5,
+    using TaskBase = hh::AbstractTask<6,
         MeshData<MeshState::PredictorPressure>,
         MeshData<MeshState::CorrectorPressure>,
         MeshData<MeshState::Pressure>,
         MeshData<MeshState::SolvePhase>,
         MeshData<MeshState::VelErrorPhase>,
+        TerminationData,
         MeshData<MeshState::PreSolveExch>,
         MeshData<MeshState::PostSolveExch>,
         MeshData<MeshState::Pressure>>;
@@ -42,7 +47,13 @@ class PressureParallelTask : public hh::AbstractTask<5,
 public:
     explicit PressureParallelTask(size_t numThreads, int presFlag)
         : TaskBase("PressureParallel", numThreads),
-          presFlag_(presFlag) {}
+          presFlag_(presFlag),
+          done_(std::make_shared<std::atomic<bool>>(false)) {}
+
+    PressureParallelTask(size_t numThreads, int presFlag,
+                         std::shared_ptr<std::atomic<bool>> done)
+        : TaskBase("PressureParallel", numThreads),
+          presFlag_(presFlag), done_(std::move(done)) {}
 
     /// Phase 1a: Baroclinic from predictor entry
     void execute(std::shared_ptr<MeshData<MeshState::PredictorPressure>> md) override {
@@ -76,9 +87,15 @@ public:
         this->addResult(md);
     }
 
+    void execute(std::shared_ptr<TerminationData>) override {
+        done_->store(true);
+    }
+
+    [[nodiscard]] bool canTerminate() const override { return done_->load(); }
+
     std::shared_ptr<TaskBase> copy() override {
         return std::make_shared<PressureParallelTask>(
-            this->numberThreads(), presFlag_);
+            this->numberThreads(), presFlag_, done_);
     }
 
 private:
@@ -123,31 +140,7 @@ private:
 
     static constexpr int ULMAT_PRES_FLAG = 3;
     int presFlag_;
-};
-
-/// Pass-through retag task for single-process mode.
-/// Converts PreSolveExch/PostSolveExch → Pressure for the MeshExchangeGraph.
-/// No canTerminate() needed — predecessor (PressureParallelTask) has it,
-/// so this task terminates via default behavior once predecessor terminates.
-class ExchangeInputRetagTask : public hh::AbstractTask<2,
-    MeshData<MeshState::PreSolveExch>,
-    MeshData<MeshState::PostSolveExch>,
-    MeshData<MeshState::Pressure>>
-{
-public:
-    ExchangeInputRetagTask()
-        : hh::AbstractTask<2,
-              MeshData<MeshState::PreSolveExch>,
-              MeshData<MeshState::PostSolveExch>,
-              MeshData<MeshState::Pressure>>("ExchangeInputRetag", 1) {}
-
-    void execute(std::shared_ptr<MeshData<MeshState::PreSolveExch>> md) override {
-        this->addResult(retag<MeshState::Pressure>(md));
-    }
-
-    void execute(std::shared_ptr<MeshData<MeshState::PostSolveExch>> md) override {
-        this->addResult(retag<MeshState::Pressure>(md));
-    }
+    std::shared_ptr<std::atomic<bool>> done_;
 };
 
 #endif // PRESSURE_PARALLEL_TASK_H

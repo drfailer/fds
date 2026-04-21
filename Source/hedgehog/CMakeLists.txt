@@ -24,7 +24,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     hh_communicator
     GIT_REPOSITORY https://github.com/drfailer/hh_communicator_draft.git
-    GIT_TAG new-profiling
+    GIT_TAG master
 )
 FetchContent_MakeAvailable(hedgehog hh_communicator)
 
@@ -64,6 +64,7 @@ target_include_directories(fds_hh PRIVATE
     ${CMAKE_SOURCE_DIR}             # For the top-level directory
     ${hedgehog_SOURCE_DIR}          # For <hedgehog/hedgehog.h> style includes
     ${thread_utils_SOURCE_DIR}/src  # For <thread_utils/async_worker.hpp>
+    ${hh_communicator_SOURCE_DIR}/src  # For <hedgehog_comm.h>
 )
 
 # Link hedgehog communicator (brings hedgehog::hedgehog + MPI::MPI_CXX transitively)

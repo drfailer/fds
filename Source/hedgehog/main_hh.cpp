@@ -19,6 +19,7 @@
 #include "data/mesh_data.h"
 #include "data/mesh_dim.h"
 #include "data/termination_data.h"
+#include "exchange/pack_data.h"
 #include "service/fds_comm_service.h"
 #include "tool/thread_budget.h"
 #include "graph/fds_graph.h"
@@ -112,7 +113,23 @@ int main(int argc, char *argv[]) {
     std::cout << "[FDS-HH] CommService: rank=" << commService.rank()
               << " nbProcesses=" << commService.nbProcesses() << std::endl;
 
-    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, budget, &commService);
+    // Build mesh dependency graph for exchange overlap
+    auto depGraph = std::make_shared<MeshDependencyGraph>(
+        lower_mesh_index, upper_mesh_index);
+    std::cout << "[FDS-HH] " << depGraph->dump();
+
+    // Initialize max slab sizes for MPI receive buffers
+    int maxSlab5 = fds_exchange_max_slab_size(5);
+    PackData<MeshState::PreSolveExch>::maxSlabSize_ = maxSlab5;
+    PackData<MeshState::PostSolveExch>::maxSlabSize_ = maxSlab5;
+    PackData<MeshState::MeshExch5>::maxSlabSize_ = maxSlab5;
+
+    // Only pass commService for multi-process runs
+    hh::comm::CommService *commPtr =
+        (commService.nbProcesses() > 1) ? &commService : nullptr;
+
+    auto graph = buildFDSGraph(local_nmeshes, t, dt, tEnd, budget,
+                               depGraph, commPtr);
 
     // Step 3: Execute the graph (spawns threads).
     graph->executeGraph();
@@ -138,21 +155,11 @@ int main(int argc, char *argv[]) {
 
     graph->getBlockingResult();
 
-    // Step 5b: Push TerminationData to signal all inner cycles to terminate.
-    // This flows through the sub-graph hierarchy to MeshDepsManager and
-    // PressureConvergence states, setting done_=true so canTerminate() returns
-    // true and the cycles can shut down cleanly.
     graph->pushData(std::make_shared<TerminationData>());
-
-    // Step 5c: Signal that no more data will be pushed from outside.
     graph->finishPushingData();
 
-    // Step 5d: Terminate the comm service so CommunicatorTask daemon threads
-    // can exit cleanly. This calls MPI_Barrier (syncs all processes) then
-    // unblocks waitForTermination() inside each CommunicatorTask's fini().
     commService.terminate();
 
-    // Step 6: Wait for the graph to fully terminate.
     graph->waitForTermination();
 
     std::cout << "[FDS-HH] Graph terminated." << std::endl;
