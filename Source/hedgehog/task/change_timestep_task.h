@@ -60,10 +60,10 @@ inline void velPredBatch(void *raw, TU_i64 batchIdx) {
 /// VelPred) use TU_ThreadPool with batched dispatch: pool threads + task
 /// thread = threadCount total parallelism.
 class ChangeTimeStepTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+    : public hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch3>> {
 public:
     ChangeTimeStepTask(int nmeshes, size_t threadCount, bool ccIBM)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>("ChangeTimeStep", 1),
+        : hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch3>>("ChangeTimeStep", 1),
           nmeshes_(nmeshes),
           nmOffset_(fds_get_lower_mesh_index()),
           threadCount_(static_cast<int>(threadCount)),
@@ -164,10 +164,10 @@ private:
     void finishAndEmit() {
         if (ccIBM_) {
             fds_cc_end_step(collected_[0]->t, collected_[0]->dt, 0);
+            fds_mesh_cc_exchange(3);
         }
-        fds_mesh_exchange(3);
         for (auto &md : collected_) {
-            this->addResult(md);
+            this->addResult(retag<MeshState::MeshExch3>(md));
             md = nullptr;
         }
     }

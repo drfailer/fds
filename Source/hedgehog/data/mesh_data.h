@@ -23,6 +23,7 @@ enum class MeshState {
     PostSolveExch,        ///< PressureParallel → post-solve exchange
     MeshExch1,            ///< Exchange CODE 1: predictor density
     MeshExch2,            ///< Exchange CODE 2: radiation
+    MeshExch3,            ///< Exchange CODE 3: predictor velocity/pressure
     MeshExch4,            ///< Exchange CODE 4: corrector density
     MeshExch5,            ///< Exchange CODE 5: pressure iteration flux
     MeshExch6,            ///< Exchange CODE 6: corrector pressure / HT3D
@@ -30,6 +31,7 @@ enum class MeshState {
     PostParticleOps,      ///< CorrDivSetupCombPartTask → MeshExch7 barrier (after ParticleOps)
     PostVelCorr,          ///< CorrFinalKernelTask → CorrFinalOrch (after velocity correction)
     PostPredExch,         ///< MeshExch1 → exchange graph → predictor post-exchange
+    PostPredVelExch,      ///< MeshExch3 → exchange graph → predictor post-velocity-exchange
     PostCorrStep1,        ///< CorrStep1 phase → MeshExch4 barrier → DivSetupCombPart phase
     PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
     PostWallBC            ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)

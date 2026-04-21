@@ -122,6 +122,9 @@ int main(int argc, char *argv[]) {
     int maxSlab1 = fds_exchange_max_slab_size(1);
     PackData<MeshState::MeshExch1>::maxSlabSize_ = maxSlab1;
 
+    int maxSlab3 = fds_exchange_max_slab_size(3);
+    PackData<MeshState::MeshExch3>::maxSlabSize_ = maxSlab3;
+
     int maxSlab4 = fds_exchange_max_slab_size(4);
     PackData<MeshState::MeshExch4>::maxSlabSize_ = maxSlab4;
 

@@ -68,13 +68,14 @@ private:
 ///   5. VELOCITY_BC_PROCESS_EDGES_KERNEL
 ///   6. CC_VELOCITY_BC_TS (CC_IBM, DO_IBEDGES=TRUE)
 class PredSynTurbVelBCTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+    : public hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>> {
 public:
     explicit PredSynTurbVelBCTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>(
+        : hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>>(
               "PredSynTurbVelBCKernel", numThreads) {}
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
+    void execute(std::shared_ptr<MeshData<MeshState::PostPredVelExch>> dataIn) override {
+        auto data = retag<MeshState::Default>(dataIn);
         fds_synthetic_turbulence_if_enabled(data->dt, data->t, data->nm);
         fds_cc_velocity_cutfaces_ts(data->nm, 1);  // applyToEstimated=1
         fds_match_velocity_kernel(data->nm, 1);
@@ -84,7 +85,7 @@ public:
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<>, MeshData<>>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>>>
     copy() override {
         return std::make_shared<PredSynTurbVelBCTask>(this->numberThreads());
     }

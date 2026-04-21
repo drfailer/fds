@@ -34,11 +34,11 @@
 ///   - predJoinDivExchange: DivP1Late per-mesh loop → ForkJoin + parallel kernel task
 template<MeshState PressureTag = MeshState::Default>
 inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
-    auto subgraph = std::make_shared<hh::Graph<4,
+    auto subgraph = std::make_shared<hh::Graph<5,
         MeshData<>, TerminationData, MeshData<MeshState::PredictorPressure>,
-        MeshData<MeshState::PostPredExch>,
+        MeshData<MeshState::PostPredExch>, MeshData<MeshState::PostPredVelExch>,
         MeshData<>, MeshData<MeshState::PredictorPressure>,
-        MeshData<MeshState::MeshExch1>>>("Predictor");
+        MeshData<MeshState::MeshExch1>, MeshData<MeshState::MeshExch3>>>("Predictor");
 
     // --- Kernel tasks (threads from budget) ---
 
@@ -213,8 +213,9 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     // VelocityPredictor → ChangeTimeStep (collects N, retries internally)
     subgraph->edges(velPredKernelTask, changeTimeStepTask);
 
-    // ChangeTimeStep → SynTurb+VelBC(parallel) → PhaseTransition(collect+scatter)
-    subgraph->edges(changeTimeStepTask, predSynTurbVelBCTask);
+    // ChangeTimeStep → MeshExch3 → exchange graph → PostPredVelExch → SynTurb+VelBC
+    subgraph->template output<MeshData<MeshState::MeshExch3>>(changeTimeStepTask);
+    subgraph->template input<MeshData<MeshState::PostPredVelExch>>(predSynTurbVelBCTask);
     subgraph->edges(predSynTurbVelBCTask, phaseTransTask);
 
     subgraph->outputs(phaseTransTask);
