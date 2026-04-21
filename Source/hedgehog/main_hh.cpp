@@ -119,6 +119,9 @@ int main(int argc, char *argv[]) {
     std::cout << "[FDS-HH] " << depGraph->dump();
 
     // Initialize max slab sizes for MPI receive buffers
+    int maxSlab4 = fds_exchange_max_slab_size(4);
+    PackData<MeshState::MeshExch4>::maxSlabSize_ = maxSlab4;
+
     int maxSlab5 = fds_exchange_max_slab_size(5);
     PackData<MeshState::PreSolveExch>::maxSlabSize_ = maxSlab5;
     PackData<MeshState::PostSolveExch>::maxSlabSize_ = maxSlab5;

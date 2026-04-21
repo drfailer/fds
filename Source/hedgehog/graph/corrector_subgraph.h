@@ -30,9 +30,9 @@
 ///   - Group C: Split into pre-barrier (MeshExch2) + QRAddCopyKernel + post-barrier (DivExch)
 template<MeshState PressureTag = MeshState::Default>
 inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
-    auto subgraph = std::make_shared<hh::Graph<3,
-        MeshData<>, MeshData<MeshState::CorrectorPressure>, TerminationData,
-        MeshData<>, MeshData<MeshState::CorrectorPressure>, BarrierData>>("Corrector");
+    auto subgraph = std::make_shared<hh::Graph<4,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>, MeshData<MeshState::PostCorrStep1>, TerminationData,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>, MeshData<MeshState::MeshExch4>, BarrierData>>("Corrector");
 
     // --- Kernel tasks (threads from budget) ---
 
@@ -46,23 +46,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     auto corrRadiationSubgraph = buildCorrRadiationSubgraph<MeshState::PostWallBC>(
         nmeshes, budget.corrFork2Radiation);
 
-    // --- Barrier states ---
-
-    // MeshExch4: terminable barrier in cycle with CorrDivSetupCombPart
-    auto meshExchange4SM = makeTerminableRetaggingBarrier<
-        MeshState::PostCorrStep1, MeshState::PostCorrStep1>(
-        nmeshes, "MeshExchange(4)",
-        "MESH_EXCHANGE(4)",
-        [](auto&) {
-            fds_mesh_exchange(4);
-        });
-
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
     // --- CorrStep1 + DivSetup||Comb + ParticleOps → MeshExch7 → HvacCalc ---
     //
     // CorrDivSetupCombPartTask merges CorrStep1 + Fork1 (DivSetup||Comb via
-    // AsyncWorker) + ParticleOps. Phase 1 (CorrStep1) → MeshExch4 → Phase 2:
+    // AsyncWorker) + ParticleOps. Phase 1 (CorrStep1) → external exchange graph
+    // → Phase 2:
     //   MeshData<> → HvacCalc barrier (emitted before ParticleOps)
     //   MeshData<PostParticleOps> → MeshExch7 barrier (emitted after ParticleOps)
     // HvacCalc collects N MeshData + 1 BarrierData (from MeshExch7), runs
@@ -93,12 +83,20 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     // Subgraph input → CorrDivSetupCombPart (Phase 1: CorrStep1)
     subgraph->inputs(corrDivSetupCombPartTask);
 
-    // CorrDivSetupCombPart ↔ MeshExchange(4) cycle
-    subgraph->edges(corrDivSetupCombPartTask, meshExchange4SM);
-    subgraph->edges(meshExchange4SM, corrDivSetupCombPartTask);
-
-    // TerminationData breaks CorrDivSetupCombPart ↔ MeshExch4 cycle
-    subgraph->template input<TerminationData>(meshExchange4SM);
+    // CorrDivSetupCombPart Phase 1 → MeshExch4 → subgraph output (to exchange graph)
+    // CC_IBM needs MESH_CC_EXCHANGE(4) before species exchange (cut-cell data sync)
+    if (ccIBM) {
+        auto ccExch4Barrier = makeBarrierSM<MeshState::MeshExch4>(
+            nmeshes, "CC_Exchange(4)",
+            "MESH_CC_EXCHANGE(4)",
+            [](auto&) { fds_mesh_cc_exchange(4); });
+        subgraph->edges(corrDivSetupCombPartTask, ccExch4Barrier);
+        subgraph->template output<MeshData<MeshState::MeshExch4>>(ccExch4Barrier);
+    } else {
+        subgraph->template output<MeshData<MeshState::MeshExch4>>(corrDivSetupCombPartTask);
+    }
+    // Subgraph input (PostCorrStep1 from exchange graph) → CorrDivSetupCombPart Phase 2
+    subgraph->template input<MeshData<MeshState::PostCorrStep1>>(corrDivSetupCombPartTask);
 
     // MeshData<> output → HvacCalc barrier (emitted before ParticleOps)
     subgraph->edges(corrDivSetupCombPartTask, hvacBarrier);

@@ -63,16 +63,31 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
+    // --- Exchange graph: handles all dependency-aware mesh exchanges ---
+    // MeshExch4 (corrector density) is always active.
+    // PreSolveExch/PostSolveExch (pressure) edges only wired when parallel pressure is on;
+    // unused types sit idle until TerminationData.
+    auto exchGraph = std::make_shared<ExchangeGraph<
+        ExchKind<MeshState::MeshExch4, MeshState::PostCorrStep1>,
+        ExchKind<MeshState::PreSolveExch, MeshState::SolvePhase>,
+        ExchKind<MeshState::PostSolveExch, MeshState::VelErrorPhase>>>(
+        depGraph, commService, "Exchange");
+
     // --- Wire the graph ---
 
     // Input: MeshData<Init> -> TimestepState (INSERT_PARTICLES, then emit to Predictor)
     graph->input<MeshData<MeshState::Init>>(timestepSM);
-    // Input: TerminationData -> Predictor + Corrector (for cycle termination)
+    // Input: TerminationData -> Predictor + Corrector + Exchange (for cycle termination)
     graph->input<TerminationData>(predictorSubgraph);
     graph->input<TerminationData>(correctorSubgraph);
+    graph->input<TerminationData>(exchGraph);
 
     // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
     graph->edges(predictorSubgraph, correctorSubgraph);
+
+    // Corrector ↔ Exchange (MeshExch4 out, PostCorrStep1 back)
+    graph->edges(correctorSubgraph, exchGraph);
+    graph->edges(exchGraph, correctorSubgraph);
 
     // Corrector -> Dump (BarrierData + MeshData<>) -> TimestepState
     graph->edges(correctorSubgraph, dumpTask);
@@ -84,18 +99,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // Graph output: TimestepState emits BarrierData when simulation is done
     graph->outputs(timestepSM);
 
-    // --- Pressure subgraph + global exchange graph (when enabled) ---
+    // --- Pressure subgraph (when enabled) ---
     if (useParallelPressure) {
         auto pressureSubgraph = buildPressureIterationSubgraph(
             nmeshes, budget, fds_get_pres_flag());
 
-        auto exchGraph = std::make_shared<ExchangeGraph<
-            ExchKind<MeshState::PreSolveExch, MeshState::SolvePhase>,
-            ExchKind<MeshState::PostSolveExch, MeshState::VelErrorPhase>>>(
-            depGraph, commService, "Exchange");
-
         graph->input<TerminationData>(pressureSubgraph);
-        graph->input<TerminationData>(exchGraph);
 
         // Predictor <-> PressureSubgraph (PredPressure)
         graph->edges(predictorSubgraph, pressureSubgraph);

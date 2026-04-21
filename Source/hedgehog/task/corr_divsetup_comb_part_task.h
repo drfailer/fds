@@ -11,9 +11,9 @@
 ///
 /// Phase 1 (MeshData<>, from subgraph input):
 ///   CorrStep1 kernels: VISCOSITY, MASS_FD, DENSITY, CC_DENSITY
-///   → emits MeshData<PostCorrStep1> to MeshExch4 barrier
+///   → emits MeshData<MeshExch4> to exchange graph
 ///
-/// Phase 2 (MeshData<PostCorrStep1>, from MeshExch4 barrier):
+/// Phase 2 (MeshData<PostCorrStep1>, from exchange graph):
 ///   1. Fork via AsyncWorker:
 ///      - Worker thread: COMBUSTION + SOOT_OXIDATION
 ///      - Main thread:   DivSetup (BAROCLINIC, VISC_BC, CC_VEL_BC, VEL_FLUX, AGGLOM)
@@ -31,16 +31,16 @@
 class CorrDivSetupCombPartTask
     : public hh::AbstractTask<3,
         MeshData<>,                              // Phase 1: from subgraph input
-        MeshData<MeshState::PostCorrStep1>,      // Phase 2: from MeshExch4 barrier
+        MeshData<MeshState::PostCorrStep1>,      // Phase 2: from exchange graph
         MeshData<MeshState::PostHvac>,           // Phase 3: from HvacCalc barrier
-        MeshData<MeshState::PostCorrStep1>,      // → MeshExch4 barrier (Phase 1 output)
+        MeshData<MeshState::MeshExch4>,          // → exchange graph (Phase 1 output)
         MeshData<>,                              // → HVAC barrier (pre-ParticleOps)
         MeshData<MeshState::PostParticleOps>,    // → MeshExch7 barrier (post-ParticleOps)
         MeshData<MeshState::PostWallBC>> {       // → Fork2 (Phase 3 output)
 
     using TaskBase = hh::AbstractTask<3,
         MeshData<>, MeshData<MeshState::PostCorrStep1>, MeshData<MeshState::PostHvac>,
-        MeshData<MeshState::PostCorrStep1>, MeshData<>,
+        MeshData<MeshState::MeshExch4>, MeshData<>,
         MeshData<MeshState::PostParticleOps>, MeshData<MeshState::PostWallBC>>;
 
     TU_AsyncWorker worker_{};
@@ -62,16 +62,16 @@ public:
     CorrDivSetupCombPartTask(CorrDivSetupCombPartTask const &) = delete;
     CorrDivSetupCombPartTask &operator=(CorrDivSetupCombPartTask const &) = delete;
 
-    /// Phase 1: CorrStep1 kernels → emit to MeshExch4 barrier
+    /// Phase 1: CorrStep1 kernels → emit to exchange graph
     void execute(std::shared_ptr<MeshData<>> data) override {
         fds_compute_viscosity_kernel(data->nm, 1);
         fds_mass_finite_differences_kernel(data->nm);
         fds_density_kernel(data->nm, data->t, data->dt);
         fds_cc_density_ts(data->nm, data->t, data->dt);
-        this->addResult(retag<MeshState::PostCorrStep1>(data));
+        this->addResult(retag<MeshState::MeshExch4>(data));
     }
 
-    /// Phase 2: DivSetup fork + ParticleOps (from MeshExch4 barrier)
+    /// Phase 2: DivSetup fork + ParticleOps (from exchange graph)
     void execute(std::shared_ptr<MeshData<MeshState::PostCorrStep1>> tagged) override {
         auto data = retag<MeshState::Default>(tagged);
 

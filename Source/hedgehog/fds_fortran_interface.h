@@ -170,6 +170,7 @@ void fds_check_dump_schedule(double t, int nm, bool* any_dump);
 
 // Barrier / exchange subroutines
 void fds_mesh_exchange(int code);
+void fds_mesh_cc_exchange(int code);
 void fds_post_receives(int code);
 void fds_exchange_inserted_particles();
 void fds_pressure_iteration(double t, double dt);
