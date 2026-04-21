@@ -69,6 +69,7 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     // unused types sit idle until TerminationData.
     auto exchGraph = std::make_shared<ExchangeGraph<
         ExchKind<MeshState::MeshExch4, MeshState::PostCorrStep1>,
+        ExchKind<MeshState::MeshExch7, MeshState::PostParticleOps>,
         ExchKind<MeshState::PreSolveExch, MeshState::SolvePhase>,
         ExchKind<MeshState::PostSolveExch, MeshState::VelErrorPhase>>>(
         depGraph, commService, "Exchange");

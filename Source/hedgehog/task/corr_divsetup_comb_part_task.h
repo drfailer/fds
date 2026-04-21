@@ -35,13 +35,13 @@ class CorrDivSetupCombPartTask
         MeshData<MeshState::PostHvac>,           // Phase 3: from HvacCalc barrier
         MeshData<MeshState::MeshExch4>,          // → exchange graph (Phase 1 output)
         MeshData<>,                              // → HVAC barrier (pre-ParticleOps)
-        MeshData<MeshState::PostParticleOps>,    // → MeshExch7 barrier (post-ParticleOps)
+        MeshData<MeshState::MeshExch7>,          // → exchange graph (post-ParticleOps)
         MeshData<MeshState::PostWallBC>> {       // → Fork2 (Phase 3 output)
 
     using TaskBase = hh::AbstractTask<3,
         MeshData<>, MeshData<MeshState::PostCorrStep1>, MeshData<MeshState::PostHvac>,
         MeshData<MeshState::MeshExch4>, MeshData<>,
-        MeshData<MeshState::PostParticleOps>, MeshData<MeshState::PostWallBC>>;
+        MeshData<MeshState::MeshExch7>, MeshData<MeshState::PostWallBC>>;
 
     TU_AsyncWorker worker_{};
 
@@ -96,8 +96,8 @@ public:
         fds_move_particles(data->t, data->dt, data->nm);
         fds_particle_momentum_kernel(data->nm, data->dt);
 
-        // Emit to MeshExch7 barrier (after ParticleOps)
-        this->addResult(retag<MeshState::PostParticleOps>(data));
+        // Emit to exchange graph (after ParticleOps)
+        this->addResult(retag<MeshState::MeshExch7>(data));
     }
 
     /// Phase 3: WallBC kernels (from HvacCalc barrier)

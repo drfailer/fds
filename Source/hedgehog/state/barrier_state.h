@@ -581,4 +581,90 @@ inline auto makeTerminableEagerDualInputBarrier(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
+/// Eager dual-mesh barrier with TerminationData support.
+/// Collects N MeshData<> (primary) + N MeshData<InS> (secondary).
+/// Runs barrier function eagerly when all N primary meshes arrive.
+/// Emits N MeshData<OutS> only when BOTH sets are complete.
+template<MeshState InS, MeshState OutS>
+class TerminableEagerDualMeshBarrierTask
+    : public hh::AbstractTask<3, MeshData<>, MeshData<InS>, TerminationData, MeshData<OutS>> {
+public:
+    template<typename Fn>
+    TerminableEagerDualMeshBarrierTask(int nmeshes, std::string name,
+                                       std::string routines, Fn&& fn)
+        : hh::AbstractTask<3, MeshData<>, MeshData<InS>, TerminationData, MeshData<OutS>>(
+              std::move(name), 1),
+          nmeshes_(nmeshes), routines_(std::move(routines)),
+          fn_(std::forward<Fn>(fn)),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++primaryCount_ == nmeshes_) {
+            auto t0 = std::chrono::steady_clock::now();
+            fn_(collected_);
+            auto t1 = std::chrono::steady_clock::now();
+            totalTime_ += std::chrono::duration<double>(t1 - t0).count();
+            ++invocations_;
+            fnDone_ = true;
+            tryEmit();
+        }
+    }
+
+    void execute(std::shared_ptr<MeshData<InS>>) override {
+        if (++secondaryCount_ == nmeshes_) {
+            exchDone_ = true;
+            tryEmit();
+        }
+    }
+
+    void execute(std::shared_ptr<TerminationData>) override { done_ = true; }
+
+    [[nodiscard]] bool canTerminate() const override { return done_; }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << routines_ << "\\n"
+            << std::fixed << std::setprecision(3) << totalTime_ << "s"
+            << " / " << invocations_ << " calls";
+        if (invocations_ > 0)
+            oss << " / avg " << std::setprecision(3)
+                << (totalTime_ * 1000.0 / invocations_) << "ms";
+        return oss.str();
+    }
+
+private:
+    void tryEmit() {
+        if (fnDone_ && exchDone_) {
+            fnDone_ = false;
+            exchDone_ = false;
+            primaryCount_ = 0;
+            secondaryCount_ = 0;
+            for (auto &md : collected_) {
+                this->addResult(retag<OutS>(md));
+                md = nullptr;
+            }
+        }
+    }
+
+    bool done_ = false;
+    int nmeshes_, nmOffset_;
+    int primaryCount_ = 0, secondaryCount_ = 0;
+    bool fnDone_ = false, exchDone_ = false;
+    std::string routines_;
+    BarrierFn<> fn_;
+    double totalTime_ = 0.0;
+    int invocations_ = 0;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
+};
+
+template<MeshState InS, MeshState OutS, typename Fn>
+inline auto makeTerminableEagerDualMeshBarrier(int nmeshes, std::string name,
+                                                std::string routines, Fn&& fn) {
+    return std::make_shared<TerminableEagerDualMeshBarrierTask<InS, OutS>>(
+        nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
+}
+
 #endif // BARRIER_STATE_H

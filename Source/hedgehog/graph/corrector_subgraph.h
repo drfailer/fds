@@ -30,9 +30,11 @@
 ///   - Group C: Split into pre-barrier (MeshExch2) + QRAddCopyKernel + post-barrier (DivExch)
 template<MeshState PressureTag = MeshState::Default>
 inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) {
-    auto subgraph = std::make_shared<hh::Graph<4,
-        MeshData<>, MeshData<MeshState::CorrectorPressure>, MeshData<MeshState::PostCorrStep1>, TerminationData,
-        MeshData<>, MeshData<MeshState::CorrectorPressure>, MeshData<MeshState::MeshExch4>, BarrierData>>("Corrector");
+    auto subgraph = std::make_shared<hh::Graph<5,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>, MeshData<MeshState::PostCorrStep1>,
+        MeshData<MeshState::PostParticleOps>, TerminationData,
+        MeshData<>, MeshData<MeshState::CorrectorPressure>,
+        MeshData<MeshState::MeshExch4>, MeshData<MeshState::MeshExch7>, BarrierData>>("Corrector");
 
     // --- Kernel tasks (threads from budget) ---
 
@@ -48,30 +50,24 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
-    // --- CorrStep1 + DivSetup||Comb + ParticleOps → MeshExch7 → HvacCalc ---
+    // --- CorrStep1 + DivSetup||Comb + ParticleOps → ExchangeGraph → HvacCalc ---
     //
     // CorrDivSetupCombPartTask merges CorrStep1 + Fork1 (DivSetup||Comb via
     // AsyncWorker) + ParticleOps. Phase 1 (CorrStep1) → external exchange graph
     // → Phase 2:
     //   MeshData<> → HvacCalc barrier (emitted before ParticleOps)
-    //   MeshData<PostParticleOps> → MeshExch7 barrier (emitted after ParticleOps)
-    // HvacCalc collects N MeshData + 1 BarrierData (from MeshExch7), runs
-    // HVAC_CALC, and emits N MeshData only when both sources are done.
+    //   MeshData<MeshExch7> → exchange graph → PostParticleOps → HvacCalc
+    // HvacCalc runs HVAC_CALC eagerly when N MeshData<> arrive, then waits
+    // for N PostParticleOps before emitting N MeshData<PostHvac>.
     auto corrDivSetupCombPartTask = std::make_shared<CorrDivSetupCombPartTask>(
         budget.corrDivSetupCombPart);
 
-    // MeshExch(7) — collects N MeshData<PostParticleOps>, emits 1 BarrierData.
-    auto meshExch7Barrier = makeBarrierCollectToOne<MeshState::PostParticleOps>(
-        nmeshes, "MeshExchange(7)",
-        "MESH_EXCHANGE(7)",
-        [](auto& meshes) {
-            fds_mesh_exchange(7);
-        });
-
-    // HvacCalc: collects N MeshData + 1 BarrierData (MeshExch7), runs HVAC_CALC,
-    // emits N MeshData<PostHvac> when both HVAC and MeshExch7 are complete.
+    // HvacCalc: collects N MeshData<> + N MeshData<PostParticleOps>.
+    // Eager: runs HVAC_CALC when primary (MeshData<>) set is complete.
+    // Emits N MeshData<PostHvac> only when BOTH sets are complete.
     // Terminable: in cycle with CorrDivSetupCombPart (Phase 2 → HVAC → Phase 3).
-    auto hvacBarrier = makeTerminableEagerDualInputBarrier<MeshState::PostHvac>(
+    auto hvacBarrier = makeTerminableEagerDualMeshBarrier<
+        MeshState::PostParticleOps, MeshState::PostHvac>(
         nmeshes, "HvacCalc",
         "HVAC_CALC",
         [](auto& meshes) {
@@ -100,10 +96,10 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
     // MeshData<> output → HvacCalc barrier (emitted before ParticleOps)
     subgraph->edges(corrDivSetupCombPartTask, hvacBarrier);
-    // MeshData<PostParticleOps> output → MeshExch7 barrier (emitted after ParticleOps)
-    subgraph->edges(corrDivSetupCombPartTask, meshExch7Barrier);
-    // MeshExch7 (BarrierData) → HvacCalc (waits for both before emitting)
-    subgraph->edges(meshExch7Barrier, hvacBarrier);
+    // MeshData<MeshExch7> → subgraph output → exchange graph
+    subgraph->template output<MeshData<MeshState::MeshExch7>>(corrDivSetupCombPartTask);
+    // PostParticleOps from exchange graph → HvacCalc (secondary input)
+    subgraph->template input<MeshData<MeshState::PostParticleOps>>(hvacBarrier);
     // HvacCalc (MeshData<PostHvac>) → CorrDivSetupCombPart Phase 3 (WallBC)
     subgraph->edges(hvacBarrier, corrDivSetupCombPartTask);
 

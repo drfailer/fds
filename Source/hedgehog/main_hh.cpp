@@ -127,6 +127,9 @@ int main(int argc, char *argv[]) {
     PackData<MeshState::PostSolveExch>::maxSlabSize_ = maxSlab5;
     PackData<MeshState::MeshExch5>::maxSlabSize_ = maxSlab5;
 
+    int maxSlab7 = fds_exchange_max_slab_size(7);
+    PackData<MeshState::MeshExch7>::maxSlabSize_ = maxSlab7;
+
     // Only pass commService for multi-process runs
     hh::comm::CommService *commPtr =
         (commService.nbProcesses() > 1) ? &commService : nullptr;
