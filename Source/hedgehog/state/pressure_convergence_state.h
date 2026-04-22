@@ -45,16 +45,22 @@ public:
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
             int phase = collected_[0]->phase;
+            int pIter = collected_[0]->pressure_iterations;
+            bool iterBaro = collected_[0]->iterate_baroclinic;
 
             int converged;
             if (fds_iterate_pressure()) {
+                fds_set_pressure_iterations(pIter);
+                fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
+
                 auto t0 = std::chrono::steady_clock::now();
                 fds_pressure_iteration_check_convergence(t, dt);
                 auto t1 = std::chrono::steady_clock::now();
                 convTime_ += std::chrono::duration<double>(t1 - t0).count();
                 converged = fds_pressure_iteration_converged();
+
+                iterBaro = (fds_pressure_iteration_needs_baroclinic() != 0);
             } else {
-                // ITERATE_PRESSURE is false: always exit after one pass
                 converged = 1;
             }
 
@@ -74,10 +80,15 @@ public:
                     }
                 }
             } else {
-                // Increment counter for next iteration
-                fds_pressure_iteration_increment();
+                int nextPIter = pIter + 1;
+                int totalPI = fds_get_total_pressure_iterations() + 1;
+                fds_set_pressure_iterations(nextPIter);
+                fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
+                fds_set_total_pressure_iterations(totalPI);
 
                 for (int i = 0; i < nmeshes_; ++i) {
+                    collected_[i]->pressure_iterations = nextPIter;
+                    collected_[i]->iterate_baroclinic = iterBaro;
                     this->bufferResult(std::move(collected_[i]));
                 }
                 this->flushResults<MeshData<MeshState::Pressure>>();

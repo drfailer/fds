@@ -169,15 +169,18 @@ private:
     }
 
     void runPressureLoop() {
-        for (int iter = 0;; ++iter) {
+        for (;;) {
+            int pIter = collected_[0]->pressure_iterations;
+            bool iterBaro = collected_[0]->iterate_baroclinic;
+
             pressure_iter_detail::PressureBatchCtx ctx{
                 collected_.data(),
                 (nmeshes_ + threadCount_ - 1) / threadCount_,
                 nmeshes_,
                 presFlag_,
                 ccIBM_,
-                fds_pressure_iteration_needs_baroclinic() != 0,
-                fds_get_pressure_iterations()};
+                iterBaro,
+                pIter};
 
             dispatchParallel(pressure_iter_detail::baroclinicBatch, ctx);
             dispatchParallel(pressure_iter_detail::exchangeCopyBatch, ctx);
@@ -187,9 +190,12 @@ private:
 
             int converged;
             if (fds_iterate_pressure()) {
+                fds_set_pressure_iterations(pIter);
+                fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
                 fds_pressure_iteration_check_convergence(
                     collected_[0]->t, collected_[0]->dt);
                 converged = fds_pressure_iteration_converged();
+                iterBaro = (fds_pressure_iteration_needs_baroclinic() != 0);
             } else {
                 converged = 1;
             }
@@ -199,7 +205,16 @@ private:
                 return;
             }
 
-            fds_pressure_iteration_increment();
+            int nextPIter = pIter + 1;
+            int totalPI = fds_get_total_pressure_iterations() + 1;
+            fds_set_pressure_iterations(nextPIter);
+            fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
+            fds_set_total_pressure_iterations(totalPI);
+
+            for (auto &md : collected_) {
+                md->pressure_iterations = nextPIter;
+                md->iterate_baroclinic = iterBaro;
+            }
         }
     }
 

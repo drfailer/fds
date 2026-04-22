@@ -87,8 +87,15 @@ public:
         fds_global_matrix_reassign(0);
 
         if (useParallelPressure_) {
-            fds_pressure_iteration_init();
-            fds_pressure_iteration_increment();
+            bool iterBaro = fds_get_baroclinic() != 0;
+            int totalPI = fds_get_total_pressure_iterations() + 1;
+            fds_set_pressure_iterations(1);
+            fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
+            fds_set_total_pressure_iterations(totalPI);
+            for (auto &md : collected_) {
+                md->pressure_iterations = 1;
+                md->iterate_baroclinic = iterBaro;
+            }
         }
 
         for (auto &md : collected_) {

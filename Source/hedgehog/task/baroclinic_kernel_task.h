@@ -52,7 +52,7 @@ public:
 
 private:
     void doWork(std::shared_ptr<MeshData<MeshState::Pressure>> md) {
-        if (fds_pressure_iteration_needs_baroclinic()) {
+        if (md->iterate_baroclinic) {
             fds_baroclinic_correction(md->t, md->nm);
         }
         if (fds_is_cc_ibm()) {

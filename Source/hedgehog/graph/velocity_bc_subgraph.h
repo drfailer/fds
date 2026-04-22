@@ -28,7 +28,8 @@ public:
         : hh::AbstractTask<2, MeshData<MeshState::PostVelCorr>, TerminationData, MeshData<>, BarrierData>(
               "CorrFinalOrch", 1),
           nmeshes_(nmeshes), ccIBM_(ccIBM),
-          nmOffset_(fds_get_lower_mesh_index()) {
+          nmOffset_(fds_get_lower_mesh_index()),
+          wallIncrement_(fds_get_wall_increment()) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -36,7 +37,9 @@ public:
         collected_[data->nm - nmOffset_] = retag<MeshState::Default>(data);
         if (++count_ == nmeshes_) {
             auto t0 = std::chrono::steady_clock::now();
-            fds_reset_wall_counter();
+            if (collected_[0]->wall_counter == wallIncrement_) {
+                fds_set_wall_counter(0);
+            }
             if (ccIBM_) { fds_cc_end_step(collected_[0]->t, collected_[0]->dt, 0); }
             fds_mesh_exchange(6);
             auto t1 = std::chrono::steady_clock::now();
@@ -77,6 +80,7 @@ private:
     bool done_ = false;
     int nmeshes_, nmOffset_, count_ = 0;
     bool ccIBM_;
+    int wallIncrement_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
     std::vector<std::shared_ptr<MeshData<>>> collected_;

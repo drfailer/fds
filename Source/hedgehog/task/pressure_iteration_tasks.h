@@ -51,8 +51,7 @@ public:
 
 private:
     void doWork(std::shared_ptr<MeshData<MeshState::Pressure>> md) {
-        if (fds_pressure_iteration_needs_baroclinic() ||
-            fds_get_pressure_iterations() == 1) {
+        if (md->iterate_baroclinic || md->pressure_iterations == 1) {
             if (fds_is_cc_ibm()) {
                 fds_cc_match_velocity_flux(md->nm);
             } else {
@@ -63,7 +62,7 @@ private:
         if (fds_is_cc_ibm()) {
             fds_cc_no_flux(md->dt, md->nm, 0); // FORCE_FLG=FALSE
         }
-        if (fds_get_pressure_iterations() == 1) {
+        if (md->pressure_iterations == 1) {
             fds_pressure_iteration_zero_wall_work1(md->nm);
         }
         fds_pressure_solver_compute_rhs_kernel(md->nm, md->t, md->dt);

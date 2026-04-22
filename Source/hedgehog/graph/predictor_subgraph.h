@@ -146,17 +146,20 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             "EXCH_DIV_INFO\\nZONE_OPS\\nGLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
             [useParallelPressure](auto& meshes) {
                 fds_exchange_divergence_info();
-                // Zone ops + GET_LINKED_VELOCITIES (CC_IBM needs per-mesh for cross-mesh writes)
                 for (auto &md : meshes) {
                     fds_divergence_part_2_preprocessing(md->nm, md->dt);
                 }
                 fds_global_matrix_reassign(0);
                 if (useParallelPressure) {
-                    fds_pressure_iteration_init();
-                    fds_pressure_iteration_increment();
-                    // Pre-loop: link cut-face velocity fluxes before pressure iterations
+                    bool iterBaro = fds_get_baroclinic() != 0;
+                    int totalPI = fds_get_total_pressure_iterations() + 1;
+                    fds_set_pressure_iterations(1);
+                    fds_set_iterate_baroclinic_term(iterBaro ? 1 : 0);
+                    fds_set_total_pressure_iterations(totalPI);
                     for (auto &md : meshes) {
-                        fds_get_linked_fv(md->nm, 0); // DO_BAROCLINIC=FALSE
+                        md->pressure_iterations = 1;
+                        md->iterate_baroclinic = iterBaro;
+                        fds_get_linked_fv(md->nm, 0);
                     }
                 }
             });

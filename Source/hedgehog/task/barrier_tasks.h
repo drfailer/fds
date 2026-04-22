@@ -26,7 +26,9 @@ class PhaseTransitionTask : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:
     explicit PhaseTransitionTask(int nmeshes)
         : hh::AbstractTask<1, MeshData<>, MeshData<>>("PhaseTransition", 1),
-          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()) {
+          nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
+          wallCounter_(fds_get_wall_counter()),
+          wallIncrement_(fds_get_wall_increment()) {
         collected_.resize(nmeshes, nullptr);
     }
 
@@ -41,9 +43,10 @@ public:
             t += dt;
             fds_create_or_remove_obstructions(t, dt);
 
-            // Increment WALL_COUNTER once per corrector step, carry per-mesh
-            fds_increment_wall_counter();
-            int wc = fds_get_wall_counter();
+            wallCounter_++;
+            int wc = wallCounter_;
+            fds_set_wall_counter(wc);
+            if (wallCounter_ == wallIncrement_) wallCounter_ = 0;
 
             auto t1 = std::chrono::steady_clock::now();
             totalTime_ += std::chrono::duration<double>(t1 - t0).count();
@@ -74,6 +77,7 @@ public:
 
 private:
     int nmeshes_, nmOffset_, count_ = 0;
+    int wallCounter_, wallIncrement_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
     std::vector<std::shared_ptr<MeshData<>>> collected_;
