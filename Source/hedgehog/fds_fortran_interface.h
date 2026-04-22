@@ -38,7 +38,6 @@ int fds_is_ht3d();
 int fds_use_pressure_subgraph();
 int fds_iterate_pressure();
 int fds_get_pres_flag();
-void fds_zero_q_m_dot();
 double fds_adjust_dt(double t, double dt);
 
 // Predictor phase per-mesh subroutines
@@ -140,7 +139,7 @@ void fds_compute_radiation_kernel(int nm, double t, int rad_iter,
     double* rad_q_sum_out, double* kfst4_sum_out);
 void fds_compute_radiation_kernel_b(int nm, double t, int rad_iter,
     double* rad_q_sum_out, double* kfst4_sum_out);
-void fds_accumulate_rad_sums(double rad_q_partial, double kfst4_partial);
+void fds_set_rad_slot(int nm, double rad_q_partial, double kfst4_partial);
 void fds_cccompute_radiation(int nm, double t, int rad_iter);
 void fds_agglomeration(double dt, int nm);
 void fds_cc_end_step(double t, double dt, int diag);
@@ -200,7 +199,6 @@ void fds_pressure_iteration_check_convergence(double t, double dt);
 int fds_pressure_iteration_converged();
 int fds_pressure_iteration_needs_baroclinic();
 
-void fds_initialize_divergence_integrals();
 void fds_exchange_divergence_info();
 void fds_create_or_remove_obstructions(double t, double dt);
 void fds_global_matrix_reassign(int force);

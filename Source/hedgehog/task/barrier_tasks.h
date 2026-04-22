@@ -39,7 +39,6 @@ public:
 
             fds_set_predictor(0);  // CORRECTOR=TRUE, PREDICTOR=FALSE
             t += dt;
-            fds_zero_q_m_dot();
             fds_create_or_remove_obstructions(t, dt);
 
             // Increment WALL_COUNTER once per corrector step, carry per-mesh
@@ -64,7 +63,6 @@ public:
     [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
         oss << "SET_PREDICTOR(0)\\n"
-            << "ZERO_Q_M_DOT\\n"
             << "CREATE_OR_REMOVE_OBSTRUCTIONS\\n"
             << std::fixed << std::setprecision(3) << totalTime_ << "s"
             << " / " << invocations_ << " calls";

@@ -157,7 +157,6 @@ private:
         }
 
         fds_hvac_calc(t, dt, 0);
-        fds_initialize_divergence_integrals();
 
         for (auto &md : collected_) {
             fds_wall_bc(t, dt, md->nm);

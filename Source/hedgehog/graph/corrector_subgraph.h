@@ -116,13 +116,12 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
 
     if (ccIBM) {
-        // Group B (CC_IBM): Exchange(6) barrier for back wall data (HT3D only) + InitDiv.
+        // Group B (CC_IBM): Exchange(6) barrier for back wall data (HT3D only).
         auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
-            nmeshes, "MeshExch6a+InitDiv",
-            "MESH_EXCHANGE(6) [HT3D]\\nINIT_DIV_INTEGRALS",
+            nmeshes, "MeshExch6a",
+            "MESH_EXCHANGE(6) [HT3D]",
             [ht3d](auto& meshes) {
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
-                fds_initialize_divergence_integrals();
             });
 
         auto corrDivP1KernelTask = std::make_shared<CorrDivPart1KernelTask>(budget.standalone(2));
@@ -170,13 +169,12 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             subgraph->edges(corrPressureSM, corrFinalKernelTask);
         }
     } else {
-        // Group B (non-CC_IBM): Exchange(6) [HT3D only] + InitDiv barrier.
+        // Group B (non-CC_IBM): Exchange(6) [HT3D only] barrier.
         auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
-            nmeshes, "MeshExch6a+InitDiv",
-            "MESH_EXCHANGE(6) [HT3D]\\nINIT_DIV_INTEGRALS",
+            nmeshes, "MeshExch6a",
+            "MESH_EXCHANGE(6) [HT3D]",
             [ht3d](auto& meshes) {
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
-                fds_initialize_divergence_integrals();
             });
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);

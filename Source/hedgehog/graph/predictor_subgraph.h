@@ -60,12 +60,11 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     if (!ccIBM) {
         // Post-exchange barrier handles remaining global ops.
         auto postPredExchBarrier = makeBarrierSM<MeshState::PostPredExch>(
-            nmeshes, "ExchInsPart+Hvac+InitDiv",
-            "EXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV",
+            nmeshes, "ExchInsPart+Hvac",
+            "EXCH_INS_PART\\nHVAC_CALC",
             [](auto& meshes) {
                 fds_exchange_inserted_particles();
                 fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
-                fds_initialize_divergence_integrals();
             });
 
         // Merged PredStep1 + prefork + fork + divergence pipeline.
@@ -124,11 +123,10 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         subgraph->template input<MeshData<MeshState::PostPredExch>>(postPredExchBarrier);
 
         // CC_IBM sequential path
-        auto hvacInitDivSM = makeBarrierSM(nmeshes, "Hvac+InitDiv",
-            "HVAC_CALC\\nINITIALIZE_DIVERGENCE_INTEGRALS",
+        auto hvacInitDivSM = makeBarrierSM(nmeshes, "HvacCalc",
+            "HVAC_CALC",
             [](auto& meshes) {
                 fds_hvac_calc(meshes[0]->t, meshes[0]->dt, 1);
-                fds_initialize_divergence_integrals();
             });
 
         auto predDivSetupKernelTask = std::make_shared<DivSetupKernelTask>(budget.standalone(4));

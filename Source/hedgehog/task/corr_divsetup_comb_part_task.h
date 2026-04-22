@@ -3,7 +3,6 @@
 
 #include <hedgehog/hedgehog.h>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <thread_utils/async_worker.hpp>
 #include "../data/mesh_data.h"
@@ -27,7 +26,7 @@
 /// Phase 3 (MeshData<PostHvac>, from HvacCalc barrier):
 ///   WallBC: orch_per_mesh + preprocessing + process_cells + finalize
 ///   → emits MeshData<PostWallBC> to Fork2 DivP1 path (starts immediately)
-///   Radiation: compute_radiation_kernel + cccompute_radiation + accumulate_rad_sums
+///   Radiation: compute_radiation_kernel + cccompute_radiation + set_rad_slot
 ///   → emits MeshData<MeshExch2> to exchange graph (radiation exchange)
 ///
 /// Each copy() creates its own AsyncWorker — no sharing between threads.
@@ -50,7 +49,6 @@ class CorrDivSetupCombPartTask
         MeshData<MeshState::MeshExch2>>;
 
     TU_AsyncWorker worker_{};
-    std::shared_ptr<std::mutex> sumMutex_;
 
     static void fork1CombWork(void *rawData, TU_i64) {
         auto *data = static_cast<MeshData<> *>(rawData);
@@ -60,8 +58,7 @@ class CorrDivSetupCombPartTask
 
 public:
     explicit CorrDivSetupCombPartTask(size_t numThreads)
-        : TaskBase("CorrDivSetupCombPart", numThreads),
-          sumMutex_(std::make_shared<std::mutex>()) {
+        : TaskBase("CorrDivSetupCombPart", numThreads) {
         tu_aw_init(&worker_);
     }
 
@@ -130,19 +127,14 @@ public:
         double radQPartial = 0.0, kfst4Partial = 0.0;
         fds_compute_radiation_kernel(data->nm, data->t, 1, &radQPartial, &kfst4Partial);
         fds_cccompute_radiation(data->nm, data->t, 1);
-        {
-            std::lock_guard<std::mutex> lk(*sumMutex_);
-            fds_accumulate_rad_sums(radQPartial, kfst4Partial);
-        }
+        fds_set_rad_slot(data->nm, radQPartial, kfst4Partial);
 
         // Emit MeshExch2 for radiation exchange
         this->addResult(retag<MeshState::MeshExch2>(data));
     }
 
     std::shared_ptr<TaskBase> copy() override {
-        auto c = std::make_shared<CorrDivSetupCombPartTask>(this->numberThreads());
-        c->sumMutex_ = this->sumMutex_;
-        return c;
+        return std::make_shared<CorrDivSetupCombPartTask>(this->numberThreads());
     }
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
@@ -170,7 +162,7 @@ public:
             << "  -> addResult (PostWallBC)\\n"
             << "  COMPUTE_RADIATION\\n"
             << "  CC_COMPUTE_RADIATION\\n"
-            << "  ACCUMULATE_RAD_SUMS";
+            << "  SET_RAD_SLOT";
         return oss.str();
     }
 };
