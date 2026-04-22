@@ -92,8 +92,6 @@ public:
     }
 };
 
-// CorrRadiationTask replaced by CorrRadiationKernelTask in corr_radiation_kernel_task.h
-
 /// Task C7: Combustion BC + divergence part 1
 class CorrDivPart1Task : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
 public:

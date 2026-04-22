@@ -19,7 +19,6 @@
 #include "../task/corr_div_parallel_task.h"
 #include "../task/div_exchange_task.h"
 #include "velocity_bc_subgraph.h"
-#include "../task/corr_radiation_kernel_task.h"
 #include "../task/pipeline_fork2_tasks.h"
 #include "../tool/thread_budget.h"
 
@@ -44,10 +43,6 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
     bool ccIBM = fds_is_cc_ibm() != 0;
     bool ht3d = fds_is_ht3d() != 0;
-
-    // --- Radiation kernel (replaces CorrRadiationSubgraph) ---
-    auto corrRadiationKernelTask = std::make_shared<CorrRadiationKernelTask<MeshState::PostWallBC>>(
-        budget.corrFork2Radiation);
 
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
@@ -107,16 +102,17 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     // TerminationData breaks CorrDivSetupCombPart ↔ HvacCalc cycle
     subgraph->template input<TerminationData>(hvacBarrier);
 
-    // --- Fork 2: RADIATION || DIV_P1 (or sequential for CC_IBM) ---
+    // --- Fork 2: RADIATION_EXCHANGE || DIV_P1 (or sequential for CC_IBM) ---
+    //
+    // Radiation compute is done inside CorrDivSetupCombPartTask phase 3.
+    // Phase 3 emits PostWallBC (div path starts immediately) and MeshExch2
+    // (radiation exchange). Fork2Join synchronizes both branches before QRAdd.
 
-    // Join barrier: collects N MeshData<> (from DivP1 path) + N MeshData<PostRadExch>
-    // (from radiation exchange graph), emits N MeshData<>.
     auto fork2JoinTask = std::make_shared<DualMeshJoinTask<MeshState::PostRadExch>>(
         nmeshes, "Fork2Join");
 
-    // Radiation → MeshExch2 → exchange graph → PostRadExch → join
-    subgraph->edges(corrDivSetupCombPartTask, corrRadiationKernelTask);
-    subgraph->template output<MeshData<MeshState::MeshExch2>>(corrRadiationKernelTask);
+    // MeshExch2 → exchange graph → PostRadExch → join
+    subgraph->template output<MeshData<MeshState::MeshExch2>>(corrDivSetupCombPartTask);
     subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
 
     if (ccIBM) {
