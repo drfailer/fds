@@ -43,32 +43,23 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
     // --- Kernel tasks (threads from budget) ---
 
-    auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
-    auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask<PressureTag>>(budget.velPredictor);
-
     bool ccIBM = fds_is_cc_ibm() != 0;
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
 
     auto changeTimeStepTask = std::make_shared<ChangeTimeStepTask>(
         nmeshes, budget.retryMomDiv, ccIBM);
 
-    // --- PredFinal: merged SynTurb+VelBC kernel → PhaseTransition ---
-    auto predSynTurbVelBCTask = std::make_shared<PredSynTurbVelBCTask>(budget.predSynTurbVelBC);
+    // --- PredFinal: merged VelPred+SynTurb+VelBC kernel → PhaseTransition ---
+    auto predSynTurbVelBCTask = std::make_shared<PredSynTurbVelBCTask<PressureTag>>(budget.predSynTurbVelBC);
     auto phaseTransTask = std::make_shared<PhaseTransitionTask>(nmeshes);
 
-    // --- Common barrier states ---
-
     // --- Wire the sub-graph ---
-
-    subgraph->input<MeshData<>>(predStep1KernelTask);
-    // ChangeTimeStepTask is a single task (no cycle) — no TerminationData needed
 
     // --- Predictor middle section: Fork (non-CC_IBM) or Sequential (CC_IBM) ---
 
     if (!ccIBM) {
-        // MeshExchange(1) routed through exchange graph.
         // Post-exchange barrier handles remaining global ops.
-        auto postPredExchBarrier = makeRetaggingBarrier<MeshState::PostPredExch, MeshState::Default>(
+        auto postPredExchBarrier = makeBarrierSM<MeshState::PostPredExch>(
             nmeshes, "ExchInsPart+Hvac+InitDiv",
             "EXCH_INS_PART\\nHVAC_CALC\\nINIT_DIV",
             [](auto& meshes) {
@@ -77,20 +68,21 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
                 fds_initialize_divergence_integrals();
             });
 
-        // Merged prefork + fork + divergence pipeline: DivP1Prefork +
-        // (DivSetup+PartMom || WallBC+DivP1Early) + DivP1Late + DivPart2.
-        // AsyncWorker handles the fork internally — each Hedgehog thread owns a
-        // worker thread, so real OS thread count = 2 × budget.predPreforkDiv.
-        //
-        // Pipeline: PredPreforkDiv(Phase1) → DivExchangeTask (collect+parallel DivP2Pre)
-        //   → PredPreforkDiv(Phase2) → downstream
+        // Merged PredStep1 + prefork + fork + divergence pipeline.
+        // Phase 1 (PredStep1) → MeshExch1 → exchange graph → PostPredExch →
+        // barrier → Phase 2 (Prefork+Fork+DivP1Late) → DivExchangeTask →
+        // Phase 3 (DivPart2) → downstream.
         auto predPreforkDivTask = std::make_shared<PredPreforkDivTask<PressureTag>>(
             budget.predPreforkDiv);
 
         auto divExchangeTask = std::make_shared<DivExchangeTask<PressureTag>>(
             nmeshes, budget.divExchange);
 
-        subgraph->template output<MeshData<MeshState::MeshExch1>>(predStep1KernelTask);
+        // Subgraph input → PredPreforkDiv Phase 1 (PredStep1)
+        subgraph->input<MeshData<>>(predPreforkDivTask);
+        subgraph->template output<MeshData<MeshState::MeshExch1>>(predPreforkDivTask);
+
+        // PostPredExch → barrier → PredPreforkDiv Phase 2
         subgraph->template input<MeshData<MeshState::PostPredExch>>(postPredExchBarrier);
         subgraph->edges(postPredExchBarrier, predPreforkDivTask);
 
@@ -101,10 +93,10 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         // TerminationData breaks structural cycle at shutdown
         subgraph->template input<TerminationData>(divExchangeTask);
 
-        // Downstream: final output (MeshData<PressureTag>) → Pressure → VelPred
+        // Downstream: final output (MeshData<PressureTag>) → Pressure → PredSynTurbVelBC Phase 1
         if constexpr (useParallelPressure) {
             subgraph->template output<MeshData<PressureTag>>(predPreforkDivTask);
-            subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
+            subgraph->template input<MeshData<PressureTag>>(predSynTurbVelBCTask);
         } else {
             auto predPressureSM = makeBarrierSM(nmeshes, "PredPressure",
                 "PRESSURE_ITERATION\\nINIT_CHANGE_TIME_STEP",
@@ -113,10 +105,13 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
                     fds_init_change_time_step(meshes[0]->dt);
                 });
             subgraph->edges(predPreforkDivTask, predPressureSM);
-            subgraph->edges(predPressureSM, velPredKernelTask);
+            subgraph->edges(predPressureSM, predSynTurbVelBCTask);
         }
     } else {
-        // CC_IBM: MeshExchange(1) routed through exchange graph.
+        // CC_IBM: PredStep1 as separate task (CC_IBM path doesn't use PredPreforkDiv).
+        auto predStep1KernelTask = std::make_shared<PredStep1KernelTask>(budget.predStep1);
+        subgraph->input<MeshData<>>(predStep1KernelTask);
+
         // Post-exchange barrier handles exchange_inserted_particles only.
         auto postPredExchBarrier = makeRetaggingBarrier<MeshState::PostPredExch, MeshState::Default>(
             nmeshes, "ExchInsPart",
@@ -176,7 +171,10 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         auto predDivP2KernelTask = std::make_shared<DivergencePart2KernelTask<PressureTag>>(budget.predDivPart2);
         subgraph->edges(predDivExchangeSM, predDivP2KernelTask);
 
-        // Downstream: DivP2 → Pressure → VelPred
+        // CC_IBM: VelPred stays as separate task (different thread pool)
+        auto velPredKernelTask = std::make_shared<VelocityPredictorKernelTask<PressureTag>>(budget.velPredictor);
+
+        // Downstream: DivP2 → Pressure → VelPred → ChangeTimeStep
         if constexpr (useParallelPressure) {
             subgraph->outputs(predDivP2KernelTask);
             subgraph->template input<MeshData<PressureTag>>(velPredKernelTask);
@@ -190,12 +188,15 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             subgraph->edges(predDivP2KernelTask, predPressureSM);
             subgraph->edges(predPressureSM, velPredKernelTask);
         }
+        subgraph->edges(velPredKernelTask, changeTimeStepTask);
     }
 
-    // VelocityPredictor → ChangeTimeStep (collects N, retries internally)
-    subgraph->edges(velPredKernelTask, changeTimeStepTask);
+    // Non-CC_IBM: PredSynTurbVelBC Phase 1 (PostVelPred) → ChangeTimeStep
+    if (!ccIBM) {
+        subgraph->edges(predSynTurbVelBCTask, changeTimeStepTask);
+    }
 
-    // ChangeTimeStep → MeshExch3 → exchange graph → PostPredVelExch → SynTurb+VelBC
+    // ChangeTimeStep → MeshExch3 → exchange graph → PostPredVelExch → SynTurb+VelBC Phase 2
     subgraph->template output<MeshData<MeshState::MeshExch3>>(changeTimeStepTask);
     subgraph->template input<MeshData<MeshState::PostPredVelExch>>(predSynTurbVelBCTask);
     subgraph->edges(predSynTurbVelBCTask, phaseTransTask);

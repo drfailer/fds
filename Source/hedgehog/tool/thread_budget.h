@@ -23,12 +23,12 @@ struct ThreadBudget {
     int nmeshes_;
 
     // --- Predictor standalone sections ---
-    size_t predStep1;           // PredStep1KernelTask          (HEAVY)
-    size_t predPreforkDiv;      // PredPreforkDivTask            (HEAVY) — merged Prefork+Fork(DivSetup+PartMom || WallBC+DivEarly)
+    size_t predStep1;           // PredStep1KernelTask          (HEAVY) — CC_IBM path only
+    size_t predPreforkDiv;      // PredPreforkDivTask            (HEAVY) — merged PredStep1+Prefork+Fork(DivSetup+PartMom || WallBC+DivEarly)
                                 //   Real OS threads = 2 × predPreforkDiv (each HH thread owns an AsyncWorker)
     size_t predDivPart2;        // DivergencePart2KernelTask    (LIGHT) — CC_IBM path only
-    size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT)
-    size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged SynTurb+VelBC
+    size_t velPredictor;        // VelocityPredictorKernelTask  (LIGHT) — CC_IBM path only
+    size_t predSynTurbVelBC;    // PredSynTurbVelBCTask          (MEDIUM) — merged VelPred+SynTurb+VelBC
     size_t retryMomDiv;         // RetryMomentumDivKernelTask   (LIGHT)
 
     // --- Corrector standalone sections ---
