@@ -34,6 +34,7 @@ enum class MeshState {
     PostPredVelExch,      ///< MeshExch3 → exchange graph → predictor post-velocity-exchange
     PostCorrStep1,        ///< CorrStep1 phase → MeshExch4 barrier → DivSetupCombPart phase
     PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
+    PostRadExch,          ///< MeshExch2 → exchange graph → post-radiation-exchange
     PostWallBC            ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
 };
 

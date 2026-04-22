@@ -667,4 +667,57 @@ inline auto makeTerminableEagerDualMeshBarrier(int nmeshes, std::string name,
         nmeshes, std::move(name), std::move(routines), std::forward<Fn>(fn));
 }
 
+/// Non-terminable dual-mesh join barrier.
+/// Collects N MeshData<> (primary) + N MeshData<InS> (secondary).
+/// Emits N MeshData<> when BOTH sets are complete.
+/// No barrier function — pure synchronization point.
+template<MeshState InS>
+class DualMeshJoinTask
+    : public hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<>> {
+public:
+    DualMeshJoinTask(int nmeshes, std::string name)
+        : hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<>>(
+              std::move(name), 1),
+          nmeshes_(nmeshes),
+          nmOffset_(fds_get_lower_mesh_index()) {
+        collected_.resize(nmeshes, nullptr);
+    }
+
+    void execute(std::shared_ptr<MeshData<>> data) override {
+        collected_[data->nm - nmOffset_] = data;
+        if (++primaryCount_ == nmeshes_) {
+            primaryDone_ = true;
+            tryEmit();
+        }
+    }
+
+    void execute(std::shared_ptr<MeshData<InS>>) override {
+        if (++secondaryCount_ == nmeshes_) {
+            secondaryDone_ = true;
+            tryEmit();
+        }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        return "Join (sync only)";
+    }
+
+private:
+    void tryEmit() {
+        if (primaryDone_ && secondaryDone_) {
+            primaryDone_ = false;
+            secondaryDone_ = false;
+            primaryCount_ = 0;
+            secondaryCount_ = 0;
+            this->batchAddResult(collected_);
+            for (auto &md : collected_) { md = nullptr; }
+        }
+    }
+
+    int nmeshes_, nmOffset_;
+    int primaryCount_ = 0, secondaryCount_ = 0;
+    bool primaryDone_ = false, secondaryDone_ = false;
+    std::vector<std::shared_ptr<MeshData<>>> collected_;
+};
+
 #endif // BARRIER_STATE_H
