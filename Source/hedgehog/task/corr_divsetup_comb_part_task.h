@@ -123,7 +123,9 @@ public:
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
-        oss << "Phase 1 (CorrStep1):\\n"
+        oss << "Threads: " << this->numberThreads()
+            << " (+1 AsyncWorker each)\\n"
+            << "Phase 1 (CorrStep1):\\n"
             << "  VISCOSITY, MASS_FD\\n"
             << "  DENSITY, CC_DENSITY\\n"
             << "Phase 2 (DivSetup+Part):\\n"

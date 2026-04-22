@@ -90,7 +90,9 @@ public:
 
     [[nodiscard]] std::string extraPrintingInformation() const override {
         std::ostringstream oss;
-        oss << "Phase 1 (Prefork+Fork+DivP1Late):\\n"
+        oss << "Threads: " << this->numberThreads()
+            << " (+1 AsyncWorker each)\\n"
+            << "Phase 1 (Prefork+Fork+DivP1Late):\\n"
             << "  DIV_P1_PREFORK\\n"
             << "  Fork(AsyncWorker):\\n"
             << "    A: SET_BARO, VISC_BC, VEL_FLUX\\n"

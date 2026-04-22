@@ -5,6 +5,7 @@
 #include <thread_utils/thread_pool.hpp>
 #include <algorithm>
 #include <mutex>
+#include <sstream>
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/termination_data.h"
@@ -104,6 +105,19 @@ public:
     [[nodiscard]] bool canTerminate() const override {
         std::lock_guard<std::mutex> lk(mtx_);
         return done_;
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "ThreadPool: " << threadCount_
+            << " (" << (threadCount_ - 1) << " pool + 1 task)\\n"
+            << "EXCH_DIV_INFO\\n"
+            << "DivP2Pre (parallel)\\n"
+            << "GLOBAL_MATRIX_REASSIGN";
+        if (useParallelPressure_) {
+            oss << "\\nPRES_INIT+INCR";
+        }
+        return oss.str();
     }
 
 private:

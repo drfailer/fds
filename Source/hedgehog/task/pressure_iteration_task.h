@@ -4,6 +4,7 @@
 #include <hedgehog/hedgehog.h>
 #include <thread_utils/thread_pool.hpp>
 #include <algorithm>
+#include <sstream>
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../data/termination_data.h"
@@ -237,6 +238,19 @@ private:
         } else {
             batchFn(&ctx, 0);
         }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "ThreadPool: " << threadCount_
+            << " (" << (threadCount_ - 1) << " pool + 1 task)\\n"
+            << "Pressure iteration loop:\\n"
+            << "  Baroclinic (parallel)\\n"
+            << "  MESH_EXCHANGE(5)\\n"
+            << "  Solve (parallel)\\n"
+            << "  VelError (parallel)\\n"
+            << "  Convergence check";
+        return oss.str();
     }
 
     int nmeshes_, nmOffset_, count_ = 0, threadCount_;

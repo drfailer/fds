@@ -4,6 +4,7 @@
 #include <hedgehog/hedgehog.h>
 #include <thread_utils/thread_pool.hpp>
 #include <algorithm>
+#include <sstream>
 #include <vector>
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
@@ -195,6 +196,20 @@ private:
         } else {
             batchFn(&ctx, 0);
         }
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "ThreadPool: " << threadCount_
+            << " (" << (threadCount_ - 1) << " pool + 1 task)\\n"
+            << "CFL retry loop:\\n"
+            << "  MomDiv (parallel)\\n"
+            << "  EXCH_DIV_INFO\\n"
+            << "  DivP2Pre (sequential)\\n"
+            << "  DivP2Block (parallel)\\n"
+            << "  PRESSURE_ITERATION\\n"
+            << "  VelPred (parallel)";
+        return oss.str();
     }
 
     int nmeshes_, nmOffset_, count_ = 0, threadCount_;
