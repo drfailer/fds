@@ -6,31 +6,25 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Packed parallel "thread pool" task for the corrector divergence pipeline.
+/// Packed parallel task for the corrector divergence pipeline.
 ///
-/// Merges 3 per-mesh parallel kernels into one multi-threaded task:
+/// Two per-mesh parallel kernels in one multi-threaded task:
 ///   1. QRAddCopy:  MeshData<>        → QR addition + WORK1 copy   → MeshData<DivExch>
-///   2. DivP2Pre:   MeshData<DivP2Pre>→ zone ops + D_PBAR_DT       → MeshData<GlobalMat>
-///   3. DivPart2:   MeshData<DivPart2>→ divergence part 2 block     → MeshData<PressureTag>
+///   2. DivPart2:   MeshData<DivPart2>→ divergence part 2 block     → MeshData<PressureTag>
 ///
-/// Between these phases, sequential barriers (DivExchange, GlobalMatrix) collect
-/// N tokens, run global operations, and re-emit with the next phase's tag.
-/// No canTerminate() needed: the barrier cycle partners receive TerminationData
-/// and terminate first, disconnecting from this task.
-///
-/// One thread pool serves all 3 phases, saving threads vs. separate tasks.
+/// Between Phase 1 and Phase 2, DivExchangeTask collects N tokens, runs
+/// exchange_divergence_info + parallel DivP2Pre + global_matrix_reassign,
+/// then re-emits with DivPart2 tag.
 template<MeshState PressureTag = MeshState::Default>
-class CorrDivParallelTask : public hh::AbstractTask<3,
+class CorrDivParallelTask : public hh::AbstractTask<2,
     MeshData<>,                        // from Join2+MeshExch2 → QRAddCopy
-    MeshData<MeshState::DivP2Pre>,     // from DivExchange → DivP2Pre kernel
-    MeshData<MeshState::DivPart2>,     // from GlobalMatrix → DivPart2 kernel
-    MeshData<MeshState::DivExch>,      // → DivExchange barrier
-    MeshData<MeshState::GlobalMat>,    // → GlobalMatrix barrier
+    MeshData<MeshState::DivPart2>,     // from DivExchangeTask → DivPart2 kernel
+    MeshData<MeshState::DivExch>,      // → DivExchangeTask
     MeshData<PressureTag>>             // → downstream (pressure or VelCorr)
 {
-    using TaskBase = hh::AbstractTask<3,
-        MeshData<>, MeshData<MeshState::DivP2Pre>, MeshData<MeshState::DivPart2>,
-        MeshData<MeshState::DivExch>, MeshData<MeshState::GlobalMat>,
+    using TaskBase = hh::AbstractTask<2,
+        MeshData<>, MeshData<MeshState::DivPart2>,
+        MeshData<MeshState::DivExch>,
         MeshData<PressureTag>>;
 
 public:
@@ -44,13 +38,7 @@ public:
         this->addResult(retag<MeshState::DivExch>(data));
     }
 
-    /// Phase 2: DivP2 preprocessing kernel (from DivExchange barrier)
-    void execute(std::shared_ptr<MeshData<MeshState::DivP2Pre>> data) override {
-        fds_divergence_part_2_preprocessing(data->nm, data->dt);
-        this->addResult(retag<MeshState::GlobalMat>(data));
-    }
-
-    /// Phase 3: DivPart2 block kernel (from GlobalMatrix barrier)
+    /// Phase 2: DivPart2 block kernel (from DivExchangeTask)
     void execute(std::shared_ptr<MeshData<MeshState::DivPart2>> data) override {
         int kbar = fds_get_kbar(data->nm);
         fds_divergence_part_2_block_kernel(data->nm, data->dt, 1, kbar);

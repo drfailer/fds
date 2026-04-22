@@ -15,10 +15,8 @@ enum class MeshState {
     Pressure,             ///< Internal pressure pipeline + cycle-back
     SolvePhase,           ///< Routing to PressureSolveKernel (single-process)
     VelErrorPhase,        ///< Routing to VelocityErrorTask (single-process)
-    DivExch,              ///< PredDivParallel → DivExchange barrier
-    DivP2Pre,             ///< DivExchange barrier → PredDivParallel
-    GlobalMat,            ///< PredDivParallel → GlobalMatrix barrier
-    DivPart2,             ///< GlobalMatrix barrier → PredDivParallel
+    DivExch,              ///< PredPreforkDiv/CorrDivParallel → DivExchangeTask
+    DivPart2,             ///< DivExchangeTask → PredPreforkDiv/CorrDivParallel
     PreSolveExch,         ///< PressureParallel → pre-solve exchange
     PostSolveExch,        ///< PressureParallel → post-solve exchange
     MeshExch1,            ///< Exchange CODE 1: predictor density

@@ -36,8 +36,10 @@ struct ThreadBudget {
                                 //   Real OS threads = 2 × corrDivSetupCombPart (each HH thread owns AsyncWorker)
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
     size_t corrFinal;           // CorrFinalKernelTask          (MEDIUM) — merged VelCorr+VelBCEdges+RTE
-    size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivP2Pre+DivPart2
+    size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivPart2
 
+    // --- Shared: DivExchangeTask (pred & corr) ---
+    size_t divExchange;         // DivExchangeTask pool threads  (LIGHT) — DivP2Pre is ~283us/elem
 
     // --- Corrector fork2: {Radiation} || {Fork2DivP1} ---
     size_t corrFork2Radiation;  // CorrRadiationKernelTask (LIGHT)
@@ -95,7 +97,8 @@ struct ThreadBudget {
         b.corrDivSetupCombPart = solo(4);
         b.corrDivPart2      = solo(2);  // 604us/elem
         b.corrFinal         = solo(2);  // merged VelCorr(light)+VelBCEdges(medium)+RTE
-        b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivP2Pre+DivPart2 (heaviest is MEDIUM)
+        b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivPart2 (heaviest is MEDIUM)
+        b.divExchange       = solo(1);  // DivExchangeTask: DivP2Pre pool (LIGHT, ~283us/elem)
 
         // --- Corrector fork2: A{Radiation(1)} || B{Fork2DivP1(2)} ---
         {
@@ -122,6 +125,7 @@ struct ThreadBudget {
            << " divP2=" << corrDivPart2
            << " corrFinal=" << corrFinal
            << " divParallel=" << corrDivParallel << "\n"
+           << "  DivExchange: pool=" << divExchange << "\n"
            << "  Corr fork2: radiation=" << corrFork2Radiation
            << " divP1=" << corrFork2DivP1 << "\n"
            << "  Pressure:   parallel=" << pressureParallel << std::endl;

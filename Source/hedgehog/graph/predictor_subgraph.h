@@ -11,6 +11,7 @@
 #include "../task/mass_fd_kernel_task.h"
 #include "../task/div_setup_kernel_task.h"
 #include "../task/pred_prefork_div_task.h"
+#include "../task/div_exchange_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/velocity_predictor_kernel_task.h"
 #include "../task/velocity_bc_edges_task.h"
@@ -77,47 +78,28 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             });
 
         // Merged prefork + fork + divergence pipeline: DivP1Prefork +
-        // (DivSetup+PartMom || WallBC+DivP1Early) + DivP1Late + DivP2Pre + DivPart2.
+        // (DivSetup+PartMom || WallBC+DivP1Early) + DivP1Late + DivPart2.
         // AsyncWorker handles the fork internally — each Hedgehog thread owns a
         // worker thread, so real OS thread count = 2 × budget.predPreforkDiv.
         //
-        // Pipeline: PredPreforkDiv(Phase1) → DivExchange barrier
-        //   → PredPreforkDiv(Phase2) → GlobalMatrix barrier
-        //   → PredPreforkDiv(Phase3) → downstream
+        // Pipeline: PredPreforkDiv(Phase1) → DivExchangeTask (collect+parallel DivP2Pre)
+        //   → PredPreforkDiv(Phase2) → downstream
         auto predPreforkDivTask = std::make_shared<PredPreforkDivTask<PressureTag>>(
             budget.predPreforkDiv);
 
-        auto divExchangeBarrier = makeTerminableRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
-            nmeshes, "DivExchange",
-            "EXCH_DIV_INFO",
-            [](auto&) {
-                fds_exchange_divergence_info();
-            });
-
-        auto globalMatBarrier = makeTerminableRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
-            nmeshes, "GlobalMatrix+PressureInit",
-            "GLOBAL_MATRIX_REASSIGN\\nPRESSURE_INIT",
-            [useParallelPressure](auto&) {
-                fds_global_matrix_reassign(0);
-                if (useParallelPressure) {
-                    fds_pressure_iteration_init();
-                    fds_pressure_iteration_increment();
-                }
-            });
+        auto divExchangeTask = std::make_shared<DivExchangeTask<PressureTag>>(
+            nmeshes, budget.divExchange);
 
         subgraph->template output<MeshData<MeshState::MeshExch1>>(predStep1KernelTask);
         subgraph->template input<MeshData<MeshState::PostPredExch>>(postPredExchBarrier);
         subgraph->edges(postPredExchBarrier, predPreforkDivTask);
 
-        // PredPreforkDiv ↔ DivExchange ↔ PredPreforkDiv ↔ GlobalMatrix ↔ PredPreforkDiv
-        subgraph->edges(predPreforkDivTask, divExchangeBarrier);
-        subgraph->edges(divExchangeBarrier, predPreforkDivTask);
-        subgraph->edges(predPreforkDivTask, globalMatBarrier);
-        subgraph->edges(globalMatBarrier, predPreforkDivTask);
+        // PredPreforkDiv ↔ DivExchangeTask
+        subgraph->edges(predPreforkDivTask, divExchangeTask);
+        subgraph->edges(divExchangeTask, predPreforkDivTask);
 
         // TerminationData breaks structural cycle at shutdown
-        subgraph->template input<TerminationData>(divExchangeBarrier);
-        subgraph->template input<TerminationData>(globalMatBarrier);
+        subgraph->template input<TerminationData>(divExchangeTask);
 
         // Downstream: final output (MeshData<PressureTag>) → Pressure → VelPred
         if constexpr (useParallelPressure) {

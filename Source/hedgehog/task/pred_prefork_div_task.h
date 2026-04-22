@@ -8,7 +8,7 @@
 #include "../fds_fortran_interface.h"
 
 /// Merged predictor task: DivP1Prefork + Fork(DivSetup+PartMom || WallBC+DivP1Early)
-/// + DivP1Late + DivP2Pre + DivPart2.
+/// + DivP1Late + DivPart2.
 ///
 /// Phase 1 (MeshData<>):
 ///   1. DIV_P1_PREFORK (main thread, sequential)
@@ -18,27 +18,22 @@
 ///   3. Join: tu_aw_wait
 ///   4. DIV_P1_LATE_B → emits MeshData<DivExch>
 ///
-/// Phase 2 (MeshData<DivP2Pre>, from DivExchange barrier):
-///   DIV_P2_PREPROCESSING → emits MeshData<GlobalMat>
-///
-/// Phase 3 (MeshData<DivPart2>, from GlobalMatrix barrier):
+/// Phase 2 (MeshData<DivPart2>, from DivExchangeTask):
 ///   DIV_P2_BLOCK_KERNEL → emits MeshData<PressureTag>
 ///
 /// Each copy() creates its own AsyncWorker — no sharing between Hedgehog
 /// threads.  Real OS threads = 2 x numThreads (main + worker per thread).
 template<MeshState PressureTag = MeshState::Default>
 class PredPreforkDivTask
-    : public hh::AbstractTask<3,
+    : public hh::AbstractTask<2,
         MeshData<>,
-        MeshData<MeshState::DivP2Pre>,
         MeshData<MeshState::DivPart2>,
         MeshData<MeshState::DivExch>,
-        MeshData<MeshState::GlobalMat>,
         MeshData<PressureTag>> {
 
-    using TaskBase = hh::AbstractTask<3,
-        MeshData<>, MeshData<MeshState::DivP2Pre>, MeshData<MeshState::DivPart2>,
-        MeshData<MeshState::DivExch>, MeshData<MeshState::GlobalMat>,
+    using TaskBase = hh::AbstractTask<2,
+        MeshData<>, MeshData<MeshState::DivPart2>,
+        MeshData<MeshState::DivExch>,
         MeshData<PressureTag>>;
 
     TU_AsyncWorker worker_{};
@@ -82,13 +77,7 @@ public:
         this->addResult(retag<MeshState::DivExch>(data));
     }
 
-    /// Phase 2: DivP2 preprocessing (from DivExchange barrier)
-    void execute(std::shared_ptr<MeshData<MeshState::DivP2Pre>> data) override {
-        fds_divergence_part_2_preprocessing(data->nm, data->dt);
-        this->addResult(retag<MeshState::GlobalMat>(data));
-    }
-
-    /// Phase 3: DivPart2 block (from GlobalMatrix barrier)
+    /// Phase 2: DivPart2 block (from DivExchangeTask)
     void execute(std::shared_ptr<MeshData<MeshState::DivPart2>> data) override {
         int kbar = fds_get_kbar(data->nm);
         fds_divergence_part_2_block_kernel(data->nm, data->dt, 1, kbar);
@@ -108,9 +97,7 @@ public:
             << "       PARTICLE_MOMENTUM\\n"
             << "    B: WALL_BC, DIV_P1_EARLY_B\\n"
             << "  DIV_P1_LATE_B\\n"
-            << "Phase 2 (DivP2Pre):\\n"
-            << "  DIV_P2_PREPROCESSING\\n"
-            << "Phase 3 (DivPart2):\\n"
+            << "Phase 2 (DivPart2):\\n"
             << "  DIV_P2_BLOCK_KERNEL";
         return oss.str();
     }

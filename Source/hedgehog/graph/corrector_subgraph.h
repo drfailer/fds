@@ -17,6 +17,7 @@
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/corr_final_kernel_task.h"
 #include "../task/corr_div_parallel_task.h"
+#include "../task/div_exchange_task.h"
 #include "velocity_bc_subgraph.h"
 #include "../task/corr_radiation_kernel_task.h"
 #include "../task/pipeline_fork2_tasks.h"
@@ -184,27 +185,12 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
 
-        // Divergence pipeline: packed parallel task + 2 retagging barriers.
+        // Divergence pipeline: packed parallel task + DivExchangeTask.
         auto corrDivParallelTask = std::make_shared<CorrDivParallelTask<PressureTag>>(
             budget.corrDivParallel);
 
-        auto corrDivExchBarrier = makeTerminableRetaggingBarrier<MeshState::DivExch, MeshState::DivP2Pre>(
-            nmeshes, "DivExchange",
-            "EXCH_DIV_INFO",
-            [](auto&) {
-                fds_exchange_divergence_info();
-            });
-
-        auto corrGlobalMatBarrier = makeTerminableRetaggingBarrier<MeshState::GlobalMat, MeshState::DivPart2>(
-            nmeshes, "GlobalMatrix+PressureInit",
-            "GLOBAL_MATRIX_REASSIGN\\nPRES_INIT+INCR",
-            [useParallelPressure](auto&) {
-                fds_global_matrix_reassign(0);
-                if (useParallelPressure) {
-                    fds_pressure_iteration_init();
-                    fds_pressure_iteration_increment();
-                }
-            });
+        auto corrDivExchangeTask = std::make_shared<DivExchangeTask<PressureTag>>(
+            nmeshes, budget.divExchange);
 
         // Fork: Radiation starts immediately.
         //        DivP1 waits for Exchange(6)+InitDiv barrier.
@@ -214,14 +200,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         // Both branches join at fork2JoinTask.
         subgraph->edges(fork2DivP1Task, fork2JoinTask);
         subgraph->edges(fork2JoinTask, corrDivParallelTask);
-        subgraph->edges(corrDivParallelTask, corrDivExchBarrier);
-        subgraph->edges(corrDivExchBarrier, corrDivParallelTask);
-        subgraph->edges(corrDivParallelTask, corrGlobalMatBarrier);
-        subgraph->edges(corrGlobalMatBarrier, corrDivParallelTask);
 
-        // TerminationData breaks structural cycles at shutdown
-        subgraph->template input<TerminationData>(corrDivExchBarrier);
-        subgraph->template input<TerminationData>(corrGlobalMatBarrier);
+        // CorrDivParallel ↔ DivExchangeTask
+        subgraph->edges(corrDivParallelTask, corrDivExchangeTask);
+        subgraph->edges(corrDivExchangeTask, corrDivParallelTask);
+
+        // TerminationData breaks structural cycle at shutdown
+        subgraph->template input<TerminationData>(corrDivExchangeTask);
 
         // Downstream: final output (MeshData<PressureTag>) → Pressure → CorrFinalKernel
         if constexpr (useParallelPressure) {

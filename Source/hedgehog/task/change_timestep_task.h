@@ -105,6 +105,7 @@ public:
             dispatchParallel(change_timestep_detail::momDivBatch);
 
             fds_exchange_divergence_info();
+            // TODO: move this to parallel dispatch
             for (auto &md : collected_) {
                 fds_divergence_part_2_preprocessing(md->nm, md->dt);
             }
