@@ -33,7 +33,8 @@ enum class MeshState {
     PostCorrStep1,        ///< CorrStep1 phase → MeshExch4 barrier → DivSetupCombPart phase
     PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
     PostRadExch,          ///< MeshExch2 → exchange graph → post-radiation-exchange
-    PostWallBC            ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
+    PostWallBC,           ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
+    PostVelPred           ///< VelocityPredictor phase → ChangeTimeStepTask
 };
 
 /// Token type flowing through the Hedgehog dataflow graph.

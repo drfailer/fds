@@ -2,6 +2,7 @@
 #define VELOCITY_BC_EDGES_TASK_H
 
 #include <hedgehog/hedgehog.h>
+#include <sstream>
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
@@ -57,37 +58,73 @@ private:
     bool isCorrFinal_;
 };
 
-/// Merged predictor-final task: SyntheticTurbulence + VelocityBCEdges.
-/// Eliminates the PredFinal sub-graph and standalone SyntheticTurbulenceKernelTask.
+/// Merged predictor task: VelocityPredictor + SyntheticTurbulence + VelocityBCEdges.
 ///
-/// Calls (per mesh):
-///   1. SYNTHETIC_TURBULENCE_IF_ENABLED
-///   2. CC_VELOCITY_CUTFACES_TS (CC_IBM)
-///   3. MATCH_VELOCITY_KERNEL
-///   4. VELOCITY_BC_PREPROCESSING
-///   5. VELOCITY_BC_PROCESS_EDGES_KERNEL
-///   6. CC_VELOCITY_BC_TS (CC_IBM, DO_IBEDGES=TRUE)
+/// Phase 1 (MeshData<PressureTag>, from pressure iteration or DivPart2):
+///   VELOCITY_PREDICTOR_KERNEL, CC_PROJECT_VELOCITY, WALL_VELOCITY_NO_GRADH,
+///   CHECK_STABILITY → emits MeshData<PostVelPred> (to ChangeTimeStepTask)
+///
+/// Phase 2 (MeshData<PostPredVelExch>, from post-velocity-exchange barrier):
+///   SYNTHETIC_TURBULENCE, CC_VELOCITY_CUTFACES, MATCH_VELOCITY,
+///   VELOCITY_BC_PREPROCESSING, VELOCITY_BC_PROCESS_EDGES, CC_VELOCITY_BC
+///   → emits MeshData<> (to PhaseTransitionTask)
+template<MeshState PressureTag = MeshState::Default>
 class PredSynTurbVelBCTask
-    : public hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>> {
+    : public hh::AbstractTask<2,
+        MeshData<PressureTag>,                 // Phase 1: from pressure/DivP2
+        MeshData<MeshState::PostPredVelExch>,  // Phase 2: from post-vel-exchange
+        MeshData<MeshState::PostVelPred>,      // Phase 1 output
+        MeshData<>> {                          // Phase 2 output
+
+    using TaskBase = hh::AbstractTask<2,
+        MeshData<PressureTag>, MeshData<MeshState::PostPredVelExch>,
+        MeshData<MeshState::PostVelPred>, MeshData<>>;
+
 public:
     explicit PredSynTurbVelBCTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>>(
-              "PredSynTurbVelBCKernel", numThreads) {}
+        : TaskBase("PredSynTurbVelBCKernel", numThreads) {}
 
+    /// Phase 1: VelocityPredictor kernels → PostVelPred
+    void execute(std::shared_ptr<MeshData<PressureTag>> data) override {
+        fds_velocity_predictor_kernel_only(data->nm, data->dt);
+        fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 1);
+        fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 1);
+        fds_check_stability_kernel_only(data->nm, data->t + data->dt, data->dt);
+        this->addResult(retag<MeshState::PostVelPred>(data));
+    }
+
+    /// Phase 2: SyntheticTurbulence + VelocityBCEdges → MeshData<>
     void execute(std::shared_ptr<MeshData<MeshState::PostPredVelExch>> dataIn) override {
         auto data = retag<MeshState::Default>(dataIn);
         fds_synthetic_turbulence_if_enabled(data->dt, data->t, data->nm);
-        fds_cc_velocity_cutfaces_ts(data->nm, 1);  // applyToEstimated=1
+        fds_cc_velocity_cutfaces_ts(data->nm, 1);
         fds_match_velocity_kernel(data->nm, 1);
         fds_velocity_bc_preprocessing(data->nm, data->t, 1);
         fds_velocity_bc_process_edges_kernel(data->nm, data->t, 1);
-        fds_cc_velocity_bc_ts(data->t, data->nm, 1, 1);  // applyToEstimated=1, doIBEdges=1
+        fds_cc_velocity_bc_ts(data->t, data->nm, 1, 1);
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<MeshState::PostPredVelExch>, MeshData<>>>
-    copy() override {
-        return std::make_shared<PredSynTurbVelBCTask>(this->numberThreads());
+    std::shared_ptr<TaskBase> copy() override {
+        return std::make_shared<PredSynTurbVelBCTask<PressureTag>>(this->numberThreads());
+    }
+
+    [[nodiscard]] std::string extraPrintingInformation() const override {
+        std::ostringstream oss;
+        oss << "Threads: " << this->numberThreads() << "\\n"
+            << "Phase 1 (VelocityPredictor):\\n"
+            << "  VEL_PRED_KERNEL\\n"
+            << "  CC_PROJECT_VELOCITY\\n"
+            << "  WALL_VEL_NO_GRADH\\n"
+            << "  CHECK_STABILITY\\n"
+            << "Phase 2 (SynTurb+VelBC):\\n"
+            << "  SYNTHETIC_TURBULENCE\\n"
+            << "  CC_VEL_CUTFACES\\n"
+            << "  MATCH_VELOCITY\\n"
+            << "  VEL_BC_PREPROC\\n"
+            << "  VEL_BC_EDGES\\n"
+            << "  CC_VEL_BC";
+        return oss.str();
     }
 };
 

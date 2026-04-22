@@ -61,10 +61,10 @@ inline void velPredBatch(void *raw, TU_i64 batchIdx) {
 /// VelPred) use TU_ThreadPool with batched dispatch: pool threads + task
 /// thread = threadCount total parallelism.
 class ChangeTimeStepTask
-    : public hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch3>> {
+    : public hh::AbstractTask<1, MeshData<MeshState::PostVelPred>, MeshData<MeshState::MeshExch3>> {
 public:
     ChangeTimeStepTask(int nmeshes, size_t threadCount, bool ccIBM)
-        : hh::AbstractTask<1, MeshData<>, MeshData<MeshState::MeshExch3>>("ChangeTimeStep", 1),
+        : hh::AbstractTask<1, MeshData<MeshState::PostVelPred>, MeshData<MeshState::MeshExch3>>("ChangeTimeStep", 1),
           nmeshes_(nmeshes),
           nmOffset_(fds_get_lower_mesh_index()),
           threadCount_(static_cast<int>(threadCount)),
@@ -82,7 +82,8 @@ public:
         }
     }
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
+    void execute(std::shared_ptr<MeshData<MeshState::PostVelPred>> tagged) override {
+        auto data = retag<MeshState::Default>(tagged);
         collected_[data->nm - nmOffset_] = data;
         if (++count_ < nmeshes_) return;
         count_ = 0;

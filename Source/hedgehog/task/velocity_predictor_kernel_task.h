@@ -19,10 +19,10 @@
 ///   4. CHECK_STABILITY (CFL check)
 template<MeshState InS = MeshState::Default>
 class VelocityPredictorKernelTask
-    : public hh::AbstractTask<1, MeshData<InS>, MeshData<>> {
+    : public hh::AbstractTask<1, MeshData<InS>, MeshData<MeshState::PostVelPred>> {
 public:
     explicit VelocityPredictorKernelTask(size_t numThreads)
-        : hh::AbstractTask<1, MeshData<InS>, MeshData<>>(
+        : hh::AbstractTask<1, MeshData<InS>, MeshData<MeshState::PostVelPred>>(
               "VelocityPredictorKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<InS>> data) override {
@@ -30,14 +30,10 @@ public:
         fds_cc_project_velocity_kernel(data->nm, data->dt, 0, 1);
         fds_wall_velocity_no_gradh_kernel(data->nm, data->dt, 0, 1);
         fds_check_stability_kernel_only(data->nm, data->t + data->dt, data->dt);
-        if constexpr (InS == MeshState::Default) {
-            this->addResult(data);
-        } else {
-            this->addResult(retag<MeshState::Default>(data));
-        }
+        this->addResult(retag<MeshState::PostVelPred>(data));
     }
 
-    std::shared_ptr<hh::AbstractTask<1, MeshData<InS>, MeshData<>>>
+    std::shared_ptr<hh::AbstractTask<1, MeshData<InS>, MeshData<MeshState::PostVelPred>>>
     copy() override {
         return std::make_shared<VelocityPredictorKernelTask<InS>>(this->numberThreads());
     }
