@@ -4,7 +4,6 @@
 #include <hedgehog/hedgehog.h>
 #include <memory>
 #include "../data/mesh_data.h"
-#include "../data/barrier_data.h"
 #include "../data/termination_data.h"
 #include "../state/barrier_state.h"
 #include "../state/fork_join_state.h"
@@ -35,13 +34,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         MeshData<MeshState::PostParticleOps>, MeshData<MeshState::PostRadExch>, TerminationData,
         MeshData<>, MeshData<MeshState::CorrectorPressure>,
         MeshData<MeshState::MeshExch4>, MeshData<MeshState::MeshExch2>,
-        MeshData<MeshState::MeshExch7>, BarrierData>>("Corrector");
+        MeshData<MeshState::MeshExch7>>>("Corrector");
 
     // --- Kernel tasks (threads from budget) ---
 
-    auto corrFinalKernelTask = std::make_shared<CorrFinalKernelTask>(budget.corrFinal);
-
     bool ccIBM = fds_is_cc_ibm() != 0;
+
+    auto corrFinalKernelTask = std::make_shared<CorrFinalKernelTask>(budget.corrFinal);
     bool ht3d = fds_is_ht3d() != 0;
 
     constexpr bool useParallelPressure = (PressureTag != MeshState::Default);
@@ -223,26 +222,31 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
         }
     }
 
-    // --- CorrFinal: CorrFinalKernel ↔ CorrFinalOrch → CorrFinalDump ---
+    // --- CorrFinal: CorrFinalKernel ↔ Barrier ---
     //
-    // CorrFinalKernelTask has 3 phases via different input types:
-    //   Phase 1: MeshData<CorrectorPressure> → VelCorr → MeshData<PostVelCorr> → Orch
-    //   Phase 2: MeshData<> (from Orch) → VelBCEdges → MeshData<> → Dump
-    //   Phase 3: BarrierData (from Orch) → RTE → BarrierData → Dump
+    // CorrFinalKernelTask Phase 1: CorrectorPressure → VelCorr → PostVelCorr
+    // Barrier: collect N PostVelCorr, wall reset + CC_END_STEP + exchange(6), emit MeshData<>
+    // CorrFinalKernelTask Phase 2: MeshData<> → VelBCEdges → MeshData<> → subgraph output
 
-    auto corrFinalOrchTask = std::make_shared<CorrFinalOrchTask>(nmeshes, ccIBM);
-    auto corrFinalDumpTask = std::make_shared<CorrFinalDumpTask>(nmeshes);
+    int wallIncrement = fds_get_wall_increment();
+    auto corrFinalBarrier = makeTerminableRetaggingBarrier<
+        MeshState::PostVelCorr, MeshState::Default>(
+        nmeshes, "CorrFinalBarrier",
+        "RESET_WALL\\nCC_END_STEP\\nMESH_EXCHANGE(6)",
+        [ccIBM, wallIncrement](auto& meshes) {
+            if (meshes[0]->wall_counter == wallIncrement) {
+                fds_set_wall_counter(0);
+            }
+            if (ccIBM) { fds_cc_end_step(meshes[0]->t, meshes[0]->dt, 0); }
+            fds_mesh_exchange(6);
+        });
 
-    // CorrFinalKernel ↔ CorrFinalOrch cycle
-    subgraph->edges(corrFinalKernelTask, corrFinalOrchTask);  // MeshData<PostVelCorr>
-    subgraph->edges(corrFinalOrchTask, corrFinalKernelTask);  // MeshData<> + BarrierData
-    // CorrFinalKernel → CorrFinalDump
-    subgraph->edges(corrFinalKernelTask, corrFinalDumpTask);  // MeshData<> + BarrierData
+    subgraph->edges(corrFinalKernelTask, corrFinalBarrier);   // PostVelCorr
+    subgraph->edges(corrFinalBarrier, corrFinalKernelTask);   // MeshData<>
 
-    // TerminationData breaks CorrFinalKernel ↔ CorrFinalOrch cycle
-    subgraph->template input<TerminationData>(corrFinalOrchTask);
+    subgraph->template input<TerminationData>(corrFinalBarrier);
 
-    subgraph->outputs(corrFinalDumpTask);
+    subgraph->template output<MeshData<>>(corrFinalKernelTask);
 
     return subgraph;
 }

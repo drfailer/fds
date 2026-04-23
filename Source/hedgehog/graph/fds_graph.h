@@ -7,7 +7,6 @@
 #include "../data/mesh_data.h"
 #include "../data/barrier_data.h"
 #include "../data/termination_data.h"
-#include "../state/timestep_state.h"
 #include "../task/timestep_tasks.h"
 #include "../tool/thread_budget.h"
 #include "../exchange/mesh_dependency_graph.h"
@@ -20,14 +19,11 @@
 /// Build the FDS Hedgehog dataflow graph.
 ///
 /// The graph implements the FDS time-stepping loop as a dataflow pipeline:
-///   Predictor -> Corrector -> Dump fork -> TimestepState -> cycle back
+///   Predictor -> Corrector -> TimestepTask -> cycle back
 ///
-/// The dump phase uses a fork-join pattern:
-///   CorrFinalDumpTask forks into two parallel branches:
-///     - DumpGlobalTask (BarrierData): global computation + global file I/O
-///     - DumpMeshOutputsTask (MeshData<>): per-mesh file I/O (skipped on non-dump timesteps)
-///   TimestepState joins both branches, runs STOP_CHECK, then either cycles
-///   MeshData<> back to the predictor or emits BarrierData for termination.
+/// TimestepTask handles end-of-corrector work (RTE, reduce HRR/mass),
+/// dump I/O (global via AsyncWorker || per-mesh via ThreadPool), STOP_CHECK,
+/// and DT adjustment. Emits BarrierData for termination.
 ///
 /// @param nmeshes Number of meshes
 /// @param t Initial simulation time
@@ -47,19 +43,13 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget);
     auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget);
 
-    // --- Create dump + timestep loop ---
+    // --- Create timestep task ---
 
-    // Shared icyc counter between DumpTask (SET_DIAGNOSTICS) and TimestepState (SET_ICYC)
     auto icyc = std::make_shared<int>(1);
 
-    // Merged dump: global I/O (BarrierData) + per-mesh I/O (MeshData<>) in parallel
-    auto dumpTask = std::make_shared<DumpTask>(
-        static_cast<size_t>(nmeshes), icyc);
-
-    // Merged join + timestep loop: collects dump results, STOP_CHECK,
-    // then cycles MeshData<> back or emits BarrierData for termination.
-    auto timestepSM = std::make_shared<TimestepStateManager>(
-        std::make_shared<TimestepState>(nmeshes, tEnd, icyc), "Timestep");
+    // Merged timestep: RTE, reduce, dump (pool+async), stop_check, cycle.
+    auto timestepTask = std::make_shared<TimestepTask>(
+        nmeshes, static_cast<size_t>(nmeshes), tEnd, icyc);
 
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
@@ -79,8 +69,8 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
 
     // --- Wire the graph ---
 
-    // Input: MeshData<Init> -> TimestepState (INSERT_PARTICLES, then emit to Predictor)
-    graph->input<MeshData<MeshState::Init>>(timestepSM);
+    // Input: MeshData<Init> -> TimestepTask (first iteration, emit to Predictor)
+    graph->input<MeshData<MeshState::Init>>(timestepTask);
     // Input: TerminationData -> Predictor + Corrector + Exchange (for cycle termination)
     graph->input<TerminationData>(predictorSubgraph);
     graph->input<TerminationData>(correctorSubgraph);
@@ -97,15 +87,14 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     graph->edges(correctorSubgraph, exchGraph);
     graph->edges(exchGraph, correctorSubgraph);
 
-    // Corrector -> Dump (BarrierData + MeshData<>) -> TimestepState
-    graph->edges(correctorSubgraph, dumpTask);
-    graph->edges(dumpTask, timestepSM);
+    // Corrector -> TimestepTask (MeshData<>)
+    graph->edges(correctorSubgraph, timestepTask);
 
-    // Cycle: TimestepState -> back to Predictor (MeshData<>)
-    graph->edges(timestepSM, predictorSubgraph);
+    // Cycle: TimestepTask -> back to Predictor (MeshData<>)
+    graph->edges(timestepTask, predictorSubgraph);
 
-    // Graph output: TimestepState emits BarrierData when simulation is done
-    graph->outputs(timestepSM);
+    // Graph output: TimestepTask emits BarrierData when simulation is done
+    graph->outputs(timestepTask);
 
     // --- Pressure subgraph (when enabled) ---
     if (useParallelPressure) {

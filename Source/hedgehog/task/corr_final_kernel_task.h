@@ -4,38 +4,30 @@
 #include <hedgehog/hedgehog.h>
 #include <sstream>
 #include "../data/mesh_data.h"
-#include "../data/barrier_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Merged corrector-final kernel task: VelocityCorrector + VelocityBCEdges + RTESourceCorr.
+/// Corrector-final kernel task: VelocityCorrector + VelocityBCEdges.
 ///
-/// Three input types drive three phases of work:
+/// Two input types drive two phases of work:
 ///   1. MeshData<CorrectorPressure> — velocity corrector per-mesh kernels
-///      → emits MeshData<PostVelCorr> to CorrFinalOrch
-///   2. MeshData<> — velocity BC edges per-mesh kernels (from CorrFinalOrch)
-///      → emits MeshData<> to CorrFinalDump
-///   3. BarrierData — RTE source correction global call (from CorrFinalOrch)
-///      → emits BarrierData to CorrFinalDump
+///      → emits MeshData<PostVelCorr> to barrier
+///   2. MeshData<> — velocity BC edges per-mesh kernels (from barrier)
+///      → emits MeshData<> to TimestepTask (via subgraph output)
 ///
-/// No canTerminate() needed: CorrFinalOrch (the single-threaded cycle partner)
-/// receives TerminationData and terminates first, disconnecting from this task.
-/// Multi-threaded: phases 1 and 2 run per-mesh in parallel.
-/// Phase 3 runs once per timestep on whichever thread picks it up.
+/// Multi-threaded: both phases run per-mesh in parallel.
 class CorrFinalKernelTask
-    : public hh::AbstractTask<3,
+    : public hh::AbstractTask<2,
         MeshData<MeshState::CorrectorPressure>,
         MeshData<>,
-        BarrierData,
         MeshData<MeshState::PostVelCorr>,
-        MeshData<>,
-        BarrierData> {
+        MeshData<>> {
 public:
     explicit CorrFinalKernelTask(size_t numThreads)
-        : hh::AbstractTask<3,
+        : hh::AbstractTask<2,
               MeshData<MeshState::CorrectorPressure>,
-              MeshData<>, BarrierData,
+              MeshData<>,
               MeshData<MeshState::PostVelCorr>,
-              MeshData<>, BarrierData>(
+              MeshData<>>(
               "CorrFinalKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<MeshState::CorrectorPressure>> data) override {
@@ -61,16 +53,11 @@ public:
         this->addResult(data);
     }
 
-    void execute(std::shared_ptr<BarrierData> data) override {
-        fds_rte_source_correction();
-        this->addResult(data);
-    }
-
-    std::shared_ptr<hh::AbstractTask<3,
+    std::shared_ptr<hh::AbstractTask<2,
         MeshData<MeshState::CorrectorPressure>,
-        MeshData<>, BarrierData,
+        MeshData<>,
         MeshData<MeshState::PostVelCorr>,
-        MeshData<>, BarrierData>>
+        MeshData<>>>
     copy() override {
         return std::make_shared<CorrFinalKernelTask>(this->numberThreads());
     }
@@ -89,9 +76,7 @@ public:
             << "  MATCH_VELOCITY\\n"
             << "  VEL_BC_PREPROC+EDGES\\n"
             << "  CC_VEL_BC_TS\\n"
-            << "  UPDATE_DEVICES/HRR/MASS\\n"
-            << "Phase 3 (RTE):\\n"
-            << "  RTE_SOURCE_CORR";
+            << "  UPDATE_DEVICES/HRR/MASS";
         return oss.str();
     }
 };
