@@ -6,28 +6,40 @@
 #include "../data/mesh_data.h"
 #include "../fds_fortran_interface.h"
 
-/// Corrector-final kernel task: VelocityCorrector + VelocityBCEdges.
+/// Corrector-final kernel task: VelocityCorrector + VelocityBCEdges + QRAdd + DivPart2.
 ///
-/// Two input types drive two phases of work:
+/// Four input types drive four phases of work:
 ///   1. MeshData<CorrectorPressure> — velocity corrector per-mesh kernels
 ///      → emits MeshData<PostVelCorr> to barrier
 ///   2. MeshData<> — velocity BC edges per-mesh kernels (from barrier)
 ///      → emits MeshData<> to TimestepTask (via subgraph output)
+///   3. MeshData<PostDivJoin> — QR addition + WORK1 copy (from fork2 join, non-CC_IBM)
+///      → emits MeshData<DivExch> to DivExchangeTask
+///   4. MeshData<DivPart2> — divergence part 2 block kernel (from DivExchangeTask)
+///      → emits MeshData<CorrectorPressure> to pressure barrier or subgraph output
 ///
-/// Multi-threaded: both phases run per-mesh in parallel.
+/// Multi-threaded: all phases run per-mesh in parallel.
 class CorrFinalKernelTask
-    : public hh::AbstractTask<2,
+    : public hh::AbstractTask<4,
         MeshData<MeshState::CorrectorPressure>,
         MeshData<>,
+        MeshData<MeshState::PostDivJoin>,
+        MeshData<MeshState::DivPart2>,
         MeshData<MeshState::PostVelCorr>,
-        MeshData<>> {
+        MeshData<>,
+        MeshData<MeshState::DivExch>,
+        MeshData<MeshState::CorrectorPressure>> {
 public:
     explicit CorrFinalKernelTask(size_t numThreads)
-        : hh::AbstractTask<2,
+        : hh::AbstractTask<4,
               MeshData<MeshState::CorrectorPressure>,
               MeshData<>,
+              MeshData<MeshState::PostDivJoin>,
+              MeshData<MeshState::DivPart2>,
               MeshData<MeshState::PostVelCorr>,
-              MeshData<>>(
+              MeshData<>,
+              MeshData<MeshState::DivExch>,
+              MeshData<MeshState::CorrectorPressure>>(
               "CorrFinalKernel", numThreads) {}
 
     void execute(std::shared_ptr<MeshData<MeshState::CorrectorPressure>> data) override {
@@ -53,11 +65,27 @@ public:
         this->addResult(data);
     }
 
-    std::shared_ptr<hh::AbstractTask<2,
+    void execute(std::shared_ptr<MeshData<MeshState::PostDivJoin>> data) override {
+        fds_divergence_part_1_add_qr_b(data->nm);
+        fds_copy_work1_b_to_work1(data->nm);
+        this->addResult(retag<MeshState::DivExch>(data));
+    }
+
+    void execute(std::shared_ptr<MeshData<MeshState::DivPart2>> data) override {
+        int kbar = fds_get_kbar(data->nm);
+        fds_divergence_part_2_block_kernel(data->nm, data->dt, 1, kbar);
+        this->addResult(retag<MeshState::CorrectorPressure>(data));
+    }
+
+    std::shared_ptr<hh::AbstractTask<4,
         MeshData<MeshState::CorrectorPressure>,
         MeshData<>,
+        MeshData<MeshState::PostDivJoin>,
+        MeshData<MeshState::DivPart2>,
         MeshData<MeshState::PostVelCorr>,
-        MeshData<>>>
+        MeshData<>,
+        MeshData<MeshState::DivExch>,
+        MeshData<MeshState::CorrectorPressure>>>
     copy() override {
         return std::make_shared<CorrFinalKernelTask>(this->numberThreads());
     }
@@ -76,7 +104,12 @@ public:
             << "  MATCH_VELOCITY\\n"
             << "  VEL_BC_PREPROC+EDGES\\n"
             << "  CC_VEL_BC_TS\\n"
-            << "  UPDATE_DEVICES/HRR/MASS";
+            << "  UPDATE_DEVICES/HRR/MASS\\n"
+            << "Phase 3 (QRAddCopy):\\n"
+            << "  DIV_P1_ADD_QR\\n"
+            << "  COPY_WORK1_B\\n"
+            << "Phase 4 (DivPart2):\\n"
+            << "  DIV_P2_BLOCK_KERNEL";
         return oss.str();
     }
 };

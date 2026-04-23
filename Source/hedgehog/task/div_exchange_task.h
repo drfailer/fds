@@ -32,7 +32,7 @@ inline void divP2PreBatch(void *raw, TU_i64 batchIdx) {
 
 /// Merged DivExchange + DivP2Pre + GlobalMatrix task.
 ///
-/// Replaces 2 barriers and the DivP2Pre phase from PredPreforkDivTask/CorrDivParallelTask.
+/// Replaces 2 barriers and the DivP2Pre phase from PredPreforkDivTask/CorrFinalKernelTask.
 /// Collects N MeshData<DivExch>, runs:
 ///   1. fds_exchange_divergence_info() (local reduction + MPI_ALLREDUCE)
 ///   2. fds_divergence_part_2_preprocessing() per mesh (parallel via TU_ThreadPool)
@@ -40,7 +40,7 @@ inline void divP2PreBatch(void *raw, TU_i64 batchIdx) {
 ///   4. If parallel pressure: fds_pressure_iteration_init/increment
 /// Then emits N MeshData<DivPart2>.
 ///
-/// In a structural cycle with PredPreforkDivTask/CorrDivParallelTask — needs
+/// In a structural cycle with PredPreforkDivTask/CorrFinalKernelTask — needs
 /// TerminationData + canTerminate() for graph shutdown.
 template<MeshState PressureTag = MeshState::Default>
 class DivExchangeTask

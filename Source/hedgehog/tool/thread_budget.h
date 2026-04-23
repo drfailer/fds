@@ -35,8 +35,7 @@ struct ThreadBudget {
     size_t corrDivSetupCombPart;// CorrDivSetupCombPartTask      (HEAVY) — merged CorrStep1+Fork1(DivSetup||Comb)+ParticleOps
                                 //   Real OS threads = 2 × corrDivSetupCombPart (each HH thread owns AsyncWorker)
     size_t corrDivPart2;        // DivergencePart2KernelTask    (MEDIUM)
-    size_t corrFinal;           // CorrFinalKernelTask          (MEDIUM) — merged VelCorr+VelBCEdges+RTE
-    size_t corrDivParallel;     // CorrDivParallelTask           (MEDIUM) — merged QRAddCopy+DivPart2
+    size_t corrFinal;           // CorrFinalKernelTask          (MEDIUM) — merged VelCorr+VelBCEdges+QRAdd+DivPart2
 
     // --- Shared: DivExchangeTask (pred & corr) ---
     size_t divExchange;         // DivExchangeTask pool threads  (LIGHT) — DivP2Pre is ~283us/elem
@@ -95,8 +94,7 @@ struct ThreadBudget {
         // Brief 2× oversubscription during fork phase is acceptable.
         b.corrDivSetupCombPart = solo(4);
         b.corrDivPart2      = solo(2);  // 604us/elem
-        b.corrFinal         = solo(2);  // merged VelCorr(light)+VelBCEdges(medium)+RTE
-        b.corrDivParallel   = solo(2);  // merged QRAddCopy+DivPart2 (heaviest is MEDIUM)
+        b.corrFinal         = solo(2);  // merged VelCorr+VelBCEdges+QRAdd+DivPart2
         b.divExchange       = solo(1);  // DivExchangeTask: DivP2Pre pool (LIGHT, ~283us/elem)
 
         // --- Corrector fork2: radiation compute in CorrDivSetupCombPart, DivP1 standalone ---
@@ -118,8 +116,7 @@ struct ThreadBudget {
            << " retry=" << retryMomDiv << "\n"
            << "  Corrector:  divSetupCombPart=" << corrDivSetupCombPart << "(+aw)"
            << " divP2=" << corrDivPart2
-           << " corrFinal=" << corrFinal
-           << " divParallel=" << corrDivParallel << "\n"
+           << " corrFinal=" << corrFinal << "\n"
            << "  DivExchange: pool=" << divExchange << "\n"
            << "  Corr fork2: divP1=" << corrFork2DivP1 << "\n"
            << "  Pressure:   parallel=" << pressureParallel << std::endl;

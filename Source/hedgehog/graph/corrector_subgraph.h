@@ -15,7 +15,6 @@
 #include "../task/corr_div_part1_kernel_task.h"
 #include "../task/divergence_part2_kernel_task.h"
 #include "../task/corr_final_kernel_task.h"
-#include "../task/corr_div_parallel_task.h"
 #include "../task/div_exchange_task.h"
 #include "velocity_bc_subgraph.h"
 #include "../task/pipeline_fork2_tasks.h"
@@ -107,14 +106,14 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
     // Phase 3 emits PostWallBC (div path starts immediately) and MeshExch2
     // (radiation exchange). Fork2Join synchronizes both branches before QRAdd.
 
-    auto fork2JoinTask = std::make_shared<DualMeshJoinTask<MeshState::PostRadExch>>(
-        nmeshes, "Fork2Join");
-
     // MeshExch2 → exchange graph → PostRadExch → join
     subgraph->template output<MeshData<MeshState::MeshExch2>>(corrDivSetupCombPartTask);
-    subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
 
     if (ccIBM) {
+        auto fork2JoinTask = std::make_shared<DualMeshJoinTask<MeshState::PostRadExch>>(
+            nmeshes, "Fork2Join");
+        subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
+
         // Group B (CC_IBM): Exchange(6) barrier for back wall data (HT3D only).
         auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
             nmeshes, "MeshExch6a",
@@ -173,6 +172,13 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             subgraph->edges(corrPressureSM, corrFinalKernelTask);
         }
     } else {
+        // Non-CC_IBM: QRAdd+DivPart2 merged into CorrFinalKernelTask.
+        // Fork2Join emits PostDivJoin to route to the QRAdd phase.
+        auto fork2JoinTask = std::make_shared<DualMeshJoinTask<
+            MeshState::PostRadExch, MeshState::PostDivJoin>>(
+            nmeshes, "Fork2Join");
+        subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
+
         // Group B (non-CC_IBM): Exchange(6) [HT3D only] barrier.
         auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
             nmeshes, "MeshExch6a",
@@ -182,10 +188,6 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             });
 
         auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
-
-        // Divergence pipeline: packed parallel task + DivExchangeTask.
-        auto corrDivParallelTask = std::make_shared<CorrDivParallelTask<PressureTag>>(
-            budget.corrDivParallel);
 
         auto corrDivExchangeTask = std::make_shared<DivExchangeTask<PressureTag>>(
             nmeshes, budget.divExchange);
@@ -197,28 +199,30 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
         // Both branches join at fork2JoinTask.
         subgraph->edges(fork2DivP1Task, fork2JoinTask);
-        subgraph->edges(fork2JoinTask, corrDivParallelTask);
 
-        // CorrDivParallel ↔ DivExchangeTask
-        subgraph->edges(corrDivParallelTask, corrDivExchangeTask);
-        subgraph->edges(corrDivExchangeTask, corrDivParallelTask);
+        // Fork2Join → CorrFinalKernel QRAdd phase → DivExchangeTask cycle
+        subgraph->edges(fork2JoinTask, corrFinalKernelTask);
+        subgraph->edges(corrFinalKernelTask, corrDivExchangeTask);
+        subgraph->edges(corrDivExchangeTask, corrFinalKernelTask);
 
         // TerminationData breaks structural cycle at shutdown
         subgraph->template input<TerminationData>(corrDivExchangeTask);
 
-        // Downstream: final output (MeshData<PressureTag>) → Pressure → CorrFinalKernel
+        // Downstream: DivPart2 phase emits CorrectorPressure → Pressure → VelCorr phase
         if constexpr (useParallelPressure) {
-            subgraph->template output<MeshData<PressureTag>>(corrDivParallelTask);
+            subgraph->template output<MeshData<MeshState::CorrectorPressure>>(corrFinalKernelTask);
             subgraph->template input<MeshData<MeshState::CorrectorPressure>>(corrFinalKernelTask);
         } else {
-            auto corrPressureSM = makeRetaggingBarrier<MeshState::Default, MeshState::CorrectorPressure>(
+            auto corrPressureSM = makeTerminableRetaggingBarrier<
+                MeshState::CorrectorPressure, MeshState::CorrectorPressure>(
                 nmeshes, "CorrPressure",
                 "PRESSURE_ITERATION",
                 [](auto& meshes) {
                     fds_pressure_iteration(meshes[0]->t, meshes[0]->dt);
                 });
-            subgraph->edges(corrDivParallelTask, corrPressureSM);
+            subgraph->edges(corrFinalKernelTask, corrPressureSM);
             subgraph->edges(corrPressureSM, corrFinalKernelTask);
+            subgraph->template input<TerminationData>(corrPressureSM);
         }
     }
 

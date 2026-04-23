@@ -669,14 +669,14 @@ inline auto makeTerminableEagerDualMeshBarrier(int nmeshes, std::string name,
 
 /// Non-terminable dual-mesh join barrier.
 /// Collects N MeshData<> (primary) + N MeshData<InS> (secondary).
-/// Emits N MeshData<> when BOTH sets are complete.
+/// Emits N MeshData<OutS> when BOTH sets are complete.
 /// No barrier function — pure synchronization point.
-template<MeshState InS>
+template<MeshState InS, MeshState OutS = MeshState::Default>
 class DualMeshJoinTask
-    : public hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<>> {
+    : public hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<OutS>> {
 public:
     DualMeshJoinTask(int nmeshes, std::string name)
-        : hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<>>(
+        : hh::AbstractTask<2, MeshData<>, MeshData<InS>, MeshData<OutS>>(
               std::move(name), 1),
           nmeshes_(nmeshes),
           nmOffset_(fds_get_lower_mesh_index()) {
@@ -709,8 +709,10 @@ private:
             secondaryDone_ = false;
             primaryCount_ = 0;
             secondaryCount_ = 0;
-            this->batchAddResult(collected_);
-            for (auto &md : collected_) { md = nullptr; }
+            for (auto &md : collected_) {
+                this->addResult(retag<OutS>(md));
+                md = nullptr;
+            }
         }
     }
 
