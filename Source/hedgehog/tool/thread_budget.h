@@ -40,9 +40,6 @@ struct ThreadBudget {
     // --- Shared: DivExchangeTask (pred & corr) ---
     size_t divExchange;         // DivExchangeTask pool threads  (LIGHT) — DivP2Pre is ~283us/elem
 
-    // --- Corrector fork2: {RadiationExchange} || {DivP1} ---
-    size_t corrFork2DivP1;      // Fork2DivP1KernelTask    (MEDIUM)
-
     // --- Pressure iteration (shared by pred & corr instances) ---
     size_t pressureParallel;    // PressureParallelTask          (HEAVY) — merged Baroclinic+Solve+VelError
 
@@ -97,9 +94,6 @@ struct ThreadBudget {
         b.corrFinal         = solo(2);  // merged VelCorr+VelBCEdges+QRAdd+DivPart2
         b.divExchange       = solo(1);  // DivExchangeTask: DivP2Pre pool (LIGHT, ~283us/elem)
 
-        // --- Corrector fork2: radiation compute in CorrDivSetupCombPart, DivP1 standalone ---
-        b.corrFork2DivP1 = solo(2);
-
         // --- Pressure iteration ---
         b.pressureParallel = solo(4);
 
@@ -118,7 +112,6 @@ struct ThreadBudget {
            << " divP2=" << corrDivPart2
            << " corrFinal=" << corrFinal << "\n"
            << "  DivExchange: pool=" << divExchange << "\n"
-           << "  Corr fork2: divP1=" << corrFork2DivP1 << "\n"
            << "  Pressure:   parallel=" << pressureParallel << std::endl;
     }
 };

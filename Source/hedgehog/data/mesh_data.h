@@ -34,6 +34,8 @@ enum class MeshState {
     PostHvac,             ///< HvacCalc barrier → CorrDivSetupCombPartTask WallBC phase
     PostRadExch,          ///< MeshExch2 → exchange graph → post-radiation-exchange
     PostDivJoin,          ///< Fork2Join → CorrFinalKernelTask QRAdd phase (non-CC_IBM)
+    PreDivP1,             ///< MeshExch6a barrier → CorrFinalKernelTask DivP1 phase (non-CC_IBM)
+    PostDivP1,            ///< CorrFinalKernelTask DivP1 phase → Fork2Join primary (non-CC_IBM)
     PostWallBC,           ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
     PostVelPred           ///< VelocityPredictor phase → ChangeTimeStepTask
 };

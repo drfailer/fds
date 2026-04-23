@@ -17,7 +17,6 @@
 #include "../task/corr_final_kernel_task.h"
 #include "../task/div_exchange_task.h"
 #include "velocity_bc_subgraph.h"
-#include "../task/pipeline_fork2_tasks.h"
 #include "../tool/thread_budget.h"
 
 /// Build the Corrector sub-graph.
@@ -172,40 +171,42 @@ inline auto buildCorrectorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
             subgraph->edges(corrPressureSM, corrFinalKernelTask);
         }
     } else {
-        // Non-CC_IBM: QRAdd+DivPart2 merged into CorrFinalKernelTask.
+        // Non-CC_IBM: DivP1+QRAdd+DivPart2 all merged into CorrFinalKernelTask.
         // Fork2Join emits PostDivJoin to route to the QRAdd phase.
-        auto fork2JoinTask = std::make_shared<DualMeshJoinTask<
-            MeshState::PostRadExch, MeshState::PostDivJoin>>(
+        // Terminable: in structural cycle with CorrFinalKernelTask (PostDivP1 → join → PostDivJoin).
+        auto fork2JoinTask = std::make_shared<TerminableDualMeshJoinTask<
+            MeshState::PostRadExch, MeshState::PostDivJoin, MeshState::PostDivP1>>(
             nmeshes, "Fork2Join");
         subgraph->template input<MeshData<MeshState::PostRadExch>>(fork2JoinTask);
 
         // Group B (non-CC_IBM): Exchange(6) [HT3D only] barrier.
-        auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::Default>(
+        // Retags to PreDivP1 for routing to CorrFinalKernel DivP1 phase.
+        auto groupBPostSM = makeRetaggingBarrier<MeshState::PostWallBC, MeshState::PreDivP1>(
             nmeshes, "MeshExch6a",
             "MESH_EXCHANGE(6) [HT3D]",
             [ht3d](auto& meshes) {
                 if (ht3d && meshes[0]->call_ht_1d) { fds_mesh_exchange(6); }
             });
 
-        auto fork2DivP1Task = std::make_shared<Fork2DivP1KernelTask>(budget.corrFork2DivP1);
-
         auto corrDivExchangeTask = std::make_shared<DivExchangeTask<PressureTag>>(
             nmeshes, budget.divExchange);
 
         // Fork: Radiation starts immediately.
-        //        DivP1 waits for Exchange(6)+InitDiv barrier.
+        //        DivP1 waits for Exchange(6) barrier → CorrFinalKernel DivP1 phase.
         subgraph->edges(corrDivSetupCombPartTask, groupBPostSM);
-        subgraph->edges(groupBPostSM, fork2DivP1Task);
+        subgraph->edges(groupBPostSM, corrFinalKernelTask);
 
-        // Both branches join at fork2JoinTask.
-        subgraph->edges(fork2DivP1Task, fork2JoinTask);
+        // DivP1 phase emits PostDivP1 → fork2JoinTask primary input.
+        // Both branches (DivP1 + radiation) join at fork2JoinTask.
+        subgraph->edges(corrFinalKernelTask, fork2JoinTask);
 
         // Fork2Join → CorrFinalKernel QRAdd phase → DivExchangeTask cycle
         subgraph->edges(fork2JoinTask, corrFinalKernelTask);
         subgraph->edges(corrFinalKernelTask, corrDivExchangeTask);
         subgraph->edges(corrDivExchangeTask, corrFinalKernelTask);
 
-        // TerminationData breaks structural cycle at shutdown
+        // TerminationData breaks structural cycles at shutdown
+        subgraph->template input<TerminationData>(fork2JoinTask);
         subgraph->template input<TerminationData>(corrDivExchangeTask);
 
         // Downstream: DivPart2 phase emits CorrectorPressure → Pressure → VelCorr phase
