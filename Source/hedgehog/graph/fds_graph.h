@@ -14,6 +14,7 @@
 #include "../exchange/exchange_dispatch.h"
 #include "predictor_subgraph.h"
 #include "corrector_subgraph.h"
+#include "compute_subgraph.h"
 #include "pressure_iteration_subgraph.h"
 
 /// Build the FDS Hedgehog dataflow graph.
@@ -39,24 +40,12 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     using GraphType = hh::Graph<2, MeshData<MeshState::Init>, TerminationData, BarrierData>;
     auto graph = std::make_shared<GraphType>("FDS Hedgehog Graph");
 
-    // --- Create phase sub-graphs ---
-    auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget);
-    auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget);
-
-    // --- Create timestep task ---
-
     auto icyc = std::make_shared<int>(1);
-
-    // Merged timestep: RTE, reduce, dump (pool+async), stop_check, cycle.
     auto timestepTask = std::make_shared<TimestepTask>(
         nmeshes, static_cast<size_t>(nmeshes), tEnd, icyc);
 
     bool useParallelPressure = fds_use_pressure_subgraph() != 0;
 
-    // --- Exchange graph: handles all dependency-aware mesh exchanges ---
-    // MeshExch4 (corrector density) is always active.
-    // PreSolveExch/PostSolveExch (pressure) edges only wired when parallel pressure is on;
-    // unused types sit idle until TerminationData.
     auto exchGraph = std::make_shared<ExchangeGraph<
         ExchKind<MeshState::MeshExch1, MeshState::PostPredExch>,
         ExchKind<MeshState::MeshExch2, MeshState::PostRadExch>,
@@ -67,53 +56,62 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
         ExchKind<MeshState::PostSolveExch, MeshState::VelErrorPhase>>>(
         depGraph, commService, "Exchange");
 
-    // --- Wire the graph ---
-
-    // Input: MeshData<Init> -> TimestepTask (first iteration, emit to Predictor)
     graph->input<MeshData<MeshState::Init>>(timestepTask);
-    // Input: TerminationData -> Predictor + Corrector + Exchange (for cycle termination)
-    graph->input<TerminationData>(predictorSubgraph);
-    graph->input<TerminationData>(correctorSubgraph);
     graph->input<TerminationData>(exchGraph);
-
-    // Predictor -> Corrector (MeshData<> only; PredPressure routes elsewhere)
-    graph->edges(predictorSubgraph, correctorSubgraph);
-
-    // Predictor ↔ Exchange (MeshExch1 out, PostPredExch back)
-    graph->edges(predictorSubgraph, exchGraph);
-    graph->edges(exchGraph, predictorSubgraph);
-
-    // Corrector ↔ Exchange (MeshExch4 out, PostCorrStep1 back)
-    graph->edges(correctorSubgraph, exchGraph);
-    graph->edges(exchGraph, correctorSubgraph);
-
-    // Corrector -> TimestepTask (MeshData<>)
-    graph->edges(correctorSubgraph, timestepTask);
-
-    // Cycle: TimestepTask -> back to Predictor (MeshData<>)
-    graph->edges(timestepTask, predictorSubgraph);
-
-    // Graph output: TimestepTask emits BarrierData when simulation is done
     graph->outputs(timestepTask);
 
-    // --- Pressure subgraph (when enabled) ---
-    if (useParallelPressure) {
-        auto pressureSubgraph = buildPressureIterationSubgraph(
-            nmeshes, budget, fds_get_pres_flag());
+    bool ccIBM = fds_is_cc_ibm() != 0;
 
-        graph->input<TerminationData>(pressureSubgraph);
+    if (!ccIBM) {
+        // --- Two-lane compute subgraph (non-CC_IBM) ---
+        auto computeSubgraph = buildComputeSubgraph(nmeshes, budget);
 
-        // Predictor <-> PressureSubgraph (PredPressure)
-        graph->edges(predictorSubgraph, pressureSubgraph);
-        graph->edges(pressureSubgraph, predictorSubgraph);
+        graph->input<TerminationData>(computeSubgraph);
 
-        // Corrector <-> PressureSubgraph (CorrPressure)
-        graph->edges(correctorSubgraph, pressureSubgraph);
-        graph->edges(pressureSubgraph, correctorSubgraph);
+        // TimestepTask ↔ Compute (MeshData<> cycle)
+        graph->edges(timestepTask, computeSubgraph);
+        graph->edges(computeSubgraph, timestepTask);
 
-        // PressureSubgraph <-> ExchangeGraph (PreSolveExch/PostSolveExch <-> SolvePhase/VelErrorPhase)
-        graph->edges(pressureSubgraph, exchGraph);
-        graph->edges(exchGraph, pressureSubgraph);
+        // Compute ↔ Exchange (MeshExch1-7 out, Post*Exch back)
+        graph->edges(computeSubgraph, exchGraph);
+        graph->edges(exchGraph, computeSubgraph);
+
+        if (useParallelPressure) {
+            auto pressureSubgraph = buildPressureIterationSubgraph(
+                nmeshes, budget, fds_get_pres_flag());
+            graph->input<TerminationData>(pressureSubgraph);
+            graph->edges(computeSubgraph, pressureSubgraph);
+            graph->edges(pressureSubgraph, computeSubgraph);
+            graph->edges(pressureSubgraph, exchGraph);
+            graph->edges(exchGraph, pressureSubgraph);
+        }
+    } else {
+        // --- CC_IBM: separate predictor + corrector subgraphs ---
+        auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget);
+        auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget);
+
+        graph->input<TerminationData>(predictorSubgraph);
+        graph->input<TerminationData>(correctorSubgraph);
+
+        graph->edges(predictorSubgraph, correctorSubgraph);
+        graph->edges(predictorSubgraph, exchGraph);
+        graph->edges(exchGraph, predictorSubgraph);
+        graph->edges(correctorSubgraph, exchGraph);
+        graph->edges(exchGraph, correctorSubgraph);
+        graph->edges(correctorSubgraph, timestepTask);
+        graph->edges(timestepTask, predictorSubgraph);
+
+        if (useParallelPressure) {
+            auto pressureSubgraph = buildPressureIterationSubgraph(
+                nmeshes, budget, fds_get_pres_flag());
+            graph->input<TerminationData>(pressureSubgraph);
+            graph->edges(predictorSubgraph, pressureSubgraph);
+            graph->edges(pressureSubgraph, predictorSubgraph);
+            graph->edges(correctorSubgraph, pressureSubgraph);
+            graph->edges(pressureSubgraph, correctorSubgraph);
+            graph->edges(pressureSubgraph, exchGraph);
+            graph->edges(exchGraph, pressureSubgraph);
+        }
     }
 
     return graph;

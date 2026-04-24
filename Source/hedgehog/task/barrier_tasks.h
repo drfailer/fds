@@ -18,21 +18,25 @@
 // which merges collector + barrier into a single MeshData<>→MeshData<> state node.
 // ---------------------------------------------------------------------------
 
-/// Merged collector + phase transition: collects N MeshData<>, runs phase
+/// Merged collector + phase transition: collects N MeshData<InS>, runs phase
 /// transition (CORRECTOR=TRUE, advance T, zero arrays, obstructions), then
-/// re-emits N MeshData<> with updated t and phase=1.
-/// Replaces separate CollectorTask + PhaseTransitionTask.
-class PhaseTransitionTask : public hh::AbstractTask<1, MeshData<>, MeshData<>> {
+/// re-emits N MeshData<OutS> with updated t and phase=1.
+///
+/// Template defaults (InS=Default, OutS=Default) preserve backward compatibility.
+/// Two-lane compute subgraph uses PhaseTransitionTask<PredFinalOutput, CorrInput>.
+template<MeshState InS = MeshState::Default, MeshState OutS = MeshState::Default>
+class PhaseTransitionTask
+    : public hh::AbstractTask<1, MeshData<InS>, MeshData<OutS>> {
 public:
     explicit PhaseTransitionTask(int nmeshes)
-        : hh::AbstractTask<1, MeshData<>, MeshData<>>("PhaseTransition", 1),
+        : hh::AbstractTask<1, MeshData<InS>, MeshData<OutS>>("PhaseTransition", 1),
           nmeshes_(nmeshes), nmOffset_(fds_get_lower_mesh_index()),
           wallCounter_(fds_get_wall_counter()),
           wallIncrement_(fds_get_wall_increment()) {
         collected_.resize(nmeshes, nullptr);
     }
 
-    void execute(std::shared_ptr<MeshData<>> data) override {
+    void execute(std::shared_ptr<MeshData<InS>> data) override {
         collected_[data->nm - nmOffset_] = data;
         if (++count_ == nmeshes_) {
             auto t0 = std::chrono::steady_clock::now();
@@ -57,8 +61,15 @@ public:
                 md->phase = 1;  // corrector
                 md->wall_counter = wc;
             }
-            this->batchAddResult(collected_);
-            for (auto &md : collected_) { md = nullptr; }
+            if constexpr (InS == OutS) {
+                this->batchAddResult(collected_);
+                for (auto &md : collected_) { md = nullptr; }
+            } else {
+                for (auto &md : collected_) {
+                    this->addResult(retag<OutS>(md));
+                    md = nullptr;
+                }
+            }
             count_ = 0;
         }
     }
@@ -80,7 +91,7 @@ private:
     int wallCounter_, wallIncrement_;
     double totalTime_ = 0.0;
     int invocations_ = 0;
-    std::vector<std::shared_ptr<MeshData<>>> collected_;
+    std::vector<std::shared_ptr<MeshData<InS>>> collected_;
 };
 
 #endif // BARRIER_TASKS_H

@@ -51,7 +51,7 @@ inline auto buildPredictorSubgraphImpl(int nmeshes, const ThreadBudget &budget) 
 
     // --- PredFinal: merged VelPred+SynTurb+VelBC kernel → PhaseTransition ---
     auto predSynTurbVelBCTask = std::make_shared<PredSynTurbVelBCTask<PressureTag>>(budget.predSynTurbVelBC);
-    auto phaseTransTask = std::make_shared<PhaseTransitionTask>(nmeshes);
+    auto phaseTransTask = std::make_shared<PhaseTransitionTask<>>(nmeshes);
 
     // --- Wire the sub-graph ---
 

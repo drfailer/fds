@@ -37,7 +37,11 @@ enum class MeshState {
     PreDivP1,             ///< MeshExch6a barrier → CorrFinalKernelTask DivP1 phase (non-CC_IBM)
     PostDivP1,            ///< CorrFinalKernelTask DivP1 phase → Fork2Join primary (non-CC_IBM)
     PostWallBC,           ///< CorrDivSetupCombPartTask WallBC phase → Fork2 (radiation || DivP1)
-    PostVelPred           ///< VelocityPredictor phase → ChangeTimeStepTask
+    PostVelPred,          ///< VelocityPredictor phase → ChangeTimeStepTask
+    CorrInput,            ///< PhaseTransition → ForkableParallelComputeLane C1 phase
+    PostCorrFinalBarrier, ///< CorrFinalBarrier → ParallelComputeLane C8 phase
+    PredFinalOutput,      ///< ParallelComputeLane P5 → PhaseTransition
+    PredDivP2Out          ///< ParallelComputeLane P3 → PredPressure barrier (non-subgraph)
 };
 
 /// Token type flowing through the Hedgehog dataflow graph.
