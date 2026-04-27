@@ -58,7 +58,7 @@ CUTFACES_IF : IF (CUTFACES) THEN ! USE CUT_FACE(ICF)%VEL_CF
       END SELECT
    ENDDO
 
-   PREDFCT = 0._EB; IF(PREDICTOR) PREDFCT = 1._EB
+   PREDFCT = 0._EB; IF(M%PREDICTOR) PREDFCT = 1._EB
    ! CFACEs, set velocity in underlaying solid cartesian faces to be used in VELOCITY_FLUX:
    DO ICF=1,M%N_CUTFACE_MESH
       CF => M%CUT_FACE(ICF); IF(CF%STATUS/=CC_INBOUNDARY) CYCLE
@@ -283,7 +283,7 @@ REAL(EB) :: NU_EDDY,DELTA,A_IJ(3,3), &
 ! Dummy assignments:
 I    = 0
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    RHOP => M%RHO
    UU   => M%U
    VV   => M%V

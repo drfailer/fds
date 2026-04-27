@@ -113,6 +113,7 @@ public:
 
     /// P1: PredStep1 kernels → MeshExch1
     void execute(std::shared_ptr<MeshData<>> data) override {
+        fds_set_mesh_predictor(data->nm, 1);
         fds_insert_particles(data->t, data->nm);
         fds_compute_viscosity_kernel(data->nm, 0);
         fds_mass_finite_differences_kernel(data->nm);
@@ -149,6 +150,7 @@ public:
     /// C1: CorrStep1 kernels → MeshExch4
     void execute(std::shared_ptr<MeshData<MeshState::CorrInput>> tagged) override {
         auto data = retag<MeshState::Default>(tagged);
+        fds_set_mesh_predictor(data->nm, 0);
         fds_compute_viscosity_kernel(data->nm, 1);
         fds_mass_finite_differences_kernel(data->nm);
         fds_density_kernel(data->nm, data->t, data->dt);

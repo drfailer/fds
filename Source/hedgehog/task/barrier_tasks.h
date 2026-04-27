@@ -43,7 +43,7 @@ public:
             double t = collected_[0]->t;
             double dt = collected_[0]->dt;
 
-            fds_set_predictor(0);  // CORRECTOR=TRUE, PREDICTOR=FALSE
+            fds_set_predictor(0);
             t += dt;
             fds_create_or_remove_obstructions(t, dt);
 

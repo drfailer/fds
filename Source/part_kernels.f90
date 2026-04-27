@@ -35,7 +35,7 @@ IF (M%NLP==0) RETURN
 
 RDT = 1._EB/DT
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    UU => M%U
    VV => M%V
    WW => M%W
@@ -91,7 +91,7 @@ IF (M%NLP==0) RETURN
 
 RDT = 1._EB/DT
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    UU => M%U
    VV => M%V
    WW => M%W

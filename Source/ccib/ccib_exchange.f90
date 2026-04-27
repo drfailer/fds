@@ -317,7 +317,7 @@ SENDING_MESH_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       ENDIF
 
       ! Exchange velocity, momentum rhs and previous substep dH/Dx1 for cut-faces, in PREDICTOR, IBM forcing:
-      IF (CODE==5 .AND. PREDICTOR .AND. M3%NICF_S(1)>0) THEN
+      IF (CODE==5 .AND. M%PREDICTOR .AND. M3%NICF_S(1)>0) THEN
          NQT2 = 4
          LL   = 0
          IF (RNODE/=SNODE) THEN
@@ -522,7 +522,7 @@ SENDING_MESH_LOOP_2: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
 
 
       ! Exchange velocity, momentum rhs and previous substep dH/Dx1 for cut-faces, in CORRECTOR, IBM forcing:
-      IF (CODE==5 .AND. CORRECTOR .AND. M3%NICF_S(1)>0) THEN
+      IF (CODE==5 .AND. M%CORRECTOR .AND. M3%NICF_S(1)>0) THEN
          NQT2 = 4
          LL   = 0
          IF (RNODE/=SNODE) THEN
@@ -899,7 +899,7 @@ RECV_MESH_LOOP: DO NOM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
                      CF%FN_OMESH(JCF)   = M2%REAL_RECV_PKG112(NQT2*(LL-1)+1)
                      ICC =CF%CELL_LIST(2, LOW_IND,JCF); JCC =CF%CELL_LIST(3, LOW_IND,JCF)
                      ICC1=CF%CELL_LIST(2,HIGH_IND,JCF); JCC1=CF%CELL_LIST(3,HIGH_IND,JCF)
-                     IF(PREDICTOR) THEN
+                     IF(M%PREDICTOR) THEN
                         MESHES(NM)%CUT_CELL(ICC )%H(JCC )  = M2%REAL_RECV_PKG112(NQT2*(LL-1)+2)
                         MESHES(NM)%CUT_CELL(ICC1)%H(JCC1)  = M2%REAL_RECV_PKG112(NQT2*(LL-1)+3)
                      ELSE
@@ -1103,7 +1103,7 @@ TYPE(CC_CUTCELL_TYPE), POINTER :: OCC
 INTEGER :: NM,NOM,NN,ICC,JCC,IW,IIO,JJO,KKO
 
 ! Here inject OMESH cut-cell info obtained in MESH_CC_EXCHANGE into ghost-cell cc containers:
-PRFCT = 0._EB; IF (PREDICTOR) PRFCT = 1._EB
+PRFCT = 0._EB; IF (MESHES(LOWER_MESH_INDEX)%PREDICTOR) PRFCT = 1._EB
 MESH_LOOP : DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
    CALL POINT_TO_MESH(NM)
    EXTERNAL_WALL_LOOP : DO IW=1,N_EXTERNAL_WALL_CELLS
@@ -1149,7 +1149,7 @@ MESH_LOOP : DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       ENDDO
       ! Add volume averaged variables into ghost cut-cell:
       ICC   = CCVAR(BC%II,BC%JJ,BC%KK,CC_IDCC)
-      IF (PREDICTOR) THEN
+      IF (MESHES(NM)%PREDICTOR) THEN
          DO JCC=1,CUT_CELL(ICC)%NCELL
             CUT_CELL(ICC)%RHOS(JCC) = RHO_CC/VOL
             CUT_CELL(ICC)%TMP(JCC)  = TMP_CC/VOL

@@ -556,7 +556,7 @@ SCALAR_FLUX_IF: IF (PRESENT(OPT_N)) THEN
    RHO_D_DZDY=>M%SWORK2
    RHO_D_DZDZ=>M%SWORK3
 
-   IF (PREDICTOR) THEN
+   IF (M%PREDICTOR) THEN
       UU=>M%U
       VV=>M%V
       WW=>M%W
@@ -636,7 +636,7 @@ ELSE SCALAR_FLUX_IF
    KDTDY=>M%WORK2
    KDTDZ=>M%WORK3
 
-   IF (PREDICTOR) THEN
+   IF (M%PREDICTOR) THEN
       UU=>M%U
       VV=>M%V
       WW=>M%W
@@ -747,7 +747,7 @@ REAL(EB), PARAMETER :: ALPHA = 6.0_EB ! See Lund, 1997 CTR briefs.
 ! is important because we overwrite pointers several times to conserve memory.
 ! *****************************************************************************
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    UU=>M%U
    VV=>M%V
    WW=>M%W
@@ -1003,7 +1003,7 @@ IBP1L = M%IBP1; JBP1L = M%JBP1; KBP1L = M%KBP1
 ! is important because we overwrite pointers several times to conserve memory.
 ! *****************************************************************************
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    LRHOP=>M%RHO
 ELSE
    LRHOP=>M%RHOS

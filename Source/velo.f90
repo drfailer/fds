@@ -344,7 +344,7 @@ CALL POINT_TO_MESH(NM)
 
 RFODT = RELAXATION_FACTOR/DT
 
-IF (PREDICTOR) THEN
+IF (MESHES(NM)%PREDICTOR) THEN
    HP => H
 ELSE
    HP => HS
@@ -357,7 +357,7 @@ DO IW=1,N_EXTERNAL_WALL_CELLS
    NOM =EWC%NOM
    IF (NOM==0) CYCLE
    WC=>WALL(IW)
-   IF (PREDICTOR) THEN
+   IF (MESHES(NM)%PREDICTOR) THEN
       OM_HP=>OMESH(NOM)%H
    ELSE
       OM_HP=>OMESH(NOM)%HS
@@ -390,7 +390,7 @@ OBST_LOOP: DO N=1,N_OBST
             IC1 = CELL_INDEX(I,J,K)
             IC2 = CELL_INDEX(I+1,J,K)
             IF (CELL(IC1)%SOLID .AND. CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (MESHES(NM)%PREDICTOR) THEN
                   DUUDT = -RFODT*U(I,J,K)
                ELSE
                   DUUDT = -RFODT*(U(I,J,K)+US(I,J,K))
@@ -407,7 +407,7 @@ OBST_LOOP: DO N=1,N_OBST
             IC1 = CELL_INDEX(I,J,K)
             IC2 = CELL_INDEX(I,J+1,K)
             IF (CELL(IC1)%SOLID .AND. CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (MESHES(NM)%PREDICTOR) THEN
                   DVVDT = -RFODT*V(I,J,K)
                ELSE
                   DVVDT = -RFODT*(V(I,J,K)+VS(I,J,K))
@@ -424,7 +424,7 @@ OBST_LOOP: DO N=1,N_OBST
             IC1 = CELL_INDEX(I,J,K)
             IC2 = CELL_INDEX(I,J,K+1)
             IF (CELL(IC1)%SOLID .AND. CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (MESHES(NM)%PREDICTOR) THEN
                   DWWDT = -RFODT*W(I,J,K)
                ELSE
                   DWWDT = -RFODT*(W(I,J,K)+WS(I,J,K))
@@ -467,49 +467,49 @@ WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS
 
    IF (NOM/=0 .OR. WC%BOUNDARY_TYPE==SOLID_BOUNDARY .OR. WC%BOUNDARY_TYPE==NULL_BOUNDARY) THEN
       B1 => BOUNDARY_PROP1(WC%B1_INDEX)
-      IF (PREDICTOR) THEN
+      IF (MESHES(NM)%PREDICTOR) THEN
          UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL_S
       ELSE
          UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL
       ENDIF
       SELECT CASE(IOR)
          CASE( 1)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DUUDT = RFODT*(UN-U(II,JJ,KK))
             ELSE
                DUUDT = 2._EB*RFODT*(UN-0.5_EB*(U(II,JJ,KK)+US(II,JJ,KK)) )
             ENDIF
             FVX(II,JJ,KK) = -RDXN(II)*(HP(II+1,JJ,KK)-HP(II,JJ,KK))*DHFCT - DUUDT
          CASE(-1)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DUUDT = RFODT*(UN-U(II-1,JJ,KK))
             ELSE
                DUUDT = 2._EB*RFODT*(UN-0.5_EB*(U(II-1,JJ,KK)+US(II-1,JJ,KK)) )
             ENDIF
             FVX(II-1,JJ,KK) = -RDXN(II-1)*(HP(II,JJ,KK)-HP(II-1,JJ,KK))*DHFCT - DUUDT
          CASE( 2)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DVVDT = RFODT*(UN-V(II,JJ,KK))
             ELSE
                DVVDT = 2._EB*RFODT*(UN-0.5_EB*(V(II,JJ,KK)+VS(II,JJ,KK)) )
             ENDIF
             FVY(II,JJ,KK) = -RDYN(JJ)*(HP(II,JJ+1,KK)-HP(II,JJ,KK))*DHFCT - DVVDT
          CASE(-2)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DVVDT = RFODT*(UN-V(II,JJ-1,KK))
             ELSE
                DVVDT = 2._EB*RFODT*(UN-0.5_EB*(V(II,JJ-1,KK)+VS(II,JJ-1,KK)) )
             ENDIF
             FVY(II,JJ-1,KK) = -RDYN(JJ-1)*(HP(II,JJ,KK)-HP(II,JJ-1,KK))*DHFCT - DVVDT
          CASE( 3)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DWWDT = RFODT*(UN-W(II,JJ,KK))
             ELSE
                DWWDT = 2._EB*RFODT*(UN-0.5_EB*(W(II,JJ,KK)+WS(II,JJ,KK)) )
             ENDIF
             FVZ(II,JJ,KK) = -RDZN(KK)*(HP(II,JJ,KK+1)-HP(II,JJ,KK))*DHFCT - DWWDT
          CASE(-3)
-            IF (PREDICTOR) THEN
+            IF (MESHES(NM)%PREDICTOR) THEN
                DWWDT = RFODT*(UN-W(II,JJ,KK-1))
             ELSE
                DWWDT = 2._EB*RFODT*(UN-0.5_EB*(W(II,JJ,KK-1)+WS(II,JJ,KK-1)) )
@@ -834,7 +834,7 @@ REAL(EB) :: AU,AU1,AV,AV1,AW,AW1
 IF (SOLID_PHASE_ONLY) RETURN
 
 IF(CC_IBM) THEN
-   CALL CC_MATCH_VELOCITY(NM,PREDICTOR,.TRUE.)
+   CALL CC_MATCH_VELOCITY(NM,MESHES(NM)%PREDICTOR,.TRUE.)
    RETURN
 ENDIF
 
@@ -846,7 +846,7 @@ CALL POINT_TO_MESH(NM)
 
 ! Point to the appropriate velocity field
 
-IF (PREDICTOR) THEN
+IF (MESHES(NM)%PREDICTOR) THEN
    UU => US
    VV => VS
    WW => WS
@@ -882,8 +882,8 @@ EXTERNAL_WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
 
    SELECT CASE(ABS(IOR))
       CASE(1)
-         IF (PREDICTOR) OM_UU => OM%US
-         IF (CORRECTOR) OM_UU => OM%U
+         IF (MESHES(NM)%PREDICTOR) OM_UU => OM%US
+         IF (MESHES(NM)%CORRECTOR) OM_UU => OM%U
          DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
             DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
                DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
@@ -892,8 +892,8 @@ EXTERNAL_WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
             ENDDO
          ENDDO
       CASE(2)
-         IF (PREDICTOR) OM_VV => OM%VS
-         IF (CORRECTOR) OM_VV => OM%V
+         IF (MESHES(NM)%PREDICTOR) OM_VV => OM%VS
+         IF (MESHES(NM)%CORRECTOR) OM_VV => OM%V
          DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
             DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
                DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
@@ -902,8 +902,8 @@ EXTERNAL_WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
             ENDDO
          ENDDO
       CASE(3)
-         IF (PREDICTOR) OM_WW => OM%WS
-         IF (CORRECTOR) OM_WW => OM%W
+         IF (MESHES(NM)%PREDICTOR) OM_WW => OM%WS
+         IF (MESHES(NM)%CORRECTOR) OM_WW => OM%W
          DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
             DO JJO=EWC%JJO_MIN,EWC%JJO_MAX
                DO IIO=EWC%IIO_MIN,EWC%IIO_MAX
@@ -1009,12 +1009,12 @@ EXTERNAL_WALL_LOOP: DO IW=1,N_EXTERNAL_WALL_CELLS
    V_GHOST(IW) = 0._EB
    W_GHOST(IW) = 0._EB
 
-   IF (PREDICTOR) OM_UU => OM%US
-   IF (CORRECTOR) OM_UU => OM%U
-   IF (PREDICTOR) OM_VV => OM%VS
-   IF (CORRECTOR) OM_VV => OM%V
-   IF (PREDICTOR) OM_WW => OM%WS
-   IF (CORRECTOR) OM_WW => OM%W
+   IF (MESHES(NM)%PREDICTOR) OM_UU => OM%US
+   IF (MESHES(NM)%CORRECTOR) OM_UU => OM%U
+   IF (MESHES(NM)%PREDICTOR) OM_VV => OM%VS
+   IF (MESHES(NM)%CORRECTOR) OM_VV => OM%V
+   IF (MESHES(NM)%PREDICTOR) OM_WW => OM%WS
+   IF (MESHES(NM)%CORRECTOR) OM_WW => OM%W
 
    IF (CC_IBM) THEN
       DO KKO=EWC%KKO_MIN,EWC%KKO_MAX
@@ -1286,7 +1286,7 @@ TYPE(BOUNDARY_COORD_TYPE), POINTER :: BC
 N_INTERNAL_WALL_CELLS_AUX=0
 IF (.NOT.PRES_ON_WHOLE_DOMAIN) N_INTERNAL_WALL_CELLS_AUX=M%N_INTERNAL_WALL_CELLS
 
-STORE_UN_COND : IF ( STORE_UN .AND. CORRECTOR) THEN
+STORE_UN_COND : IF ( STORE_UN .AND. M%CORRECTOR) THEN
 
    ! These velocities from the beginning of step are needed for the velocity fix on wall cells at the corrector
    ! phase (i.e. the loops in VELOCITY_CORRECTOR will change U,V,W to wrong reults using (HP1-HP)/DX gradients,
@@ -1325,7 +1325,7 @@ ENDIF STORE_UN_COND
 
 ! Case of not storing, recompute INTERNAL_WALL_CELL velocities, taking into acct that DHDN=0._EB:
 
-PREDICTOR_COND : IF (PREDICTOR) THEN
+PREDICTOR_COND : IF (M%PREDICTOR) THEN
 
    WALL_CELL_LOOP_1: DO IW=1,M%N_EXTERNAL_WALL_CELLS+N_INTERNAL_WALL_CELLS_AUX
 

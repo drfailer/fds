@@ -46,7 +46,7 @@ ENDIF
 P    => M%WORK1 ! p=rho*(H-K)
 RRHO => M%WORK2 ! reciprocal of rho
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    RHOP => M%RHO
    HP   => M%H
 ELSE
@@ -1369,7 +1369,7 @@ SELECT_TURB: SELECT CASE (TURB_MODEL)
 
    CASE (CONSMAG,DYNSMAG) SELECT_TURB ! Smagorinsky (1963) eddy viscosity
 
-      IF (PREDICTOR .AND. TURB_MODEL==DYNSMAG) CALL VARDEN_DYNSMAG_KERNEL(M) ! dynamic procedure, Moin et al. (1991)
+      IF (M%PREDICTOR .AND. TURB_MODEL==DYNSMAG) CALL VARDEN_DYNSMAG_KERNEL(M) ! dynamic procedure, Moin et al. (1991)
 
       DO K=1,M%KBAR
          DO J=1,M%JBAR
@@ -2978,7 +2978,7 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
             INTERPOLATED_EDGE = .TRUE.
             OM => M%OMESH(ABS(NOM(ICD)))
 
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                SELECT CASE(IEC)
                   CASE(1)
                      IF (ICD==1) THEN
@@ -3055,7 +3055,7 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
             ! At the exterior edge of Mesh NM, which abuts Mesh NOM, assign the appropriate
             ! velocity component to the ghost cell.
 
-            IF (CORRECTOR) THEN
+            IF (M%CORRECTOR) THEN
                SELECT CASE(IEC)
                   CASE(1)
                      IF (JJ==0    .AND. KK==0    .AND. ABS(IOR)==2) &
@@ -3121,7 +3121,7 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
                IF (JJ==M%JBAR .AND. IOR==-2) WW(II,JJ+1,KK) = VEL_GHOST
                IF (KK==0    .AND. IOR== 3) VV(II,JJ,KK)   = VEL_GHOST
                IF (KK==M%KBAR .AND. IOR==-3) VV(II,JJ,KK+1) = VEL_GHOST
-               IF (CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
+               IF (M%CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
                  IF (ICD==1) THEN
                     ED%W_AVG = 0.5_EB*(VEL_GHOST+VEL_GAS)
                  ELSE ! ICD=2
@@ -3133,7 +3133,7 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
                IF (II==M%IBAR .AND. IOR==-1) WW(II+1,JJ,KK) = VEL_GHOST
                IF (KK==0    .AND. IOR== 3) UU(II,JJ,KK)   = VEL_GHOST
                IF (KK==M%KBAR .AND. IOR==-3) UU(II,JJ,KK+1) = VEL_GHOST
-               IF (CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
+               IF (M%CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
                  IF (ICD==1) THEN
                     ED%U_AVG = 0.5_EB*(VEL_GHOST+VEL_GAS)
                  ELSE ! ICD=2
@@ -3145,7 +3145,7 @@ EDGE_LOOP: DO IE=1,EDGE_COUNT(NM)
                IF (II==M%IBAR .AND. IOR==-1) VV(II+1,JJ,KK) = VEL_GHOST
                IF (JJ==0    .AND. IOR== 2) UU(II,JJ,KK)   = VEL_GHOST
                IF (JJ==M%JBAR .AND. IOR==-2) UU(II,JJ+1,KK) = VEL_GHOST
-               IF (CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
+               IF (M%CORRECTOR .AND. .NOT.INTERPOLATED_EDGE) THEN
                  IF (ICD==1) THEN
                     ED%V_AVG = 0.5_EB*(VEL_GHOST+VEL_GAS)
                  ELSE ! ICD=2
@@ -3589,7 +3589,7 @@ IF (SOLID_PHASE_ONLY .OR. FREEZE_VELOCITY) RETURN
 
 RFODT = RELAXATION_FACTOR/DT
 
-IF (PREDICTOR) THEN
+IF (M%PREDICTOR) THEN
    HP => M%H
 ELSE
    HP => M%HS
@@ -3602,7 +3602,7 @@ DO IW=1,M%N_EXTERNAL_WALL_CELLS
    NOM =EWC%NOM
    IF (NOM==0) CYCLE
    WC=>M%WALL(IW)
-   IF (PREDICTOR) THEN
+   IF (M%PREDICTOR) THEN
       OM_HP=>M%OMESH(NOM)%H
    ELSE
       OM_HP=>M%OMESH(NOM)%HS
@@ -3635,7 +3635,7 @@ OBST_LOOP: DO N=1,M%N_OBST
             IC1 = M%CELL_INDEX(I,J,K)
             IC2 = M%CELL_INDEX(I+1,J,K)
             IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (M%PREDICTOR) THEN
                   DUUDT = -RFODT*M%U(I,J,K)
                ELSE
                   DUUDT = -RFODT*(M%U(I,J,K)+M%US(I,J,K))
@@ -3652,7 +3652,7 @@ OBST_LOOP: DO N=1,M%N_OBST
             IC1 = M%CELL_INDEX(I,J,K)
             IC2 = M%CELL_INDEX(I,J+1,K)
             IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (M%PREDICTOR) THEN
                   DVVDT = -RFODT*M%V(I,J,K)
                ELSE
                   DVVDT = -RFODT*(M%V(I,J,K)+M%VS(I,J,K))
@@ -3669,7 +3669,7 @@ OBST_LOOP: DO N=1,M%N_OBST
             IC1 = M%CELL_INDEX(I,J,K)
             IC2 = M%CELL_INDEX(I,J,K+1)
             IF (M%CELL(IC1)%SOLID .AND. M%CELL(IC2)%SOLID) THEN
-               IF (PREDICTOR) THEN
+               IF (M%PREDICTOR) THEN
                   DWWDT = -RFODT*M%W(I,J,K)
                ELSE
                   DWWDT = -RFODT*(M%W(I,J,K)+M%WS(I,J,K))
@@ -3712,49 +3712,49 @@ WALL_LOOP: DO IW=1,M%N_EXTERNAL_WALL_CELLS+M%N_INTERNAL_WALL_CELLS
 
    IF (NOM/=0 .OR. WC%BOUNDARY_TYPE==SOLID_BOUNDARY .OR. WC%BOUNDARY_TYPE==NULL_BOUNDARY) THEN
       B1 => M%BOUNDARY_PROP1(WC%B1_INDEX)
-      IF (PREDICTOR) THEN
+      IF (M%PREDICTOR) THEN
          UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL_S
       ELSE
          UN = -SIGN(1._EB,REAL(IOR,EB))*B1%U_NORMAL
       ENDIF
       SELECT CASE(IOR)
          CASE( 1)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DUUDT = RFODT*(UN-M%U(II,JJ,KK))
             ELSE
                DUUDT = 2._EB*RFODT*(UN-0.5_EB*(M%U(II,JJ,KK)+M%US(II,JJ,KK)) )
             ENDIF
             M%FVX(II,JJ,KK) = -M%RDXN(II)*(HP(II+1,JJ,KK)-HP(II,JJ,KK))*DHFCT - DUUDT
          CASE(-1)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DUUDT = RFODT*(UN-M%U(II-1,JJ,KK))
             ELSE
                DUUDT = 2._EB*RFODT*(UN-0.5_EB*(M%U(II-1,JJ,KK)+M%US(II-1,JJ,KK)) )
             ENDIF
             M%FVX(II-1,JJ,KK) = -M%RDXN(II-1)*(HP(II,JJ,KK)-HP(II-1,JJ,KK))*DHFCT - DUUDT
          CASE( 2)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DVVDT = RFODT*(UN-M%V(II,JJ,KK))
             ELSE
                DVVDT = 2._EB*RFODT*(UN-0.5_EB*(M%V(II,JJ,KK)+M%VS(II,JJ,KK)) )
             ENDIF
             M%FVY(II,JJ,KK) = -M%RDYN(JJ)*(HP(II,JJ+1,KK)-HP(II,JJ,KK))*DHFCT - DVVDT
          CASE(-2)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DVVDT = RFODT*(UN-M%V(II,JJ-1,KK))
             ELSE
                DVVDT = 2._EB*RFODT*(UN-0.5_EB*(M%V(II,JJ-1,KK)+M%VS(II,JJ-1,KK)) )
             ENDIF
             M%FVY(II,JJ-1,KK) = -M%RDYN(JJ-1)*(HP(II,JJ,KK)-HP(II,JJ-1,KK))*DHFCT - DVVDT
          CASE( 3)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DWWDT = RFODT*(UN-M%W(II,JJ,KK))
             ELSE
                DWWDT = 2._EB*RFODT*(UN-0.5_EB*(M%W(II,JJ,KK)+M%WS(II,JJ,KK)) )
             ENDIF
             M%FVZ(II,JJ,KK) = -M%RDZN(KK)*(HP(II,JJ,KK+1)-HP(II,JJ,KK))*DHFCT - DWWDT
          CASE(-3)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                DWWDT = RFODT*(UN-M%W(II,JJ,KK-1))
             ELSE
                DWWDT = 2._EB*RFODT*(UN-0.5_EB*(M%W(II,JJ,KK-1)+M%WS(II,JJ,KK-1)) )

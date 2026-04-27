@@ -480,7 +480,7 @@ AXIS_DO : DO X1AXIS = IAXIS,KAXIS
          IW = REGFACE_Z(IFACE)%IWC
          IF (M%WALL(IW)%BOUNDARY_TYPE==NULL_BOUNDARY) &
             CYCLE IFACE_DO
-         IF (PREDICTOR) THEN
+         IF (M%PREDICTOR) THEN
             VELC2 = M%BOUNDARY_PROP1(M%WALL(IW)%B1_INDEX) &
                     %U_NORMAL_S
          ELSE

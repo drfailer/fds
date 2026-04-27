@@ -183,8 +183,6 @@ LOGICAL :: EXCHANGE_RADIATION=.FALSE.       !< Do an MPI radiation exchange at t
 LOGICAL :: EXCHANGE_OBST_MASS=.FALSE.       !< Exchange mass loss information for obstructions bordering interpolated meshes
 LOGICAL :: CYLINDRICAL=.FALSE.              !< Cylindrical domain option
 LOGICAL :: NOISE=.TRUE.                     !< Initialize velocity field with a small amount of divergence-free motion
-LOGICAL :: PREDICTOR                        !< The first half of the second-order accurate time-step
-LOGICAL :: CORRECTOR                        !< The second half of the second-order accurate time-step
 LOGICAL :: INITIALIZATION_PHASE=.TRUE.      !< The set-up phase before the time-stepping loop
 LOGICAL :: APPEND=.FALSE.                   !< For a RESTARTed calculation, APPEND the exising output files
 LOGICAL :: PARTICLE_FILE=.FALSE.            !< Indicates the existence of Lagrangian particles

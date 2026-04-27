@@ -63,16 +63,13 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
     bool ccIBM = fds_is_cc_ibm() != 0;
 
     if (!ccIBM) {
-        // --- Two-lane compute subgraph (non-CC_IBM) ---
         auto computeSubgraph = buildComputeSubgraph(nmeshes, budget);
 
         graph->input<TerminationData>(computeSubgraph);
 
-        // TimestepTask ↔ Compute (MeshData<> cycle)
         graph->edges(timestepTask, computeSubgraph);
         graph->edges(computeSubgraph, timestepTask);
 
-        // Compute ↔ Exchange (MeshExch1-7 out, Post*Exch back)
         graph->edges(computeSubgraph, exchGraph);
         graph->edges(exchGraph, computeSubgraph);
 
@@ -86,7 +83,6 @@ inline auto buildFDSGraph(int nmeshes, double t, double dt, double tEnd,
             graph->edges(exchGraph, pressureSubgraph);
         }
     } else {
-        // --- CC_IBM: separate predictor + corrector subgraphs ---
         auto predictorSubgraph = buildPredictorSubgraph(nmeshes, budget);
         auto correctorSubgraph = buildCorrectorSubgraph(nmeshes, budget);
 

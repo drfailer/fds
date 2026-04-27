@@ -217,7 +217,7 @@ SELECT CASE(ITEST)
          ENDDO
       ENDDO
    CASE(4) ! pulsating dilation
-      PREDICTOR_IF: IF (PREDICTOR) THEN
+      PREDICTOR_IF: IF (MESHES(NM)%PREDICTOR) THEN
          DO K=1,KBAR
             DO J=1,JBAR
                DO I=0,IBAR

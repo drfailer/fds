@@ -25,6 +25,7 @@ void fds_finalize_all(double t, double dt);
 
 // State setters
 void fds_set_predictor(int flag);
+void fds_set_mesh_predictor(int nm, int flag);
 void fds_set_icyc(int val);
 double fds_get_t_end();
 int fds_get_nmeshes();

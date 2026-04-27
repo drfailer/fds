@@ -53,7 +53,7 @@ IMPLICIT NONE (TYPE,EXTERNAL)
 ! Miscellaneous declarations
 
 LOGICAL  :: EX=.FALSE.,DIAGNOSTICS,CTRL_STOP_STATUS,CHECK_FREEZE_VELOCITY=.TRUE.,EXTERNAL_FAIL
-INTEGER  :: LO10,NM,IZERO,ANG_INC_COUNTER
+INTEGER  :: LO10,NM,NM_LOC,IZERO,ANG_INC_COUNTER
 REAL(EB) :: T,DT,TNOW
 REAL :: CPUTIME
 REAL(EB), ALLOCATABLE, DIMENSION(:) ::  TC_ARRAY,DT_NEW
@@ -344,8 +344,10 @@ ENDIF
 
 ! Ensure normal components of velocity match at mesh boundaries and do velocity BCs just in case the flow is not initialized to zero
 
-PREDICTOR = .FALSE.
-CORRECTOR = .TRUE.
+DO NM_LOC=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+   MESHES(NM_LOC)%PREDICTOR=.FALSE.
+   MESHES(NM_LOC)%CORRECTOR=.TRUE.
+ENDDO
 
 DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
    IF (TGA_SURF_INDEX>0) CYCLE
@@ -611,8 +613,10 @@ MAIN_LOOP: DO
    !                                           Start of Predictor part of time step
    !================================================================================================================================
 
-   PREDICTOR = .TRUE.
-   CORRECTOR = .FALSE.
+   DO NM_LOC=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      MESHES(NM_LOC)%PREDICTOR=.TRUE.
+      MESHES(NM_LOC)%CORRECTOR=.FALSE.
+   ENDDO
 
    ! Process externally controlled variables
 
@@ -791,8 +795,10 @@ MAIN_LOOP: DO
    !                                           Start of Corrector part of time step
    !================================================================================================================================
 
-   CORRECTOR = .TRUE.
-   PREDICTOR = .FALSE.
+   DO NM_LOC=LOWER_MESH_INDEX,UPPER_MESH_INDEX
+      MESHES(NM_LOC)%CORRECTOR=.TRUE.
+      MESHES(NM_LOC)%PREDICTOR=.FALSE.
+   ENDDO
 
    ! Advance the time to start the CORRECTOR step
 
@@ -1531,8 +1537,8 @@ PRESSURE_ITERATION_LOOP: DO
 
    IF (MAXVAL(PRESSURE_ERROR_MAX)<PRESSURE_TOLERANCE) ITERATE_BAROCLINIC_TERM = .FALSE.
 
-   IF (PREDICTOR .AND. PRESSURE_ITERATIONS>=MAX_PREDICTOR_PRESSURE_ITERATIONS) EXIT PRESSURE_ITERATION_LOOP
-   IF (CORRECTOR .AND. PRESSURE_ITERATIONS>=MAX_PRESSURE_ITERATIONS)           EXIT PRESSURE_ITERATION_LOOP
+   IF (MESHES(LOWER_MESH_INDEX)%PREDICTOR .AND. PRESSURE_ITERATIONS>=MAX_PREDICTOR_PRESSURE_ITERATIONS) EXIT PRESSURE_ITERATION_LOOP
+   IF (MESHES(LOWER_MESH_INDEX)%CORRECTOR .AND. PRESSURE_ITERATIONS>=MAX_PRESSURE_ITERATIONS)           EXIT PRESSURE_ITERATION_LOOP
 
    IF (MAXVAL(PRESSURE_ERROR_MAX)<PRESSURE_TOLERANCE .AND. MAXVAL(VELOCITY_ERROR_MAX)<VELOCITY_TOLERANCE) THEN
       EXIT PRESSURE_ITERATION_LOOP
@@ -3175,7 +3181,7 @@ SENDING_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       ! Exchange velocity/pressure info for ITERATE_PRESSURE
 
       IF (CODE==5 .AND. M3%NIC_S>0) THEN
-         IF (PREDICTOR) THEN
+         IF (M%PREDICTOR) THEN
             HP => M%H
          ELSE
             HP => M%HS
@@ -3205,7 +3211,7 @@ SENDING_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
             ENDDO PACK_REAL_SEND_PKG7
          ELSE
             M2=>MESHES(NOM)%OMESH(NM)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                HP2 => M2%H
             ELSE
                HP2 => M2%HS
@@ -3334,7 +3340,7 @@ SENDING_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       ! Send LEVEL_SET boundary values
 
       IF (CODE==14 .AND. M3%NIC_S>0) THEN
-         IF (PREDICTOR) THEN
+         IF (M%PREDICTOR) THEN
             PHI_LS_P => M%PHI1_LS
          ELSE
             PHI_LS_P => M%PHI_LS
@@ -3358,7 +3364,7 @@ SENDING_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
             ENDDO PACK_REAL_SEND_PKG14
          ELSE
             M2=>MESHES(NOM)%OMESH(NM)
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                M2%PHI1_LS(IMIN:IMAX,JMIN:JMAX) = PHI_LS_P(IMIN:IMAX,JMIN:JMAX)
             ELSE
                M2%PHI_LS(IMIN:IMAX,JMIN:JMAX)  = PHI_LS_P(IMIN:IMAX,JMIN:JMAX)
@@ -3518,7 +3524,7 @@ RECV_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
       ! Unpack densities and species mass fractions following PREDICTOR exchange
 
       IF (CODE==5 .AND. M2%NIC_R>0 .AND. RNODE/=SNODE) THEN
-         IF (PREDICTOR) THEN
+         IF (M%PREDICTOR) THEN
             HP => M2%H
          ELSE
             HP => M2%HS
@@ -3661,7 +3667,7 @@ RECV_MESH_LOOP: DO NM=LOWER_MESH_INDEX,UPPER_MESH_INDEX
 
       IF (CODE==14 .AND. M2%NIC_R>0 .AND. RNODE/=SNODE) THEN
             NQT2 = 5
-            IF (PREDICTOR) THEN
+            IF (M%PREDICTOR) THEN
                PHI_LS_P => M2%PHI1_LS
             ELSE
                PHI_LS_P => M2%PHI_LS
